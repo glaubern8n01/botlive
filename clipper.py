@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+import numpy as np
 from PIL import Image
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import download_range_func
@@ -12,15 +14,28 @@ if not hasattr(Image, "ANTIALIAS"):
     Image.ANTIALIAS = Image.Resampling.LANCZOS
 
 try:
-    from moviepy.editor import VideoFileClip
+    from moviepy.editor import ColorClip, CompositeVideoClip, VideoFileClip
 except ImportError:  # MoviePy 2.x
-    from moviepy import VideoFileClip
+    from moviepy import ColorClip, CompositeVideoClip, VideoFileClip
 
 
 BASE_DIR = Path("D:/robo-cortes-dark")
 CACHE_DIR = BASE_DIR / "cache"
 CORTES_DIR = BASE_DIR / "cortes"
 TEMP_DIR = CACHE_DIR / "tmp"
+OutputLayout = Literal["original", "vertical-fit", "vertical-crop"]
+
+
+@dataclass(frozen=True)
+class VideoValidationResult:
+    valid: bool
+    reason: str
+    duration_seconds: float = 0.0
+    width: int = 0
+    height: int = 0
+    has_video: bool = False
+    has_audio: bool = False
+    file_size_bytes: int = 0
 
 
 def preparar_pastas() -> None:
@@ -41,6 +56,19 @@ def limpar_cache() -> None:
             item.unlink(missing_ok=True)
 
 
+def limpar_arquivos_gerados() -> None:
+    preparar_pastas()
+    for path in CORTES_DIR.glob("*.mp4"):
+        path.unlink(missing_ok=True)
+    live_blocks_dir = CACHE_DIR / "live_blocks"
+    if live_blocks_dir.exists():
+        for item in live_blocks_dir.iterdir():
+            if item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+            else:
+                item.unlink(missing_ok=True)
+
+
 def _find_downloaded_video(work_dir: Path) -> Path:
     candidates = [
         path
@@ -58,9 +86,11 @@ def baixar_trecho(
     clip_id: str,
     seconds_before: int = 30,
     seconds_after: int = 30,
+    limpar_cache_antes: bool = True,
 ) -> Path:
     preparar_pastas()
-    limpar_cache()
+    if limpar_cache_antes:
+        limpar_cache()
 
     start = max(0, int(peak_timestamp) - seconds_before)
     end = int(peak_timestamp) + seconds_after
@@ -68,7 +98,7 @@ def baixar_trecho(
     work_dir.mkdir(parents=True, exist_ok=True)
 
     ydl_opts = {
-        "format": "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
+        "format": "bv*[vcodec^=avc1][height<=720][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc1][height<=720][ext=mp4]/bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/best",
         "outtmpl": str(work_dir / "raw_%(id)s.%(ext)s"),
         "merge_output_format": "mp4",
         "download_ranges": download_range_func(None, [(start, end)]),
@@ -135,6 +165,154 @@ def aplicar_crop_vertical(
         clip.close()
 
 
+def _write_clip(clip: VideoFileClip, output_path: Path, preset: str = "medium") -> None:
+    kwargs: dict[str, Any] = {
+        "codec": "libx264",
+        "fps": min(float(getattr(clip, "fps", 30) or 30), 60),
+        "preset": preset,
+        "threads": os.cpu_count() or 4,
+        "verbose": False,
+        "logger": None,
+    }
+    if clip.audio is not None:
+        kwargs["audio_codec"] = "aac"
+        kwargs["temp_audiofile"] = str(TEMP_DIR / f"{output_path.stem}_audio.m4a")
+        kwargs["remove_temp"] = True
+    else:
+        kwargs["audio"] = False
+    clip.write_videofile(str(output_path), **kwargs)
+
+
+def _render_original(input_path: Path, output_path: Path) -> None:
+    clip = VideoFileClip(str(input_path))
+    try:
+        _write_clip(clip, output_path, preset="ultrafast")
+    finally:
+        clip.close()
+
+
+def aplicar_vertical_fit(
+    input_path: Path,
+    output_path: Path,
+    target_width: int = 1080,
+    target_height: int = 1920,
+) -> None:
+    preparar_pastas()
+    source = VideoFileClip(str(input_path))
+    try:
+        source_w, source_h = source.size
+        scale = min(target_width / source_w, target_height / source_h)
+        fit_w = max(2, int(source_w * scale))
+        fit_h = max(2, int(source_h * scale))
+        if fit_w % 2:
+            fit_w -= 1
+        if fit_h % 2:
+            fit_h -= 1
+
+        resized = source.resize((fit_w, fit_h))
+        background = ColorClip(size=(target_width, target_height), color=(0, 0, 0)).set_duration(source.duration)
+        fitted = CompositeVideoClip([background, resized.set_position("center")], size=(target_width, target_height))
+        if source.audio is not None:
+            fitted = fitted.set_audio(source.audio)
+        try:
+            _write_clip(fitted, output_path, preset="medium")
+        finally:
+            fitted.close()
+            resized.close()
+    finally:
+        source.close()
+
+
+def renderizar_layout(
+    input_path: str | Path,
+    output_path: str | Path,
+    output_layout: OutputLayout = "original",
+    focus_x: float = 0.5,
+) -> Path:
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    if output_layout == "original":
+        _render_original(input_path, output_path)
+    elif output_layout == "vertical-fit":
+        aplicar_vertical_fit(input_path, output_path)
+    elif output_layout == "vertical-crop":
+        aplicar_crop_vertical(input_path=input_path, output_path=output_path, focus_x=focus_x)
+    else:
+        raise ValueError(f"Layout invalido: {output_layout}")
+    return output_path
+
+
+def _video_has_audio(path: Path) -> bool:
+    try:
+        clip = VideoFileClip(str(path))
+        try:
+            return clip.audio is not None
+        finally:
+            clip.close()
+    except Exception:
+        return False
+
+
+def _frame_is_blank_or_bad(frame: np.ndarray) -> bool:
+    arr = frame.astype(np.float32)
+    brightness = float(np.mean(arr))
+    contrast = float(np.std(arr))
+    red = float(np.mean(arr[:, :, 0]))
+    green = float(np.mean(arr[:, :, 1]))
+    blue = float(np.mean(arr[:, :, 2]))
+    purple_dominance = red > green * 1.35 and blue > green * 1.35 and (red + blue) / 2 > 55
+    return (brightness < 10 and contrast < 8) or contrast < 3 or purple_dominance
+
+
+def validar_video_final(
+    output_path: str | Path,
+    require_audio: bool = False,
+    min_duration_seconds: float = 5.0,
+    min_size_bytes: int = 100_000,
+) -> VideoValidationResult:
+    output_path = Path(output_path)
+    if not output_path.exists():
+        return VideoValidationResult(False, "arquivo nao existe")
+
+    file_size = output_path.stat().st_size
+    if file_size < min_size_bytes:
+        return VideoValidationResult(False, f"arquivo muito pequeno ({file_size} bytes)", file_size_bytes=file_size)
+
+    try:
+        clip = VideoFileClip(str(output_path))
+    except Exception as exc:
+        return VideoValidationResult(False, f"falha ao abrir video: {exc}", file_size_bytes=file_size)
+
+    try:
+        duration = float(clip.duration or 0)
+        width, height = [int(value) for value in clip.size]
+        has_audio = clip.audio is not None
+        if duration <= min_duration_seconds:
+            return VideoValidationResult(False, f"duracao menor que {min_duration_seconds}s", duration, width, height, True, has_audio, file_size)
+        if width <= 0 or height <= 0:
+            return VideoValidationResult(False, "resolucao invalida", duration, width, height, True, has_audio, file_size)
+        if require_audio and not has_audio:
+            return VideoValidationResult(False, "audio ausente no arquivo final", duration, width, height, True, has_audio, file_size)
+
+        sample_count = min(6, max(3, int(duration // 8) + 1))
+        timestamps = np.linspace(0.5, max(0.5, duration - 0.5), sample_count)
+        bad_frames = 0
+        for timestamp in timestamps:
+            try:
+                frame = clip.get_frame(float(timestamp))
+            except Exception:
+                bad_frames += 1
+                continue
+            if _frame_is_blank_or_bad(frame):
+                bad_frames += 1
+
+        if bad_frames >= max(2, int(sample_count * 0.8)):
+            return VideoValidationResult(False, "video parece blank/preto/roxo", duration, width, height, True, has_audio, file_size)
+        return VideoValidationResult(True, "ok", duration, width, height, True, has_audio, file_size)
+    finally:
+        clip.close()
+
+
 def criar_corte_vertical_de_arquivo(
     input_video_path: str | Path,
     peak_timestamp: int,
@@ -143,6 +321,8 @@ def criar_corte_vertical_de_arquivo(
     seconds_after: int = 30,
     focus_x: float = 0.5,
     overlay_config: Optional[Any] = None,
+    output_layout: OutputLayout = "vertical-crop",
+    keep_intermediate: bool = False,
 ) -> Path:
     preparar_pastas()
     input_video_path = Path(input_video_path)
@@ -176,15 +356,14 @@ def criar_corte_vertical_de_arquivo(
         source.close()
 
     try:
-        aplicar_crop_vertical(
-            input_path=segment_path,
-            output_path=output_path,
-            focus_x=focus_x,
-        )
+        renderizar_layout(segment_path, output_path, output_layout=output_layout, focus_x=focus_x)
         if overlay_config and getattr(overlay_config, "enabled", False):
             from overlay_editor import aplicar_overlay_no_video
 
-            return aplicar_overlay_no_video(output_path, overlay_config)
+            final_path = aplicar_overlay_no_video(output_path, overlay_config)
+            if not keep_intermediate and final_path != output_path:
+                output_path.unlink(missing_ok=True)
+            return final_path
         return output_path
     finally:
         segment_path.unlink(missing_ok=True)
@@ -197,6 +376,11 @@ def criar_corte_vertical(
     seconds_before: int = 30,
     seconds_after: int = 30,
     focus_x: float = 0.5,
+    overlay_config: Optional[Any] = None,
+    limpar_cache_antes: bool = True,
+    limpar_cache_depois: bool = True,
+    output_layout: OutputLayout = "vertical-crop",
+    keep_intermediate: bool = False,
 ) -> Path:
     preparar_pastas()
     output_path = CORTES_DIR / f"corte_{clip_id}.mp4"
@@ -208,15 +392,20 @@ def criar_corte_vertical(
             clip_id=clip_id,
             seconds_before=seconds_before,
             seconds_after=seconds_after,
+            limpar_cache_antes=limpar_cache_antes,
         )
-        aplicar_crop_vertical(
-            input_path=input_path,
-            output_path=output_path,
-            focus_x=focus_x,
-        )
+        renderizar_layout(input_path, output_path, output_layout=output_layout, focus_x=focus_x)
+        if overlay_config and getattr(overlay_config, "enabled", False):
+            from overlay_editor import aplicar_overlay_no_video
+
+            final_path = aplicar_overlay_no_video(output_path, overlay_config)
+            if not keep_intermediate and final_path != output_path:
+                output_path.unlink(missing_ok=True)
+            return final_path
         return output_path
     finally:
-        limpar_cache()
+        if limpar_cache_depois:
+            limpar_cache()
 
 
 if __name__ == "__main__":
