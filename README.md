@@ -297,6 +297,40 @@ A primeira versao de publicacao deve ser orientada a aprovacao manual:
 
 Publicacao automatica sem revisao nao e objetivo inicial.
 
+## Fluxo de revisao e rascunho
+
+Na fase de validacao, o operador pode assistir alguns cortes para calibrar o detector. No uso real, o objetivo nao e assistir manualmente todos os cortes, e sim deixar o bot fazer a maior parte da triagem.
+
+Fluxo desejado:
+
+- gerar cortes automaticamente a partir da live/VOD;
+- validar video, audio, duracao, resolucao e duplicidade;
+- separar cortes bons, suspeitos e invalidos;
+- organizar os resultados em uma pasta ou painel local;
+- preparar os melhores cortes para postagem;
+- deixar a revisao humana como uma etapa rapida antes da publicacao manual.
+
+Cada corte deve evoluir para um status operacional:
+
+- `ready`: corte aprovado automaticamente pelas validacoes e pronto para revisao rapida;
+- `needs_review`: corte possivelmente bom, mas com algum sinal de duvida, como score baixo, duplicidade proxima, pouca imagem de jogo ou metadados incompletos;
+- `rejected`: corte invalido, repetido, sem audio, com video ruim, fora do conteudo desejado ou descartado pelo filtro;
+- `published_draft`: corte enviado/preparado como rascunho ou pendente de aprovacao em alguma plataforma.
+
+No futuro, uma galeria ou painel local deve mostrar:
+
+- miniatura do corte;
+- botao de assistir;
+- timestamp;
+- score;
+- motivo do corte;
+- status;
+- botao aprovar;
+- botao rejeitar;
+- botao enviar para rascunho.
+
+Para TikTok, Instagram/Reels e YouTube Shorts, a prioridade futura deve ser preparar a postagem, enviar como rascunho quando a plataforma permitir, ou deixar em fila de aprovacao manual. O bot nao deve publicar automaticamente sem confirmacao humana no inicio.
+
 ### Fase 6: automacao maior
 
 Evoluir o fluxo para:
