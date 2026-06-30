@@ -58,6 +58,34 @@ Para testar vertical sem cortar o campo/tela:
 python main.py "URL_DO_REPLAY" --modo pos-live --usar-momentos-salvos --session-id youtube_teste_layout_001 --max-cortes 3 --clip-duration 45 --output-layout vertical-fit
 ```
 
+## Teste vs uso real
+
+Os cortes gerados durante validacao, como 3, 6 ou 9 arquivos, foram apenas testes para confirmar layout, audio, imagem valida, deduplicacao e limpeza de intermediarios. Eles nao representam um limite do sistema.
+
+Para uma live ou VOD longo, por exemplo com aproximadamente 2 horas, o comportamento esperado e:
+
+- analisar a live/VOD inteira em blocos;
+- detectar varios timestamps bons;
+- deduplicar momentos proximos;
+- selecionar os melhores momentos;
+- gerar varios cortes finais.
+
+Em uso real, use `--max-cortes` como limite maximo, nao como quantidade fixa obrigatoria. Por exemplo, `--max-cortes 25` significa gerar ate 25 cortes se existirem timestamps bons suficientes. Para lives longas, valores comuns sao `15`, `20`, `25` ou `30`, dependendo da quantidade de momentos fortes encontrados.
+
+Fluxo recomendado para VOD grande:
+
+```powershell
+python main.py "URL_DO_YOUTUBE" --modo scan-vod --session-id canal_teste_001 --block-seconds 45 --max-cortes 25 --score-threshold 0.55 --min-gap-seconds 120
+```
+
+Depois:
+
+```powershell
+python main.py "URL_DO_YOUTUBE" --modo pos-live --usar-momentos-salvos --session-id canal_teste_001 --max-cortes 25 --clip-duration 45 --output-layout original --titulo "MELHOR MOMENTO DA LIVE" --descricao "corte automatico da live" --marca "@seucanal" --cta "segue para mais cortes"
+```
+
+Para futebol, gameplay e lives, o layout principal deve continuar sendo `original`, porque preserva a tela inteira e evita cortar partes importantes do jogo.
+
 ## Layout de saida
 
 Use `--output-layout` para escolher o formato final:
@@ -101,6 +129,7 @@ python main.py "test_source.mp4" --modo live --block-seconds 30 --max-cortes 1 -
 ```text
 D:/robo-cortes-dark/cache
 D:/robo-cortes-dark/cache/live_blocks
+D:/robo-cortes-dark/cache/vod_blocks
 D:/robo-cortes-dark/cortes
 D:/robo-cortes-dark/fila_local.jsonl
 ```
@@ -175,3 +204,29 @@ O modo live salva timestamps aproximados. Se o replay/VOD tiver intro, atraso ou
 Em lives do YouTube, o `live_buffer.py` tenta primeiro abrir a URL com ffmpeg direto. Quando o ffmpeg nao consegue ler a pagina do YouTube diretamente, o sistema usa `yt-dlp` para resolver a URL real do stream e entao grava o bloco com ffmpeg.
 
 Legenda automatica ainda e modulo futuro. A estrutura esta pronta em `caption_generator.py`, mas nenhum Whisper/faster-whisper foi instalado nesta etapa.
+
+## Roadmap do fluxo automatico
+
+### A) Modo ao vivo
+
+Objetivo: monitorar uma live em andamento, capturar blocos, analisar audio, movimento e mudanca visual, e salvar timestamps fortes enquanto a live acontece.
+
+### B) Modo pos-live
+
+Objetivo: quando a live terminar e virar replay/VOD, usar os timestamps salvos, gerar cortes finais em alta qualidade e salvar tudo em:
+
+```text
+D:/robo-cortes-dark/cortes
+```
+
+### C) Futuro modo automatico
+
+Objetivo futuro:
+
+- monitorar canais ou URLs configuradas;
+- detectar quando uma live comeca;
+- rodar o modo live automaticamente;
+- detectar quando a live termina;
+- rodar o modo pos-live automaticamente;
+- gerar varios cortes finais;
+- deixar os videos prontos para postagem manual ou rascunho.
