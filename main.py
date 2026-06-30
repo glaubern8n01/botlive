@@ -40,6 +40,26 @@ def main() -> None:
     parser.add_argument("--vod-offset-seconds", type=int, default=0)
     parser.add_argument("--score-threshold", type=float, default=0.62)
     parser.add_argument("--max-blocks", type=int, default=None, help="Opcional para limitar blocos nos modos live/scan-vod.")
+    parser.add_argument(
+        "--content-filter",
+        choices=["none", "football"],
+        default="none",
+        help="Filtro simples de conteudo para scan-vod. football prioriza blocos com campo/jogo.",
+    )
+    parser.add_argument(
+        "--focus-final-minutes",
+        type=int,
+        default=None,
+        help="No scan-vod, analisa apenas os ultimos N minutos do VOD mantendo timestamps reais.",
+    )
+    parser.add_argument("--start-seconds", type=int, default=None, help="No scan-vod, inicia a analise neste segundo do VOD.")
+    parser.add_argument("--end-seconds", type=int, default=None, help="No scan-vod, encerra a analise neste segundo do VOD.")
+    parser.add_argument(
+        "--max-scan-blocks",
+        type=int,
+        default=None,
+        help="No scan-vod, limita quantos blocos serao analisados para teste rapido.",
+    )
     parser.add_argument("--titulo", default=None, help="Titulo opcional no topo do corte.")
     parser.add_argument("--descricao", default=None, help="Descricao curta opcional na tela.")
     parser.add_argument("--marca", default=None, help="Marca/nome do perfil opcional.")
@@ -74,6 +94,11 @@ def main() -> None:
             sample_every_seconds=args.sample_every_seconds,
             analysis_window_seconds=args.analysis_window_seconds,
             max_blocks=args.max_blocks,
+            content_filter=args.content_filter,
+            focus_final_minutes=args.focus_final_minutes,
+            start_seconds=args.start_seconds,
+            end_seconds=args.end_seconds,
+            max_scan_blocks=args.max_scan_blocks,
         )
         return
 
