@@ -230,3 +230,81 @@ Objetivo futuro:
 - rodar o modo pos-live automaticamente;
 - gerar varios cortes finais;
 - deixar os videos prontos para postagem manual ou rascunho.
+
+## Roadmap de publicacao e canais dark
+
+Depois que a qualidade dos cortes estiver bem validada, o proximo objetivo do produto e preparar os videos para publicacao em canais dark. O foco inicial nao e publicar automaticamente, mas sim gerar cortes, organizar arquivos, preparar metadados e deixar tudo pronto para revisao manual.
+
+Fluxo desejado:
+
+- o bot recebe uma live/VOD ou monitora uma live;
+- analisa o conteudo;
+- gera varios cortes;
+- salva os cortes finais;
+- gera metadados basicos, como titulo, descricao, hashtags, nome do canal/projeto e categoria/nicho;
+- organiza os cortes por canal ou projeto;
+- envia ou prepara os videos para publicacao nas plataformas;
+- deixa como rascunho ou pendente de aprovacao manual quando a plataforma permitir;
+- o operador revisa e publica manualmente.
+
+Canais e projetos futuros:
+
+- futebol;
+- GTA/GTA 6;
+- lives de gameplay;
+- entrevistas/reactions;
+- outros canais dark.
+
+### Fase atual
+
+- gerar cortes localmente;
+- validar qualidade de imagem, audio, duracao e layout;
+- manter `--output-layout original` como padrao para futebol, gameplay e lives;
+- nao postar automaticamente.
+
+### Fase 2: organizacao por projeto/canal
+
+Organizar os cortes em pastas por projeto ou canal, por exemplo:
+
+```text
+D:/robo-cortes-dark/projetos/futebol/cortes
+D:/robo-cortes-dark/projetos/gta/cortes
+```
+
+### Fase 3: metadados para postagem
+
+Gerar titulo, descricao e hashtags para cada corte. A primeira versao pode usar texto fixo ou templates simples. Depois, a geracao pode evoluir para IA opcional, sempre com revisao antes da publicacao.
+
+### Fase 4: integracao com plataformas
+
+Estudar integracoes com:
+
+- TikTok;
+- Instagram/Reels;
+- YouTube Shorts;
+- outras plataformas no futuro.
+
+Qualquer integracao com plataforma depende das APIs oficiais, permissoes, limites, validacao de conta e regras de cada plataforma. Nao ha OAuth, token ou integracao de postagem implementados nesta fase.
+
+### Fase 5: rascunho e aprovacao manual
+
+A primeira versao de publicacao deve ser orientada a aprovacao manual:
+
+- o bot prepara os cortes e metadados;
+- quando possivel, envia como rascunho ou deixa pendente de aprovacao;
+- o operador revisa;
+- o operador publica manualmente.
+
+Publicacao automatica sem revisao nao e objetivo inicial.
+
+### Fase 6: automacao maior
+
+Evoluir o fluxo para:
+
+- monitorar canais ou lives configuradas;
+- detectar quando uma live comeca;
+- salvar timestamps fortes ao vivo;
+- detectar quando a live termina;
+- processar o replay/VOD no modo pos-live;
+- gerar multiplos cortes;
+- preparar posts com metadados e organizacao por projeto.
