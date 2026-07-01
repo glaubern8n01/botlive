@@ -28,6 +28,25 @@ def main() -> None:
     parser.add_argument("--min-gap-seconds", type=int, default=120)
     parser.add_argument("--block-seconds", type=int, default=45)
     parser.add_argument("--clip-duration", type=int, default=60, help="Duracao final aproximada de cada corte em segundos.")
+    parser.add_argument("--pre-roll-seconds", type=int, default=None, help="Segundos antes do pico que entram no corte.")
+    parser.add_argument("--post-roll-seconds", type=int, default=None, help="Segundos depois do pico que entram no corte.")
+    parser.add_argument(
+        "--target-height",
+        type=int,
+        default=None,
+        help="Altura maxima desejada para baixar trechos finais do VOD original, ex: 720 ou 1080.",
+    )
+    parser.add_argument(
+        "--render-source",
+        choices=["auto", "vod", "cache"],
+        default="auto",
+        help="Fonte do render pos-live: auto usa VOD original quando --target-height e informado; vod forca VOD; cache usa blocos locais.",
+    )
+    parser.add_argument(
+        "--prefer-final-render-from-source",
+        action="store_true",
+        help="Atalho para preferir o VOD original como fonte dos cortes finais pos-live.",
+    )
     parser.add_argument(
         "--output-layout",
         choices=["original", "vertical-fit", "vertical-crop"],
@@ -45,6 +64,11 @@ def main() -> None:
         choices=["none", "football"],
         default="none",
         help="Filtro simples de conteudo para scan-vod. football prioriza blocos com campo/jogo.",
+    )
+    parser.add_argument(
+        "--strict-football-filter",
+        action="store_true",
+        help="No scan-vod com football, rejeita entrevista/estudio/tela parada antes de salvar timestamp.",
     )
     parser.add_argument(
         "--focus-final-minutes",
@@ -99,6 +123,7 @@ def main() -> None:
             start_seconds=args.start_seconds,
             end_seconds=args.end_seconds,
             max_scan_blocks=args.max_scan_blocks,
+            strict_football_filter=args.strict_football_filter,
         )
         return
 
@@ -114,9 +139,13 @@ def main() -> None:
         analysis_window_seconds=args.analysis_window_seconds,
         min_gap_seconds=args.min_gap_seconds,
         clip_duration=args.clip_duration,
+        pre_roll_seconds=args.pre_roll_seconds,
+        post_roll_seconds=args.post_roll_seconds,
         overlay_config=_overlay_from_args(args),
         output_layout=args.output_layout,
         keep_intermediate=args.keep_intermediate,
+        target_height=args.target_height,
+        render_source="vod" if args.prefer_final_render_from_source else args.render_source,
     )
     print("[sistema] Finalizado.")
 

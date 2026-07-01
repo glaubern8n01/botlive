@@ -80,6 +80,17 @@ def _find_downloaded_video(work_dir: Path) -> Path:
     return max(candidates, key=lambda path: path.stat().st_size)
 
 
+def _format_selector(target_height: Optional[int]) -> str:
+    height = int(target_height or 720)
+    return (
+        f"bv*[vcodec^=avc1][height<={height}][ext=mp4]+ba[ext=m4a]/"
+        f"bv*[height<={height}][ext=mp4]+ba[ext=m4a]/"
+        f"b[vcodec^=avc1][height<={height}][ext=mp4]/"
+        f"b[height<={height}][ext=mp4]/"
+        f"best[height<={height}]/best"
+    )
+
+
 def baixar_trecho(
     video_url: str,
     peak_timestamp: int,
@@ -87,6 +98,7 @@ def baixar_trecho(
     seconds_before: int = 30,
     seconds_after: int = 30,
     limpar_cache_antes: bool = True,
+    target_height: Optional[int] = None,
 ) -> Path:
     preparar_pastas()
     if limpar_cache_antes:
@@ -98,7 +110,7 @@ def baixar_trecho(
     work_dir.mkdir(parents=True, exist_ok=True)
 
     ydl_opts = {
-        "format": "bv*[vcodec^=avc1][height<=720][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc1][height<=720][ext=mp4]/bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/best",
+        "format": _format_selector(target_height),
         "outtmpl": str(work_dir / "raw_%(id)s.%(ext)s"),
         "merge_output_format": "mp4",
         "download_ranges": download_range_func(None, [(start, end)]),
@@ -109,8 +121,28 @@ def baixar_trecho(
         "paths": {"home": str(work_dir), "temp": str(TEMP_DIR)},
     }
 
-    with YoutubeDL(ydl_opts) as ydl:
-        ydl.download([video_url])
+    print(
+        "[download-range] "
+        f"timestamp={peak_timestamp}s start={start}s end={end}s "
+        f"target_height={target_height or 'best'} "
+        f"etapa=yt-dlp_range comando=yt-dlp --download-sections '*{start}-{end}' "
+        f"--output \"{work_dir / 'raw_%(id)s.%(ext)s'}\" continuou=em_execucao"
+    )
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            ydl.download([video_url])
+    except Exception as exc:
+        print(
+            "[download-range][falha] "
+            f"timestamp={peak_timestamp}s etapa=yt-dlp_range motivo={exc} "
+            "comando=yt-dlp_range_precise continuou=tentando_fallback"
+        )
+        fallback_opts = dict(ydl_opts)
+        fallback_opts["force_keyframes_at_cuts"] = False
+        fallback_opts.pop("paths", None)
+        fallback_opts["quiet"] = False
+        with YoutubeDL(fallback_opts) as ydl:
+            ydl.download([video_url])
 
     return _find_downloaded_video(work_dir)
 
@@ -381,6 +413,7 @@ def criar_corte_vertical(
     limpar_cache_depois: bool = True,
     output_layout: OutputLayout = "vertical-crop",
     keep_intermediate: bool = False,
+    target_height: Optional[int] = None,
 ) -> Path:
     preparar_pastas()
     output_path = CORTES_DIR / f"corte_{clip_id}.mp4"
@@ -393,6 +426,7 @@ def criar_corte_vertical(
             seconds_before=seconds_before,
             seconds_after=seconds_after,
             limpar_cache_antes=limpar_cache_antes,
+            target_height=target_height,
         )
         renderizar_layout(input_path, output_path, output_layout=output_layout, focus_x=focus_x)
         if overlay_config and getattr(overlay_config, "enabled", False):

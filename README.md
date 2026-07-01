@@ -52,6 +52,16 @@ Depois gere cortes a partir dos timestamps salvos:
 python main.py "URL_DO_REPLAY" --modo pos-live --usar-momentos-salvos --session-id youtube_teste_layout_001 --max-cortes 10 --clip-duration 45 --output-layout original
 ```
 
+Para gerar cortes finais em HD a partir do VOD original, mantendo os timestamps salvos pelo scan:
+
+```powershell
+python main.py "URL_DO_REPLAY" --modo pos-live --usar-momentos-salvos --session-id youtube_teste_layout_001 --max-cortes 10 --clip-duration 45 --min-gap-seconds 0 --output-layout original --target-height 720
+```
+
+Nesse fluxo, os blocos de `scan-vod` continuam servindo para analise e classificacao. O render final tenta baixar apenas os trechos necessarios do VOD original em ate `--target-height`, por exemplo `720`, para gerar arquivos melhores que os blocos de analise. Se o VOD original falhar, o sistema pode cair para os blocos locais como fallback e registra isso no log.
+
+Use `--render-source vod` para forcar a tentativa pelo VOD original, `--render-source cache` para usar apenas blocos locais, ou `--prefer-final-render-from-source` como atalho para preferir a fonte original no pos-live.
+
 Para testar vertical sem cortar o campo/tela:
 
 ```powershell
@@ -82,6 +92,12 @@ Depois:
 
 ```powershell
 python main.py "URL_DO_YOUTUBE" --modo pos-live --usar-momentos-salvos --session-id canal_teste_001 --max-cortes 25 --clip-duration 45 --output-layout original --titulo "MELHOR MOMENTO DA LIVE" --descricao "corte automatico da live" --marca "@seucanal" --cta "segue para mais cortes"
+```
+
+Para postagem, prefira renderizar os cortes finais a partir do VOD original em HD:
+
+```powershell
+python main.py "URL_DO_YOUTUBE" --modo pos-live --usar-momentos-salvos --session-id canal_teste_001 --max-cortes 25 --clip-duration 45 --min-gap-seconds 0 --output-layout original --target-height 720 --titulo "MELHOR MOMENTO DA LIVE" --descricao "corte automatico da live" --marca "@seucanal" --cta "segue para mais cortes"
 ```
 
 Para futebol, gameplay e lives, o layout principal deve continuar sendo `original`, porque preserva a tela inteira e evita cortar partes importantes do jogo.
@@ -131,6 +147,7 @@ D:/robo-cortes-dark/cache
 D:/robo-cortes-dark/cache/live_blocks
 D:/robo-cortes-dark/cache/vod_blocks
 D:/robo-cortes-dark/cortes
+D:/robo-cortes-dark/cortes/ready_hd
 D:/robo-cortes-dark/fila_local.jsonl
 ```
 
@@ -217,6 +234,12 @@ Objetivo: quando a live terminar e virar replay/VOD, usar os timestamps salvos, 
 
 ```text
 D:/robo-cortes-dark/cortes
+```
+
+Quando `--target-height` e usado com timestamps salvos de uma URL, o pos-live tenta renderizar os cortes finais pelo VOD original em vez de reutilizar os blocos locais de analise. Cortes aprovados nesse fluxo HD sao organizados em:
+
+```text
+D:/robo-cortes-dark/cortes/ready_hd
 ```
 
 ### C) Futuro modo automatico
@@ -313,6 +336,7 @@ Fluxo desejado:
 Cada corte deve evoluir para um status operacional:
 
 - `ready`: corte aprovado automaticamente pelas validacoes e pronto para revisao rapida;
+- `ready_hd`: corte aprovado em renderizacao HD a partir do VOD original, pronto para validacao de postagem;
 - `needs_review`: corte possivelmente bom, mas com algum sinal de duvida, como score baixo, duplicidade proxima, pouca imagem de jogo ou metadados incompletos;
 - `rejected`: corte invalido, repetido, sem audio, com video ruim, fora do conteudo desejado ou descartado pelo filtro;
 - `published_draft`: corte enviado/preparado como rascunho ou pendente de aprovacao em alguma plataforma.

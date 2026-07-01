@@ -17,6 +17,8 @@ VALID_STATUSES = {"pendente", "processando", "concluido", "erro"}
 TABLE_NAME = os.getenv("ROBO_SUPABASE_CLIPS_TABLE", "dark_gta_clips")
 BASE_DIR = Path("D:/robo-cortes-dark")
 LOCAL_QUEUE_FILE = BASE_DIR / "fila_local.jsonl"
+RUN_LOGS_DIR = Path(__file__).resolve().parent / "run_logs"
+FALLBACK_STATUS_FILE = RUN_LOGS_DIR / "fila_local_status_fallback.jsonl"
 
 
 def _utc_now() -> str:
@@ -40,6 +42,24 @@ def _append_local(payload: Dict[str, Any]) -> None:
     BASE_DIR.mkdir(parents=True, exist_ok=True)
     with LOCAL_QUEUE_FILE.open("a", encoding="utf-8") as file:
         file.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _append_status_fallback(payload: Dict[str, Any], exc: OSError) -> None:
+    RUN_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    fallback_payload = {
+        **payload,
+        "storage": "run_logs_fallback",
+        "fallback_reason": f"{type(exc).__name__}: {exc}",
+        "intended_queue_file": str(LOCAL_QUEUE_FILE),
+        "fallback_created_at": _utc_now(),
+    }
+    with FALLBACK_STATUS_FILE.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(fallback_payload, ensure_ascii=False) + "\n")
+    print(
+        "[fila][fallback] "
+        f"nao foi possivel escrever em {LOCAL_QUEUE_FILE}; "
+        f"status salvo em {FALLBACK_STATUS_FILE}"
+    )
 
 
 def registrar_corte(
@@ -68,7 +88,10 @@ def registrar_corte(
     if client is None:
         payload["id"] = str(uuid4())
         payload["storage"] = "local_fallback"
-        _append_local(payload)
+        try:
+            _append_local(payload)
+        except OSError as exc:
+            _append_status_fallback(payload, exc)
         return payload
 
     response = client.table(TABLE_NAME).insert(payload).execute()
@@ -103,7 +126,10 @@ def atualizar_status_corte(
     if client is None:
         payload["storage"] = "local_fallback"
         payload["event"] = "status_update"
-        _append_local(payload)
+        try:
+            _append_local(payload)
+        except OSError as exc:
+            _append_status_fallback(payload, exc)
         return payload
 
     update_payload = {key: value for key, value in payload.items() if key != "id"}

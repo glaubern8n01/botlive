@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -16,6 +17,7 @@ except ImportError:  # MoviePy 2.x
     from moviepy import VideoFileClip
 
 from clipper import CACHE_DIR, preparar_pastas
+from football_content_filter import FootballContentResult, classify_football_content
 from highlight_detector import HighlightCandidate, detectar_melhores_momentos
 from moment_logger import salvar_momento
 
@@ -41,6 +43,12 @@ class ScannedMoment:
     football_score: float = 0.0
     football_label: str = "nao_avaliado"
     football_reason: str = ""
+    football_action: str = "save_ready"
+    football_emotion_score: float = 0.0
+    football_penalty_score: float = 0.0
+    football_interview_penalty: float = 0.0
+    football_studio_penalty: float = 0.0
+    football_static_penalty: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -115,6 +123,10 @@ def capturar_bloco_vod(
         "copy",
         str(output_path),
     ]
+    command_for_log = (
+        f'{ffmpeg} -y -hide_banner -loglevel error -ss {start_seconds} '
+        f'-i <stream_url> -t {block_seconds} -c copy "{output_path}"'
+    )
 
     try:
         result = subprocess.run(
@@ -126,12 +138,20 @@ def capturar_bloco_vod(
         )
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()
-            print(f"[scan-vod] bloco {block_index} falhou: {stderr[-500:]}")
+            print(
+                "[scan-vod][falha] "
+                f"timestamp={start_seconds}s etapa=ffmpeg_bloco "
+                f"motivo={stderr[-500:]} comando={command_for_log} continuou=sim"
+            )
             return None
         if output_path.exists() and output_path.stat().st_size > 0:
             return output_path
     except Exception as exc:
-        print(f"[scan-vod] bloco {block_index} falhou: {exc}")
+        print(
+            "[scan-vod][falha] "
+            f"timestamp={start_seconds}s etapa=ffmpeg_bloco "
+            f"motivo={exc} comando={command_for_log} continuou=sim"
+        )
     return None
 
 
@@ -170,73 +190,34 @@ def _motion_grid_ratio(previous_gray: np.ndarray, current_gray: np.ndarray) -> f
 
 
 def avaliar_bloco_futebol(block_path: Path) -> FootballFilterResult:
-    clip = VideoFileClip(str(block_path))
-    try:
-        duration = float(clip.duration or 0)
-        if duration <= 1:
-            return FootballFilterResult(False, 0.0, "nao-jogo", 0.0, 0.0, 0.0, 0.0, "duracao muito curta")
+    result = classify_football_content(block_path)
+    return FootballFilterResult(
+        is_game=result.action != "reject",
+        score=result.football_confidence,
+        label=result.content_type,
+        green_ratio=result.green_field_ratio,
+        motion_grid_ratio=result.motion_score,
+        brightness=0.0,
+        contrast=0.0,
+        reason=result.reason,
+    )
 
-        sample_count = min(8, max(4, int(duration // 8) + 1))
-        timestamps = np.linspace(0.5, max(0.5, duration - 0.5), sample_count)
-        green_values: list[float] = []
-        brightness_values: list[float] = []
-        contrast_values: list[float] = []
-        motion_values: list[float] = []
-        previous_gray: Optional[np.ndarray] = None
 
-        for timestamp in timestamps:
-            frame = clip.get_frame(float(timestamp))
-            image = Image.fromarray(frame).resize((160, 90))
-            rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
-            gray = np.asarray(image.convert("L"), dtype=np.float32) / 255.0
-
-            green_values.append(_green_ratio(rgb))
-            brightness_values.append(float(np.mean(gray)))
-            contrast_values.append(float(np.std(gray)))
-            if previous_gray is not None:
-                motion_values.append(_motion_grid_ratio(previous_gray, gray))
-            previous_gray = gray
-
-        green_ratio = float(np.mean(green_values))
-        motion_grid_ratio = float(np.mean(motion_values)) if motion_values else 0.0
-        brightness = float(np.mean(brightness_values))
-        contrast = float(np.mean(contrast_values))
-
-        if brightness < 0.05 or contrast < 0.015:
-            return FootballFilterResult(
-                False,
-                0.0,
-                "nao-jogo",
-                round(green_ratio, 4),
-                round(motion_grid_ratio, 4),
-                round(brightness, 4),
-                round(contrast, 4),
-                "imagem escura/parada",
-            )
-
-        score = min(1.0, (green_ratio / 0.18) * 0.70 + min(1.0, motion_grid_ratio / 0.22) * 0.30)
-        is_game = green_ratio >= 0.08 and motion_grid_ratio >= 0.05
-        if green_ratio >= 0.14:
-            is_game = True
-        label = "jogo" if is_game else "nao-jogo"
-        reason = (
-            f"{label}: verde={green_ratio:.3f} "
-            f"movimento_tela={motion_grid_ratio:.3f} brilho={brightness:.3f} contraste={contrast:.3f}"
-        )
-        return FootballFilterResult(
-            is_game=is_game,
-            score=round(float(score), 4),
-            label=label,
-            green_ratio=round(green_ratio, 4),
-            motion_grid_ratio=round(motion_grid_ratio, 4),
-            brightness=round(brightness, 4),
-            contrast=round(contrast, 4),
-            reason=reason,
-        )
-    except Exception as exc:
-        return FootballFilterResult(False, 0.0, "nao-jogo", 0.0, 0.0, 0.0, 0.0, f"falha filtro futebol: {exc}")
-    finally:
-        clip.close()
+def _log_football_filter(timestamp: int, result: FootballContentResult) -> None:
+    print(
+        "[football-filter] "
+        f"t={timestamp}s "
+        f"type={result.content_type} "
+        f"football={result.football_confidence} "
+        f"emotion={result.emotion_score} "
+        f"penalty={result.penalty_score} "
+        f"interview={result.interview_penalty} "
+        f"studio={result.studio_penalty} "
+        f"static={result.static_penalty} "
+        f"final={result.score_final} "
+        f"action={result.action} "
+        f"reason=\"{result.reason}\""
+    )
 
 
 def _selecionar_melhores(
@@ -277,6 +258,7 @@ def scan_vod_completo(
     start_seconds: Optional[int] = None,
     end_seconds: Optional[int] = None,
     max_scan_blocks: Optional[int] = None,
+    strict_football_filter: bool = False,
 ) -> list[ScannedMoment]:
     if block_seconds < 30 or block_seconds > 60:
         raise ValueError("--block-seconds deve ficar entre 30 e 60 segundos.")
@@ -320,6 +302,7 @@ def scan_vod_completo(
     print(f"[scan-vod] inicio analise: {scan_start}s")
     print(f"[scan-vod] fim analise: {scan_end}s")
     print(f"[scan-vod] filtro conteudo: {content_filter}")
+    print(f"[scan-vod] filtro football rigoroso: {strict_football_filter}")
     if effective_max_blocks is not None:
         print(f"[scan-vod] limite de blocos: {effective_max_blocks}")
     print(f"[scan-vod] blocos planejados: {total_blocks} de {block_seconds}s")
@@ -329,6 +312,9 @@ def scan_vod_completo(
     game_blocks = 0
     non_game_blocks = 0
     failed_blocks = 0
+    content_type_counts: Counter[str] = Counter()
+    action_counts: Counter[str] = Counter()
+    candidate_action_counts: Counter[str] = Counter()
     for block_index in range(total_blocks):
         start = scan_start + (block_index * block_seconds)
         current_duration = min(block_seconds, max(1, scan_end - start))
@@ -346,25 +332,35 @@ def scan_vod_completo(
             continue
         captured_blocks += 1
 
-        football_result = FootballFilterResult(
-            True,
-            1.0,
-            "nao_avaliado",
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            "sem filtro de conteudo",
+        football_content = FootballContentResult(
+            content_type="match_action",
+            football_confidence=1.0,
+            interview_penalty=0.0,
+            studio_penalty=0.0,
+            static_penalty=0.0,
+            green_field_ratio=0.0,
+            motion_score=0.0,
+            visual_change_score=0.0,
+            emotion_score=0.0,
+            penalty_score=0.0,
+            scoreboard_like=False,
+            score_final=1.0,
+            action="save_ready",
+            reason="sem filtro de conteudo",
         )
         if content_filter == "football":
-            football_result = avaliar_bloco_futebol(block_path)
-            if football_result.is_game:
-                game_blocks += 1
-            else:
+            football_content = classify_football_content(
+                block_path,
+                strict=strict_football_filter,
+            )
+            content_type_counts[football_content.content_type] += 1
+            action_counts[football_content.action] += 1
+            _log_football_filter(start, football_content)
+            if football_content.action == "reject":
                 non_game_blocks += 1
-                print(f"[scan-vod] bloco ignorado pelo filtro football: {football_result.reason}")
+                print(f"[scan-vod] bloco rejeitado pelo filtro football: {football_content.reason}")
                 continue
-            print(f"[scan-vod] filtro football: {football_result.reason}")
+            game_blocks += 1
 
         candidates = detectar_melhores_momentos(
             video_path=block_path,
@@ -384,8 +380,32 @@ def scan_vod_completo(
         adjusted_score = candidate.score
         reason = candidate.reason
         if content_filter == "football":
-            adjusted_score = min(1.0, round(candidate.score * (0.70 + football_result.score * 0.45), 4))
-            reason = f"{candidate.reason}; football={football_result.reason}"
+            score_base = round(
+                float(candidate.audio_score + candidate.motion_score + candidate.brightness_score),
+                4,
+            )
+            football_content = classify_football_content(
+                block_path,
+                strict=strict_football_filter,
+                score_base=candidate.score,
+                audio_score=candidate.audio_score,
+                candidate_motion_score=candidate.motion_score,
+                visual_change_score=candidate.brightness_score,
+            )
+            candidate_action_counts[football_content.action] += 1
+            _log_football_filter(global_timestamp, football_content)
+            if football_content.action == "reject":
+                non_game_blocks += 1
+                print(
+                    "[scan-vod] candidato rejeitado pelo filtro football: "
+                    f"timestamp={global_timestamp}s reason={football_content.reason}"
+                )
+                continue
+            adjusted_score = football_content.score_final
+            reason = (
+                f"{candidate.reason}; score_base={score_base}; "
+                f"football={football_content.reason}"
+            )
         scanned = ScannedMoment(
             timestamp_seconds=global_timestamp,
             score=adjusted_score,
@@ -393,9 +413,15 @@ def scan_vod_completo(
             block_index=block_index,
             block_file=str(block_path),
             candidate=candidate,
-            football_score=football_result.score,
-            football_label=football_result.label,
-            football_reason=football_result.reason,
+            football_score=football_content.football_confidence,
+            football_label=football_content.content_type,
+            football_reason=football_content.reason,
+            football_action=football_content.action,
+            football_emotion_score=football_content.emotion_score,
+            football_penalty_score=football_content.penalty_score,
+            football_interview_penalty=football_content.interview_penalty,
+            football_studio_penalty=football_content.studio_penalty,
+            football_static_penalty=football_content.static_penalty,
         )
         all_candidates.append(scanned)
         print(
@@ -415,6 +441,12 @@ def scan_vod_completo(
     if content_filter == "football":
         print(f"[scan-vod] blocos classificados como jogo: {game_blocks}")
         print(f"[scan-vod] blocos ignorados como nao-jogo: {non_game_blocks}")
+        for content_type, count in sorted(content_type_counts.items()):
+            print(f"[scan-vod] football content_type {content_type}: {count}")
+        for action, count in sorted(action_counts.items()):
+            print(f"[scan-vod] football action {action}: {count}")
+        for action, count in sorted(candidate_action_counts.items()):
+            print(f"[scan-vod] football candidate_action {action}: {count}")
     print(f"[scan-vod] ignorados por duplicidade/proximidade: {ignored}")
     print(f"[scan-vod] selecionados: {len(selected)}")
 
@@ -443,9 +475,16 @@ def scan_vod_completo(
                 "start_seconds": start_seconds,
                 "end_seconds": end_seconds,
                 "max_scan_blocks": max_scan_blocks,
+                "strict_football_filter": strict_football_filter,
                 "football_score": moment.football_score,
                 "football_label": moment.football_label,
                 "football_reason": moment.football_reason,
+                "football_action": moment.football_action,
+                "football_emotion_score": moment.football_emotion_score,
+                "football_penalty_score": moment.football_penalty_score,
+                "football_interview_penalty": moment.football_interview_penalty,
+                "football_studio_penalty": moment.football_studio_penalty,
+                "football_static_penalty": moment.football_static_penalty,
             },
         )
         print(f"[scan-vod] salvo {record.id}: {moment.timestamp_seconds}s score={moment.score}")
