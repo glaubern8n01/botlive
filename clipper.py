@@ -22,6 +22,7 @@ except ImportError:  # MoviePy 2.x
 BASE_DIR = Path("D:/robo-cortes-dark")
 CACHE_DIR = BASE_DIR / "cache"
 CORTES_DIR = BASE_DIR / "cortes"
+LIVE_PREVIEW_DIR = CORTES_DIR / "live_preview"
 TEMP_DIR = CACHE_DIR / "tmp"
 OutputLayout = Literal["original", "vertical-fit", "vertical-crop"]
 
@@ -41,6 +42,7 @@ class VideoValidationResult:
 def preparar_pastas() -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     CORTES_DIR.mkdir(parents=True, exist_ok=True)
+    LIVE_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
     os.environ["TMP"] = str(TEMP_DIR)
     os.environ["TEMP"] = str(TEMP_DIR)
@@ -399,6 +401,31 @@ def criar_corte_vertical_de_arquivo(
         return output_path
     finally:
         segment_path.unlink(missing_ok=True)
+
+
+def criar_preview_de_arquivo(
+    input_video_path: str | Path,
+    peak_timestamp: int,
+    preview_id: str,
+    seconds_before: int = 12,
+    seconds_after: int = 33,
+    output_layout: OutputLayout = "original",
+) -> Path:
+    output_path = criar_corte_vertical_de_arquivo(
+        input_video_path=input_video_path,
+        peak_timestamp=peak_timestamp,
+        clip_id=f"preview_{preview_id}",
+        seconds_before=seconds_before,
+        seconds_after=seconds_after,
+        output_layout=output_layout,
+        keep_intermediate=False,
+    )
+    LIVE_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    target_path = LIVE_PREVIEW_DIR / output_path.name
+    if target_path.exists():
+        target_path.unlink()
+    output_path.replace(target_path)
+    return target_path
 
 
 def criar_corte_vertical(

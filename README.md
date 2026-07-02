@@ -140,6 +140,28 @@ Para teste controlado:
 python main.py "test_source.mp4" --modo live --block-seconds 30 --max-cortes 1 --max-blocks 2
 ```
 
+### 5. Modo near-live
+
+Captura blocos como o modo live, salva timestamps fortes e tambem gera previews rapidos enquanto a transmissao ou arquivo ainda esta sendo acompanhado. Os previews sao provisorios e ficam em:
+
+```text
+D:/robo-cortes-dark/cortes/live_preview
+```
+
+Teste local:
+
+```powershell
+python main.py "test_source.mp4" --modo near-live --session-id near_live_local_001 --block-seconds 30 --max-cortes 2 --pre-roll-seconds 8 --post-roll-seconds 20 --output-layout original
+```
+
+Depois, use a mesma sessao no pos-live para gerar os cortes finais em HD a partir do VOD ou arquivo original:
+
+```powershell
+python main.py "test_source.mp4" --modo pos-live --usar-momentos-salvos --session-id near_live_local_001 --max-cortes 2 --clip-duration 45 --output-layout original --target-height 720
+```
+
+Com `--content-filter football --strict-football-filter`, o near-live aplica a mesma triagem de futebol usada no scan: rejeita entrevista, estudio, tela parada e audio alto sem imagem de jogo antes de salvar o preview como aproveitavel.
+
 ## Paths obrigatorios no Drive D
 
 ```text
@@ -147,6 +169,7 @@ D:/robo-cortes-dark/cache
 D:/robo-cortes-dark/cache/live_blocks
 D:/robo-cortes-dark/cache/vod_blocks
 D:/robo-cortes-dark/cortes
+D:/robo-cortes-dark/cortes/live_preview
 D:/robo-cortes-dark/cortes/ready_hd
 D:/robo-cortes-dark/fila_local.jsonl
 ```
@@ -173,7 +196,7 @@ Por padrao, arquivos intermediarios nao ficam na pasta final. Se precisar depura
 
 ## Arquitetura
 
-- `main.py`: entrada CLI dos modos `atual`, `live`, `pos-live` e `scan-vod`.
+- `main.py`: entrada CLI dos modos `atual`, `live`, `near-live`, `pos-live` e `scan-vod`.
 - `highlight_detector.py`: detecta momentos por audio alto, movimento e mudancas visuais.
 - `live_buffer.py`: captura blocos temporarios da live em cache.
 - `live_watcher.py`: orquestra captura/análise/salvamento de timestamps ao vivo.
@@ -235,6 +258,8 @@ Objetivo: quando a live terminar e virar replay/VOD, usar os timestamps salvos, 
 ```text
 D:/robo-cortes-dark/cortes
 ```
+
+O near-live tambem salva timestamps nessa mesma fila. Assim, o fluxo rapido e: gerar previews durante a live em `live_preview`, validar o que apareceu, e depois renderizar os cortes finais HD com `--modo pos-live --usar-momentos-salvos --session-id ... --target-height 720`.
 
 Quando `--target-height` e usado com timestamps salvos de uma URL, o pos-live tenta renderizar os cortes finais pelo VOD original em vez de reutilizar os blocos locais de analise. Cortes aprovados nesse fluxo HD sao organizados em:
 

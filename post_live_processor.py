@@ -560,6 +560,9 @@ def processar_pos_live(
     resultados: list[CorteResultado] = []
     for candidate in candidates[:max_cortes]:
         football_metadata = moment_metadata_by_timestamp.get(int(candidate.timestamp_seconds), {})
+        review_action = football_metadata.get("football_action")
+        if review_action is None and target_height is not None:
+            review_action = "save_ready"
         resultados.append(
             _registrar_e_renderizar(
                 source=source,
@@ -572,7 +575,7 @@ def processar_pos_live(
                 usar_download_trecho=usar_download_trecho,
                 output_layout=output_layout,
                 keep_intermediate=keep_intermediate,
-                review_action=football_metadata.get("football_action"),
+                review_action=review_action,
                 football_metadata=football_metadata if football_metadata.get("content_filter") == "football" else None,
                 target_height=target_height,
                 render_source=render_source,

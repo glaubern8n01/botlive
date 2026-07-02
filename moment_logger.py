@@ -11,7 +11,10 @@ from uuid import uuid4
 
 BASE_DIR = Path("D:/robo-cortes-dark")
 QUEUE_FILE = BASE_DIR / "fila_local.jsonl"
+RUN_LOGS_DIR = Path(__file__).resolve().parent / "run_logs"
+FALLBACK_FILE = RUN_LOGS_DIR / "fila_local_moment_fallback.jsonl"
 MOMENT_EVENT = "moment_detected"
+PREVIEW_EVENT = "near_live_preview"
 
 
 @dataclass(frozen=True)
@@ -42,8 +45,21 @@ def source_id_from_url(source_url: str) -> str:
 
 def append_jsonl(payload: dict[str, Any]) -> None:
     BASE_DIR.mkdir(parents=True, exist_ok=True)
-    with QUEUE_FILE.open("a", encoding="utf-8") as file:
-        file.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    try:
+        with QUEUE_FILE.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        RUN_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        fallback = {
+            **payload,
+            "storage": "run_logs_fallback",
+            "fallback_reason": f"{type(exc).__name__}: {exc}",
+            "intended_queue_file": str(QUEUE_FILE),
+            "fallback_created_at": utc_now(),
+        }
+        with FALLBACK_FILE.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(fallback, ensure_ascii=False) + "\n")
+        print(f"[momentos][fallback] status salvo em {FALLBACK_FILE}")
 
 
 def salvar_momento(
@@ -74,6 +90,33 @@ def salvar_momento(
     )
     append_jsonl(asdict(record))
     return record
+
+
+def salvar_preview_evento(
+    moment_id: str,
+    session_id: str,
+    source_url: str,
+    timestamp_seconds: int,
+    preview_path: Optional[str],
+    status: str,
+    metadata: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": str(uuid4()),
+        "event": PREVIEW_EVENT,
+        "moment_id": moment_id,
+        "source_url": source_url,
+        "source_id": source_id_from_url(source_url),
+        "timestamp_seconds": int(timestamp_seconds),
+        "session_id": session_id,
+        "preview_path": preview_path,
+        "status": status,
+        "render_source": "live_preview",
+        "created_at": utc_now(),
+        "metadata": metadata or {},
+    }
+    append_jsonl(payload)
+    return payload
 
 
 def _iter_jsonl() -> list[dict[str, Any]]:

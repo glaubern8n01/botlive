@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from clipper import preparar_pastas
-from live_watcher import monitorar_live
+from live_watcher import monitorar_live, monitorar_near_live
 from overlay_editor import OverlayConfig
 from post_live_processor import processar_pos_live
 from vod_scanner import scan_vod_completo
@@ -21,7 +21,7 @@ def _overlay_from_args(args: argparse.Namespace) -> OverlayConfig:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Robo autonomo de cortes dark para lives e VODs.")
     parser.add_argument("source", help="URL da live/video ou caminho de um arquivo local.")
-    parser.add_argument("--modo", choices=["atual", "live", "pos-live", "scan-vod"], default="atual")
+    parser.add_argument("--modo", choices=["atual", "live", "near-live", "pos-live", "scan-vod"], default="atual")
     parser.add_argument("--max-cortes", type=int, default=8, help="Quantidade maxima de cortes.")
     parser.add_argument("--sample-every-seconds", type=int, default=3)
     parser.add_argument("--analysis-window-seconds", type=int, default=6)
@@ -102,6 +102,24 @@ def main() -> None:
             sample_every_seconds=args.sample_every_seconds,
             analysis_window_seconds=args.analysis_window_seconds,
             max_blocks=args.max_blocks,
+        )
+        return
+
+    if args.modo == "near-live":
+        monitorar_near_live(
+            source_url=args.source,
+            block_seconds=args.block_seconds,
+            max_cortes=args.max_cortes,
+            session_id=args.session_id,
+            score_threshold=args.score_threshold,
+            sample_every_seconds=args.sample_every_seconds,
+            analysis_window_seconds=args.analysis_window_seconds,
+            max_blocks=args.max_blocks,
+            pre_roll_seconds=args.pre_roll_seconds,
+            post_roll_seconds=args.post_roll_seconds,
+            output_layout=args.output_layout,
+            content_filter=args.content_filter,
+            strict_football_filter=args.strict_football_filter,
         )
         return
 

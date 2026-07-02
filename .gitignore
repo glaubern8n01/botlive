@@ -17,6 +17,7 @@ dist/
 .mypy_cache/
 .ruff_cache/
 *.log
+run_logs/
 
 *.mp4
 *.mov

@@ -73,6 +73,30 @@ def _run_ffmpeg(command: list[str], timeout_seconds: int) -> None:
         raise RuntimeError(stderr[-1200:] if stderr else "ffmpeg falhou sem mensagem.")
 
 
+def _tem_primeiro_frame(video_path: Path) -> bool:
+    if not video_path.exists() or video_path.stat().st_size < 1024:
+        return False
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(video_path),
+        "-frames:v",
+        "1",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def capturar_bloco(
     source_url: str,
     session_id: str,
@@ -130,7 +154,7 @@ def capturar_bloco(
                 ]
                 try:
                     _run_ffmpeg(command, timeout_seconds=block_seconds + 45)
-                    if block_path.exists() and block_path.stat().st_size > 0:
+                    if _tem_primeiro_frame(block_path):
                         print("[stream] ffmpeg direto funcionou")
                         print(f"[bloco] bloco {block_index} capturado: {block_path}")
                         print(f"[bloco] duracao alvo: {block_seconds}s")
@@ -161,7 +185,7 @@ def capturar_bloco(
                     ]
 
             _run_ffmpeg(command, timeout_seconds=block_seconds + 90)
-            if block_path.exists() and block_path.stat().st_size > 0:
+            if _tem_primeiro_frame(block_path):
                 print(f"[bloco] bloco {block_index} capturado: {block_path}")
                 print(f"[bloco] duracao alvo: {block_seconds}s")
                 return LiveBlock(
@@ -170,6 +194,11 @@ def capturar_bloco(
                     start_offset_seconds=start_offset_seconds,
                     duration_seconds=block_seconds,
                 )
+            block_path.unlink(missing_ok=True)
+            if local_source:
+                print(f"[live-buffer] Bloco {block_index} sem frame valido. Provavel fim do arquivo local.")
+                return None
+            raise RuntimeError("bloco capturado sem frame de video valido.")
         except Exception as exc:
             print(f"[live-buffer] Falha no bloco {block_index} tentativa {attempt}: {exc}")
 
