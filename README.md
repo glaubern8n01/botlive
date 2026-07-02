@@ -2,6 +2,46 @@
 
 Sistema autonomo para detectar momentos fortes pelo conteudo do video, sem depender de chat.
 
+## Modos principais
+
+- `live-clips`: para live ao vivo. Captura blocos, detecta eventos, salva timestamps e gera previews rapidos em `D:/robo-cortes-dark/cortes/live_preview`.
+- `final-hd`: transforma timestamps salvos de uma `session_id` em cortes finais HD, preferindo o VOD original quando `--target-height` e `--render-source vod` sao usados.
+- `vod-clips`: para live gravada, replay ou VOD. Analisa, salva timestamps e depois renderiza os cortes finais em `ready_hd`.
+- `scan-vod`: modo tecnico para apenas analisar VOD/replay e salvar timestamps.
+- `near-live`: alias tecnico antigo de `live-clips`.
+- `pos-live`: alias tecnico antigo de `final-hd`.
+
+Fluxo recomendado para live ao vivo:
+
+```powershell
+python main.py "URL_DA_LIVE" --modo live-clips --session-id live_jogo_001 --block-seconds 45 --max-cortes 10 --pre-roll-seconds 12 --post-roll-seconds 33 --output-layout original --content-filter football --strict-football-filter
+```
+
+Depois que a live virar replay/VOD:
+
+```powershell
+python main.py "URL_DO_REPLAY" --modo final-hd --usar-momentos-salvos --session-id live_jogo_001 --max-cortes 30 --clip-duration 45 --output-layout original --target-height 720 --render-source vod --prefer-final-render-from-source
+```
+
+Fluxo recomendado para live gravada/VOD direto:
+
+```powershell
+python main.py "URL_DO_VOD" --modo vod-clips --session-id vod_jogo_001 --max-cortes 30 --clip-duration 45 --output-layout original --target-height 720 --content-filter football --strict-football-filter
+```
+
+Para VOD longo, limite a janela:
+
+```powershell
+python main.py "URL_DO_VOD" --modo vod-clips --session-id vod_jogo_final_001 --start-seconds 14000 --end-seconds 16480 --max-cortes 30 --clip-duration 45 --output-layout original --target-height 720 --content-filter football --strict-football-filter
+```
+
+Se quiser controle tecnico em duas etapas:
+
+```powershell
+python main.py "URL_DO_VOD" --modo scan-vod --session-id vod_jogo_001 --max-cortes 30 --content-filter football --strict-football-filter
+python main.py "URL_DO_VOD" --modo final-hd --usar-momentos-salvos --session-id vod_jogo_001 --max-cortes 30 --clip-duration 45 --output-layout original --target-height 720 --render-source vod
+```
+
 ## Modos
 
 ### 1. Modo atual/padrao
@@ -14,7 +54,7 @@ python main.py "URL_OU_ARQUIVO" --max-cortes 8
 
 ### 2. Modo pos-live
 
-Fluxo explicito para replay/VOD ou arquivo completo. Pode analisar o video ou usar timestamps salvos durante o modo live.
+Fluxo explicito para replay/VOD ou arquivo completo. Pode analisar o video ou usar timestamps salvos durante o modo live. `final-hd` e o alias de produto para usar timestamps salvos e renderizar cortes finais HD.
 
 ```powershell
 python main.py "URL_OU_ARQUIVO" --modo pos-live --max-cortes 8
@@ -142,7 +182,7 @@ python main.py "test_source.mp4" --modo live --block-seconds 30 --max-cortes 1 -
 
 ### 5. Modo near-live
 
-Captura blocos como o modo live, salva timestamps fortes e tambem gera previews rapidos enquanto a transmissao ou arquivo ainda esta sendo acompanhado. Os previews sao provisorios e ficam em:
+Captura blocos como o modo live, salva timestamps fortes e tambem gera previews rapidos enquanto a transmissao ou arquivo ainda esta sendo acompanhado. `live-clips` e o nome recomendado; `near-live` continua funcionando como alias tecnico antigo. Os previews sao provisorios e ficam em:
 
 ```text
 D:/robo-cortes-dark/cortes/live_preview
@@ -161,6 +201,20 @@ python main.py "test_source.mp4" --modo pos-live --usar-momentos-salvos --sessio
 ```
 
 Com `--content-filter football --strict-football-filter`, o near-live aplica a mesma triagem de futebol usada no scan: rejeita entrevista, estudio, tela parada e audio alto sem imagem de jogo antes de salvar o preview como aproveitavel.
+
+### 6. Modo vod-clips
+
+Fluxo de produto para live gravada, replay ou VOD. Em URL, roda `scan-vod` para salvar timestamps e depois chama o render final HD pelos timestamps. Em arquivo local, analisa o arquivo, salva timestamps na `session_id` e renderiza pelos mesmos timestamps.
+
+```powershell
+python main.py "URL_DO_VOD" --modo vod-clips --session-id vod_jogo_001 --max-cortes 30 --clip-duration 45 --output-layout original --target-height 720 --content-filter football --strict-football-filter
+```
+
+Para arquivo local:
+
+```powershell
+python main.py "test_source.mp4" --modo vod-clips --session-id teste_vod_clips_001 --max-cortes 1 --clip-duration 45 --output-layout original --target-height 720
+```
 
 ## Paths obrigatorios no Drive D
 
@@ -196,7 +250,7 @@ Por padrao, arquivos intermediarios nao ficam na pasta final. Se precisar depura
 
 ## Arquitetura
 
-- `main.py`: entrada CLI dos modos `atual`, `live`, `near-live`, `pos-live` e `scan-vod`.
+- `main.py`: entrada CLI dos modos `atual`, `live`, `live-clips`, `near-live`, `final-hd`, `pos-live`, `scan-vod` e `vod-clips`.
 - `highlight_detector.py`: detecta momentos por audio alto, movimento e mudancas visuais.
 - `live_buffer.py`: captura blocos temporarios da live em cache.
 - `live_watcher.py`: orquestra captura/análise/salvamento de timestamps ao vivo.

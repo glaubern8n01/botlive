@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from clipper import preparar_pastas
+from football_content_filter import classify_football_content
+from highlight_detector import detectar_melhores_momentos
 from live_watcher import monitorar_live, monitorar_near_live
+from moment_logger import salvar_momento
 from overlay_editor import OverlayConfig
 from post_live_processor import processar_pos_live
+from source_downloader import resolver_fonte_video
 from vod_scanner import scan_vod_completo
+
+
+def _is_url(value: str) -> bool:
+    lowered = value.lower()
+    return lowered.startswith(("http://", "https://", "rtmp://", "m3u8://"))
 
 
 def _overlay_from_args(args: argparse.Namespace) -> OverlayConfig:
@@ -18,10 +28,153 @@ def _overlay_from_args(args: argparse.Namespace) -> OverlayConfig:
     )
 
 
+def _salvar_timestamps_arquivo_local(
+    source: str,
+    session_id: str,
+    max_cortes: int,
+    sample_every_seconds: int,
+    analysis_window_seconds: int,
+    min_gap_seconds: int,
+    score_threshold: float,
+    content_filter: str,
+    strict_football_filter: bool,
+) -> int:
+    video_path = resolver_fonte_video(source)
+    print(f"[vod-clips] Arquivo local para analise: {video_path}")
+
+    football_metadata: dict = {
+        "content_filter": content_filter,
+        "football_action": "save_ready",
+        "football_label": "nao_avaliado",
+    }
+    if content_filter == "football":
+        football_result = classify_football_content(
+            Path(video_path),
+            strict=strict_football_filter,
+        )
+        football_metadata = {
+            "content_filter": "football",
+            "football_action": football_result.action,
+            "football_label": football_result.content_type,
+            "football_reason": football_result.reason,
+            "football_score": football_result.football_confidence,
+            "football_interview_penalty": football_result.interview_penalty,
+            "football_studio_penalty": football_result.studio_penalty,
+            "football_static_penalty": football_result.static_penalty,
+        }
+        print(
+            "[vod-clips][football] "
+            f"type={football_result.content_type} action={football_result.action} "
+            f"reason={football_result.reason}"
+        )
+        if football_result.action == "reject":
+            print("[vod-clips] Arquivo rejeitado pelo filtro football. Nenhum timestamp salvo.")
+            return 0
+
+    candidates = detectar_melhores_momentos(
+        video_path=video_path,
+        max_cortes=max_cortes,
+        sample_every_seconds=sample_every_seconds,
+        analysis_window_seconds=analysis_window_seconds,
+        min_gap_seconds=min_gap_seconds,
+        min_score=score_threshold,
+    )
+    saved = 0
+    for index, candidate in enumerate(candidates, start=1):
+        record = salvar_momento(
+            source_url=source,
+            timestamp_seconds=candidate.timestamp_seconds,
+            score=candidate.score,
+            reason=candidate.reason,
+            session_id=session_id,
+            block_index=index - 1,
+            block_file=str(video_path),
+            metadata={
+                "mode": "vod_clips_local",
+                "block_timestamp_seconds": candidate.timestamp_seconds,
+                "audio_score": candidate.audio_score,
+                "motion_score": candidate.motion_score,
+                "brightness_score": candidate.brightness_score,
+                "min_gap_seconds": min_gap_seconds,
+                "strict_football_filter": strict_football_filter,
+                **football_metadata,
+            },
+        )
+        saved += 1
+        print(f"[vod-clips] salvo {record.id}: {candidate.timestamp_seconds}s score={candidate.score}")
+    return saved
+
+
+def _processar_vod_clips(args: argparse.Namespace) -> None:
+    if not args.session_id:
+        raise SystemExit("--session-id e obrigatorio no modo vod-clips.")
+
+    if _is_url(args.source):
+        print("[vod-clips] Etapa 1/2: scan-vod para salvar timestamps.")
+        selected = scan_vod_completo(
+            source_url=args.source,
+            session_id=args.session_id,
+            block_seconds=args.block_seconds,
+            max_cortes=args.max_cortes,
+            score_threshold=args.score_threshold,
+            min_gap_seconds=args.min_gap_seconds,
+            sample_every_seconds=args.sample_every_seconds,
+            analysis_window_seconds=args.analysis_window_seconds,
+            max_blocks=args.max_blocks,
+            content_filter=args.content_filter,
+            focus_final_minutes=args.focus_final_minutes,
+            start_seconds=args.start_seconds,
+            end_seconds=args.end_seconds,
+            max_scan_blocks=args.max_scan_blocks,
+            strict_football_filter=args.strict_football_filter,
+        )
+        saved_count = len(selected)
+    else:
+        print("[vod-clips] Etapa 1/2: analise de arquivo local para salvar timestamps.")
+        saved_count = _salvar_timestamps_arquivo_local(
+            source=args.source,
+            session_id=args.session_id,
+            max_cortes=args.max_cortes,
+            sample_every_seconds=args.sample_every_seconds,
+            analysis_window_seconds=args.analysis_window_seconds,
+            min_gap_seconds=args.min_gap_seconds,
+            score_threshold=args.score_threshold,
+            content_filter=args.content_filter,
+            strict_football_filter=args.strict_football_filter,
+        )
+    if saved_count <= 0:
+        print("[vod-clips] Nenhum timestamp salvo. Render final ignorado.")
+        return
+
+    print("[vod-clips] Etapa 2/2: render final HD a partir dos timestamps salvos.")
+    processar_pos_live(
+        source=args.source,
+        max_cortes=args.max_cortes,
+        usar_momentos_salvos=True,
+        session_id=args.session_id,
+        vod_offset_seconds=args.vod_offset_seconds,
+        sample_every_seconds=args.sample_every_seconds,
+        analysis_window_seconds=args.analysis_window_seconds,
+        min_gap_seconds=args.min_gap_seconds,
+        clip_duration=args.clip_duration,
+        pre_roll_seconds=args.pre_roll_seconds,
+        post_roll_seconds=args.post_roll_seconds,
+        overlay_config=_overlay_from_args(args),
+        output_layout=args.output_layout,
+        keep_intermediate=args.keep_intermediate,
+        target_height=args.target_height,
+        render_source="vod" if args.prefer_final_render_from_source else args.render_source,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Robo autonomo de cortes dark para lives e VODs.")
     parser.add_argument("source", help="URL da live/video ou caminho de um arquivo local.")
-    parser.add_argument("--modo", choices=["atual", "live", "near-live", "pos-live", "scan-vod"], default="atual")
+    parser.add_argument(
+        "--modo",
+        choices=["atual", "live", "near-live", "live-clips", "pos-live", "final-hd", "scan-vod", "vod-clips"],
+        default="atual",
+    )
     parser.add_argument("--max-cortes", type=int, default=8, help="Quantidade maxima de cortes.")
     parser.add_argument("--sample-every-seconds", type=int, default=3)
     parser.add_argument("--analysis-window-seconds", type=int, default=6)
@@ -105,7 +258,7 @@ def main() -> None:
         )
         return
 
-    if args.modo == "near-live":
+    if args.modo in {"near-live", "live-clips"}:
         monitorar_near_live(
             source_url=args.source,
             block_seconds=args.block_seconds,
@@ -121,6 +274,11 @@ def main() -> None:
             content_filter=args.content_filter,
             strict_football_filter=args.strict_football_filter,
         )
+        return
+
+    if args.modo == "vod-clips":
+        _processar_vod_clips(args)
+        print("[sistema] Finalizado.")
         return
 
     if args.modo == "scan-vod":
@@ -145,14 +303,19 @@ def main() -> None:
         )
         return
 
-    # "atual" e "pos-live" compartilham o mesmo pipeline estavel.
+    # "atual", "pos-live" e "final-hd" compartilham o mesmo pipeline estavel.
     # Sem --modo, o comportamento continua sendo preparar fonte, analisar e gerar cortes.
+    if args.modo == "final-hd" and not args.session_id:
+        raise SystemExit("--session-id e obrigatorio no modo final-hd.")
+    usar_momentos_salvos = args.usar_momentos_salvos if args.modo in {"pos-live", "final-hd"} else False
+    if args.modo == "final-hd":
+        usar_momentos_salvos = True
     processar_pos_live(
         source=args.source,
         max_cortes=args.max_cortes,
-        usar_momentos_salvos=args.usar_momentos_salvos if args.modo == "pos-live" else False,
-        session_id=args.session_id if args.modo == "pos-live" else None,
-        vod_offset_seconds=args.vod_offset_seconds if args.modo == "pos-live" else 0,
+        usar_momentos_salvos=usar_momentos_salvos,
+        session_id=args.session_id if args.modo in {"pos-live", "final-hd"} else None,
+        vod_offset_seconds=args.vod_offset_seconds if args.modo in {"pos-live", "final-hd"} else 0,
         sample_every_seconds=args.sample_every_seconds,
         analysis_window_seconds=args.analysis_window_seconds,
         min_gap_seconds=args.min_gap_seconds,
