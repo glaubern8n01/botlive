@@ -20,6 +20,11 @@ FootballContentType = Literal[
     "goalkeeper_save",
     "goal_or_chance",
     "celebration",
+    "pregame",
+    "postgame",
+    "studio_or_commentary",
+    "var_or_graphics",
+    "crowd_or_stadium_only",
     "replay_of_play",
     "crowd_reaction",
     "interview",
@@ -28,7 +33,23 @@ FootballContentType = Literal[
     "menu",
     "unknown",
 ]
+FootballCategory = Literal[
+    "active_play",
+    "pregame",
+    "postgame",
+    "studio_or_commentary",
+    "var_or_graphics",
+    "crowd_or_stadium_only",
+    "static_screen",
+    "unknown",
+]
 FootballAction = Literal["save_ready", "save_needs_review", "reject"]
+
+# Categorias que nunca podem virar save_ready, mesmo com campo/placar/torcida
+# visiveis: sozinhos esses sinais nao provam que ha jogada real acontecendo.
+NON_PLAY_CATEGORIES: frozenset[str] = frozenset(
+    {"pregame", "postgame", "studio_or_commentary", "var_or_graphics", "crowd_or_stadium_only", "static_screen"}
+)
 
 
 @dataclass(frozen=True)
@@ -47,6 +68,13 @@ class FootballContentResult:
     score_final: float
     action: FootballAction
     reason: str
+    category: FootballCategory = "unknown"
+    active_play_score: float = 0.0
+    pregame_score: float = 0.0
+    postgame_score: float = 0.0
+    studio_score: float = 0.0
+    var_graphics_score: float = 0.0
+    crowd_only_score: float = 0.0
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -145,6 +173,21 @@ def _sample_frames(video_path: Path) -> tuple[list[np.ndarray], float]:
         clip.close()
 
 
+def _play_motion_shape(distributed_motion: float) -> float:
+    """Jogada real ativa uma fatia moderada da grade de movimento (jogadores +
+    bola), nao o quadro quase inteiro de uma vez (pan de camera/corte de
+    estadio) nem quase nada (plano parado/estudio)."""
+    if distributed_motion <= 0.05:
+        return 0.0
+    if distributed_motion <= 0.16:
+        return _clamp((distributed_motion - 0.05) / 0.11)
+    if distributed_motion <= 0.55:
+        return 1.0
+    if distributed_motion <= 0.80:
+        return _clamp(1.0 - (distributed_motion - 0.55) / 0.25)
+    return 0.15
+
+
 def classify_football_content(
     video_path: str | Path,
     *,
@@ -218,8 +261,43 @@ def classify_football_content(
     brightness = float(np.mean(brightness_values))
     contrast = float(np.mean(contrast_values))
     distributed_motion = float(np.mean(motion_values)) if motion_values else 0.0
-    visual_change = _clamp(max(visual_change_score, distributed_motion))
     scoreboard = _scoreboard_like(frames)
+
+    return classify_football_metrics(
+        green_ratio=green_ratio,
+        skin_ratio=skin_ratio,
+        white_ratio=white_ratio,
+        brightness=brightness,
+        contrast=contrast,
+        distributed_motion=distributed_motion,
+        scoreboard=scoreboard,
+        strict=strict,
+        score_base=score_base,
+        audio_score=audio_score,
+        candidate_motion_score=candidate_motion_score,
+        visual_change_score=visual_change_score,
+    )
+
+
+def classify_football_metrics(
+    *,
+    green_ratio: float,
+    skin_ratio: float,
+    white_ratio: float,
+    brightness: float,
+    contrast: float,
+    distributed_motion: float,
+    scoreboard: bool,
+    strict: bool = False,
+    score_base: float = 0.0,
+    audio_score: float = 0.0,
+    candidate_motion_score: float = 0.0,
+    visual_change_score: float = 0.0,
+) -> FootballContentResult:
+    """Nucleo puro da classificacao: recebe metricas ja calculadas (de frames
+    reais ou simuladas em teste) e decide categoria/acao. Sem I/O de video,
+    para permitir testar a logica com metadados simulados."""
+    visual_change = _clamp(max(visual_change_score, distributed_motion))
 
     field_score = _clamp((green_ratio / 0.22) * 0.65 + (distributed_motion / 0.45) * 0.25 + (white_ratio / 0.035) * 0.10)
     if scoreboard and green_ratio >= 0.06:
@@ -278,12 +356,80 @@ def classify_football_content(
     score_final = (score_base * field_score) + emotion_score + penalty_score - negative_score
     score_final = round(_clamp(score_final, -1.0, 1.0), 4)
 
+    # --- Camada conservadora: campo/placar/torcida sozinhos NAO provam jogada
+    # ativa. pre-jogo, pos-jogo, estudio, VAR/grafico e torcida/estadio puro
+    # tambem tem grama, placar, movimento de camera e emocao na torcida.
+
+    motion_shape = _play_motion_shape(distributed_motion)
+    green_centered = _clamp(1.0 - abs(green_ratio - 0.22) / 0.22)
+    skin_penalty_factor = 1.0 if skin_ratio < 0.055 else _clamp(1.0 - (skin_ratio - 0.055) / 0.10)
+
+    active_play_score = _clamp(
+        green_centered * 0.30
+        + motion_shape * 0.30
+        + audio_score * 0.15
+        + candidate_motion_score * 0.15
+        + visual_change_score * 0.10
+    )
+    active_play_score = _clamp(active_play_score * skin_penalty_factor)
+    if green_ratio < 0.06:
+        active_play_score *= 0.35
+    if green_ratio > 0.45:
+        active_play_score *= 0.5
+    active_play_score = round(active_play_score, 4)
+
+    wide_shot_signal = _clamp((green_ratio - 0.30) / 0.25) if green_ratio > 0.30 else 0.0
+    static_wide_signal = 1.0 if (green_ratio > 0.20 and distributed_motion < 0.05) else 0.0
+    big_pan_signal = 1.0 if (green_ratio > 0.20 and distributed_motion > 0.72) else 0.0
+    low_energy_signal = _clamp(1.0 - audio_score)
+    pregame_postgame_score = _clamp(
+        wide_shot_signal * 0.40 + static_wide_signal * 0.25 + big_pan_signal * 0.25 + low_energy_signal * 0.10
+    )
+    if skin_ratio > 0.09:
+        pregame_postgame_score *= 0.4
+    pregame_score = postgame_score = round(pregame_postgame_score, 4)
+
+    studio_score = round(_clamp(max(interview_penalty, studio_penalty)), 4)
+
+    graphic_shape_signal = (
+        1.0 if (green_ratio < 0.10 and skin_ratio < 0.05) else _clamp(1.0 - (green_ratio + skin_ratio) / 0.20)
+    )
+    contrast_signal = _clamp((contrast - 0.05) / 0.15)
+    low_motion_signal = _clamp(1.0 - distributed_motion / 0.15)
+    var_graphics_score = round(
+        _clamp(graphic_shape_signal * 0.45 + contrast_signal * 0.30 + low_motion_signal * 0.25), 4
+    )
+
+    no_field_signal = _clamp(1.0 - green_ratio / 0.10) if green_ratio < 0.10 else 0.0
+    no_face_signal = 1.0 if skin_ratio < 0.06 else 0.0
+    energy_signal = _clamp((audio_score + distributed_motion) / 2)
+    crowd_only_score = round(_clamp(no_field_signal * 0.35 + no_face_signal * 0.15 + energy_signal * 0.50), 4)
+
+    negative_threshold = 0.55 if strict else 0.62
+    category_scores: dict[FootballCategory, float] = {
+        "var_or_graphics": var_graphics_score,
+        "studio_or_commentary": studio_score,
+        "pregame": pregame_score,
+        "postgame": postgame_score,
+        "crowd_or_stadium_only": crowd_only_score,
+    }
+    best_negative_label, best_negative_value = max(category_scores.items(), key=lambda item: item[1])
+
+    active_play_min = 0.42 if strict else 0.34
+    category: FootballCategory
     if static_penalty > 0.60:
+        category = "static_screen"
+    elif best_negative_value >= negative_threshold and best_negative_value > active_play_score:
+        category = best_negative_label
+    elif active_play_score >= active_play_min:
+        category = "active_play"
+    else:
+        category = "unknown"
+
+    if category == "static_screen":
         content_type: FootballContentType = "static_screen"
-    elif interview_penalty > 0.55:
-        content_type = "interview"
-    elif studio_penalty > 0.55:
-        content_type = "studio"
+    elif category != "active_play":
+        content_type = category  # "pregame" | "postgame" | "studio_or_commentary" | "var_or_graphics" | "crowd_or_stadium_only" | "unknown"
     elif penalty_score >= 0.72 and emotion_score >= 0.42:
         content_type = "penalty_kick"
     elif save_score >= 0.62 and goal_area_signal:
@@ -294,54 +440,55 @@ def classify_football_content(
         content_type = "goal_or_chance"
     elif field_score >= 0.56 and audio_score >= 0.72 and candidate_motion_score >= 0.45:
         content_type = "celebration"
-    elif field_score >= 0.50:
+    else:
         content_type = "match_action"
-    elif distributed_motion >= 0.35 and audio_score >= 0.55:
-        content_type = "crowd_reaction"
-    elif green_ratio >= 0.08:
-        content_type = "replay_of_play"
-    else:
-        content_type = "unknown"
 
-    reject = (
-        field_score < (0.50 if strict else 0.42)
-        or interview_penalty > 0.55
-        or studio_penalty > 0.55
-        or static_penalty > 0.60
-        or content_type in {"interview", "studio", "static_screen", "menu"}
-    )
-    if reject:
+    active_play_ready = 0.62 if strict else 0.50
+    active_play_review = 0.42 if strict else 0.32
+    ready_score_final = 0.40 if strict else 0.32
+
+    if category in NON_PLAY_CATEGORIES:
         action: FootballAction = "reject"
-    elif content_type in {"penalty_kick", "goalkeeper_save", "goal_or_chance", "big_chance"} and score_final >= (0.40 if strict else 0.32):
+    elif category == "active_play" and active_play_score >= active_play_ready and score_final >= ready_score_final:
         action = "save_ready"
-    elif content_type in {"match_action", "celebration"} and score_final >= (0.48 if strict else 0.38):
-        action = "save_ready"
-    else:
+    elif category == "active_play" and active_play_score >= active_play_review:
         action = "save_needs_review"
+    else:
+        action = "reject" if strict else "save_needs_review"
 
     reasons = []
-    if green_ratio >= 0.08:
+    if category == "active_play":
         reasons.append("campo/gramado visivel")
-    if distributed_motion >= 0.20:
-        reasons.append("movimento distribuido")
-    if scoreboard:
-        reasons.append("placar/layout de transmissao")
-    if emotion_score >= 0.45:
-        reasons.append("emocao junto do campo")
-    if goal_area_signal:
-        reasons.append("area/gol/goleiro provavel")
-    if set_piece_shape:
-        reasons.append("camera relativamente controlada")
-    if after_kick_signal:
-        reasons.append("explosao/movimento apos lance")
-    if penalty_score >= 0.72:
-        reasons.append("sinais fortes de penalti")
-    elif chance_score >= 0.55 or save_score >= 0.55:
-        reasons.append("lance perigoso sem certeza de penalti")
-    if interview_penalty > 0.55:
-        reasons.append("sinais de entrevista/close-up sem campo")
-    if studio_penalty > 0.55:
-        reasons.append("sinais de estudio/tela fixa sem campo")
+        if distributed_motion >= 0.20:
+            reasons.append("movimento distribuido")
+        if scoreboard:
+            reasons.append("placar/layout de transmissao")
+        if emotion_score >= 0.45:
+            reasons.append("emocao junto do campo")
+        if goal_area_signal:
+            reasons.append("area/gol/goleiro provavel")
+        if set_piece_shape:
+            reasons.append("camera relativamente controlada")
+        if after_kick_signal:
+            reasons.append("explosao/movimento apos lance")
+        if penalty_score >= 0.72:
+            reasons.append("sinais fortes de penalti")
+        elif chance_score >= 0.55 or save_score >= 0.55:
+            reasons.append("lance perigoso sem certeza de penalti")
+        if active_play_score >= active_play_ready:
+            reasons.append("sinais fortes de jogada ativa")
+        elif active_play_score >= active_play_review:
+            reasons.append("jogada ativa incerta, precisa revisao")
+    if category == "pregame":
+        reasons.append("provavel pre-jogo: panoramica ampla/parada ou pouca jogada")
+    if category == "postgame":
+        reasons.append("provavel pos-jogo: panoramica ampla/parada ou pouca jogada")
+    if category == "studio_or_commentary":
+        reasons.append("provavel estudio/comentarista/entrevista, sem campo em jogada")
+    if category == "var_or_graphics":
+        reasons.append("provavel tela de VAR/grafico/patrocinador, sem campo em jogada")
+    if category == "crowd_or_stadium_only":
+        reasons.append("provavel torcida/estadio sem jogada visivel")
     if static_penalty > 0.60:
         reasons.append("tela parada/escura")
     if not reasons:
@@ -362,4 +509,11 @@ def classify_football_content(
         score_final=score_final,
         action=action,
         reason=", ".join(reasons),
+        category=category,
+        active_play_score=active_play_score,
+        pregame_score=pregame_score,
+        postgame_score=postgame_score,
+        studio_score=studio_score,
+        var_graphics_score=var_graphics_score,
+        crowd_only_score=crowd_only_score,
     )

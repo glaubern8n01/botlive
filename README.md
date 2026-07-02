@@ -282,6 +282,40 @@ No `final-hd`/`pos-live`/`vod-clips`, como todos os timestamps da sessao ja sao 
 
 Metadados extras ficam salvos em `fila_local.jsonl` (dentro de `metadata.smart_window` nos cortes finais, ou direto em `metadata` nos momentos/previews do near-live): `smart_start_seconds`, `smart_end_seconds`, `smart_duration_seconds`, `smart_pre_roll_seconds`, `smart_post_roll_seconds`, `previous_event_seconds`, `next_event_seconds`, `prevented_multi_event` e `window_reason`.
 
+## Football strict mode
+
+Campo/gramado visivel, placar na tela, torcida com emocao ou movimento de camera **sozinhos nao provam que existe jogada real acontecendo**. Pre-jogo (chegada ao estadio, aquecimento, escalacao), pos-jogo (comemoracao longa, patrocinador, encerramento), estudio/comentarista, tela de VAR/grafico e torcida/estadio sem bola em jogo tem esses mesmos sinais visuais e podiam ser aprovados como corte "pronto" por engano.
+
+Com `--content-filter football --strict-football-filter`, o `football_content_filter.py` agora classifica cada bloco em uma categoria, com um score proprio para cada uma (`classify_football_metrics`/`classify_football_content`, campos `category`, `active_play_score`, `pregame_score`, `postgame_score`, `studio_score`, `var_graphics_score`, `crowd_only_score`):
+
+- `active_play`: lance real de jogo (ataque, defesa, gol, penalti, chance clara). E a unica categoria que pode virar `save_ready`.
+- `pregame` / `postgame`: panoramica ampla do estadio parada ou com pan de camera grande, pouca energia de torcida reagindo a lance. Como o filtro nao le o placar/relogio da transmissao (sem OCR pesado), pre-jogo e pos-jogo usam a mesma heuristica visual — a separacao real por tempo continua sendo responsabilidade do `--start-seconds`/`--end-seconds` (veja exemplo abaixo).
+- `studio_or_commentary`: bancada, narrador, comentarista, entrevista, close de pessoa falando (junta os antigos `interview_penalty`/`studio_penalty`).
+- `var_or_graphics`: tela de VAR, infografico, replay parado, tela de patrocinador/placar cheia de informacao — pouco ou nenhum campo visivel, alto contraste, pouco movimento.
+- `crowd_or_stadium_only`: torcida ou camera aberta do estadio sem jogada real visivel (pouco campo, sem rosto em destaque, energia de audio/movimento sem forma de jogo).
+
+Regra de decisao no modo strict:
+
+- `save_ready` **somente** se `category == "active_play"` e `active_play_score` alto o bastante (a acao NUNCA e `save_ready` para as outras 5 categorias, mesmo com campo/placar/torcida visiveis);
+- `save_needs_review` quando a categoria e `active_play` mas o score ainda esta em duvida;
+- `reject` para pre-jogo, pos-jogo, estudio, VAR/grafico, torcida/estadio puro e telas estaticas — no modo strict, casos ambiguos que nao batem com nenhuma categoria tambem caem em `reject` em vez de `needs_review` (fora do strict, ficam em `needs_review`).
+
+Essa protecao roda automaticamente sempre que `--strict-football-filter` e usado; nao existe uma flag `--football-game-only` separada (o proprio `strict=True` ja ativa os limiares mais conservadores).
+
+Para VODs longos com pre-jogo antes do apito inicial, pule direto para o inicio real da partida com `--start-seconds` (o filtro fica mais preciso, e a analise nao perde tempo com o pre-jogo):
+
+```powershell
+python main.py "URL_DO_VOD" --modo vod-clips --session-id jogo_001 --start-seconds 1800 --max-cortes 30 --content-filter football --strict-football-filter --smart-event-window --no-multi-event-clips
+```
+
+Se o sistema nao tiver certeza se e lance real, o corte vai para `needs_review`, nunca direto para `ready_hd`.
+
+Teste leve sem baixar video (`classify_football_metrics` com metadados simulados para cada categoria):
+
+```powershell
+python test_football_content_filter.py
+```
+
 ## Validacao dos cortes
 
 Depois de renderizar, o sistema valida o arquivo final antes de marcar como concluido:
