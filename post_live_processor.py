@@ -8,9 +8,7 @@ from uuid import uuid4
 
 import imageio_ffmpeg
 from clipper import (
-    CORTES_DIR,
     OutputLayout,
-    TEMP_DIR,
     criar_corte_vertical,
     criar_corte_vertical_de_arquivo,
     validar_video_final,
@@ -19,6 +17,8 @@ from database import marcar_concluido, marcar_erro, marcar_processando, registra
 from highlight_detector import HighlightCandidate, detectar_melhores_momentos
 from moment_logger import MomentRecord, carregar_momentos, listar_melhores_momentos
 from overlay_editor import OverlayConfig
+from runtime_paths import cortes_dir, tagged_cortes_subdir, temp_dir
+from smart_window import calculate_smart_event_window, smart_window_metadata
 from source_downloader import resolver_fonte_video
 
 
@@ -68,13 +68,20 @@ def _registrar_e_renderizar(
     football_metadata: Optional[dict] = None,
     target_height: Optional[int] = None,
     render_source: RenderSource = "auto",
+    smart_seconds_before: Optional[int] = None,
+    smart_seconds_after: Optional[int] = None,
+    smart_metadata: Optional[dict] = None,
 ) -> CorteResultado:
-    seconds_before = max(0, int(pre_roll_seconds)) if pre_roll_seconds is not None else max(1, clip_duration // 2)
-    seconds_after = (
-        max(1, int(post_roll_seconds))
-        if post_roll_seconds is not None
-        else max(1, int(clip_duration) - seconds_before)
-    )
+    if smart_seconds_before is not None and smart_seconds_after is not None:
+        seconds_before = max(0, int(smart_seconds_before))
+        seconds_after = max(1, int(smart_seconds_after))
+    else:
+        seconds_before = max(0, int(pre_roll_seconds)) if pre_roll_seconds is not None else max(1, clip_duration // 2)
+        seconds_after = (
+            max(1, int(post_roll_seconds))
+            if post_roll_seconds is not None
+            else max(1, int(clip_duration) - seconds_before)
+        )
     metadata = {
         "mode": "post_live",
         "score": candidate.score,
@@ -95,6 +102,8 @@ def _registrar_e_renderizar(
         metadata["review_action"] = review_action
     if football_metadata:
         metadata["football"] = football_metadata
+    if smart_metadata:
+        metadata["smart_window"] = smart_metadata
 
     corte = registrar_corte(
         live_url=source,
@@ -249,7 +258,7 @@ def _organizar_corte_por_revisao(
         "save_needs_review": "needs_review",
         "reject": "rejected",
     }[review_action]
-    target_dir = CORTES_DIR / folder_name
+    target_dir = tagged_cortes_subdir(folder_name)
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / output_path.name
     if target_path.exists():
@@ -259,11 +268,23 @@ def _organizar_corte_por_revisao(
     return target_path
 
 
-def _block_start_seconds(block_path: Path) -> Optional[int]:
+def _block_start_seconds(block_path: Path, block_seconds: int) -> Optional[int]:
+    """Descobre o offset (em segundos) de inicio de um arquivo de bloco em cache.
+
+    scan-vod grava "vod_block_{indice}_{inicio_em_segundos}.mp4" (2 numeros: o
+    ultimo ja e o offset). live-clips/near-live grava "block_{indice}.mp4" (so o
+    indice sequencial), entao o offset precisa ser calculado como indice * duracao.
+    """
+    stem = block_path.stem
     try:
-        return int(block_path.stem.rsplit("_", 1)[1])
+        if stem.startswith("vod_block_"):
+            return int(stem.rsplit("_", 1)[1])
+        if stem.startswith("block_"):
+            block_index = int(stem.rsplit("_", 1)[1])
+            return block_index * block_seconds
     except (IndexError, ValueError):
         return None
+    return None
 
 
 def _preparar_video_cache_para_corte(
@@ -287,8 +308,10 @@ def _preparar_video_cache_para_corte(
     window_start = max(0, int(candidate.timestamp_seconds) - seconds_before)
     window_end = int(candidate.timestamp_seconds) + seconds_after
     blocks: list[tuple[int, Path]] = []
-    for block_path in session_dir.glob("vod_block_*.mp4"):
-        block_start = _block_start_seconds(block_path)
+    # vod_block_*.mp4 vem do scan-vod; block_*.mp4 vem do live-clips/near-live.
+    candidate_paths = list(session_dir.glob("vod_block_*.mp4")) + list(session_dir.glob("block_*.mp4"))
+    for block_path in candidate_paths:
+        block_start = _block_start_seconds(block_path, block_seconds)
         if block_start is None:
             continue
         if block_start < window_end and (block_start + block_seconds) > window_start:
@@ -297,10 +320,10 @@ def _preparar_video_cache_para_corte(
     if not blocks:
         return None, candidate, None
 
-    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    temp_dir().mkdir(parents=True, exist_ok=True)
     concat_id = uuid4().hex
-    list_path = TEMP_DIR / f"cached_blocks_{concat_id}.txt"
-    concat_path = TEMP_DIR / f"cached_range_{concat_id}.mp4"
+    list_path = temp_dir() / f"cached_blocks_{concat_id}.txt"
+    concat_path = temp_dir() / f"cached_range_{concat_id}.mp4"
     list_path.write_text(
         "\n".join(f"file '{path.as_posix()}'" for _, path in blocks) + "\n",
         encoding="utf-8",
@@ -488,6 +511,10 @@ def processar_pos_live(
     keep_intermediate: bool = False,
     target_height: Optional[int] = None,
     render_source: RenderSource = "auto",
+    smart_event_window: bool = False,
+    no_multi_event_clips: bool = False,
+    max_clip_duration: int = 50,
+    min_event_separation: int = 8,
 ) -> list[CorteResultado]:
     candidates: list[HighlightCandidate] = []
     moment_metadata_by_timestamp: dict[int, dict] = {}
@@ -557,12 +584,51 @@ def processar_pos_live(
             f"motion={candidate.motion_score} | motivo={candidate.reason}"
         )
 
+    selected_candidates = candidates[:max_cortes]
+    use_smart_window = smart_event_window or no_multi_event_clips
+
     resultados: list[CorteResultado] = []
-    for candidate in candidates[:max_cortes]:
+    for index, candidate in enumerate(selected_candidates):
         football_metadata = moment_metadata_by_timestamp.get(int(candidate.timestamp_seconds), {})
         review_action = football_metadata.get("football_action")
         if review_action is None and target_height is not None:
             review_action = "save_ready"
+
+        smart_seconds_before = None
+        smart_seconds_after = None
+        smart_metadata = None
+        if use_smart_window:
+            event_type = (
+                (football_metadata.get("event_type") or football_metadata.get("football_label"))
+                if smart_event_window
+                else None
+            )
+            previous_ts = selected_candidates[index - 1].timestamp_seconds if index > 0 else None
+            next_ts = (
+                selected_candidates[index + 1].timestamp_seconds
+                if index + 1 < len(selected_candidates)
+                else None
+            )
+            window = calculate_smart_event_window(
+                event_peak_seconds=candidate.timestamp_seconds,
+                event_type=event_type,
+                previous_event_seconds=previous_ts,
+                next_event_seconds=next_ts,
+                pre_roll_seconds=pre_roll_seconds,
+                post_roll_seconds=post_roll_seconds,
+                clip_duration=clip_duration,
+                max_clip_duration=max_clip_duration,
+                min_event_separation=min_event_separation,
+            )
+            smart_seconds_before = window.pre_roll_used
+            smart_seconds_after = window.post_roll_used
+            smart_metadata = smart_window_metadata(window)
+            print(
+                f"[smart-window] #{index + 1} peak={candidate.timestamp_seconds}s "
+                f"janela={window.start_seconds}-{window.end_seconds}s "
+                f"multi_evento_evitado={window.prevented_multi_event} | {window.window_reason}"
+            )
+
         resultados.append(
             _registrar_e_renderizar(
                 source=source,
@@ -579,6 +645,9 @@ def processar_pos_live(
                 football_metadata=football_metadata if football_metadata.get("content_filter") == "football" else None,
                 target_height=target_height,
                 render_source=render_source,
+                smart_seconds_before=smart_seconds_before,
+                smart_seconds_after=smart_seconds_after,
+                smart_metadata=smart_metadata,
             )
         )
     return resultados

@@ -8,10 +8,8 @@ from typing import Optional
 import imageio_ffmpeg
 from yt_dlp import YoutubeDL
 
-from clipper import CACHE_DIR, preparar_pastas
-
-
-LIVE_BLOCKS_DIR = CACHE_DIR / "live_blocks"
+from clipper import preparar_pastas
+from runtime_paths import live_blocks_dir
 
 
 def _is_url(value: str) -> bool:
@@ -106,7 +104,7 @@ def capturar_bloco(
     retries: int = 2,
 ) -> Optional[LiveBlock]:
     preparar_pastas()
-    session_dir = LIVE_BLOCKS_DIR / session_id
+    session_dir = live_blocks_dir() / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
     block_path = session_dir / f"block_{block_index:06d}.mp4"
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()

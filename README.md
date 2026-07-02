@@ -218,6 +218,8 @@ python main.py "test_source.mp4" --modo vod-clips --session-id teste_vod_clips_0
 
 ## Paths obrigatorios no Drive D
 
+Por padrao, o sistema usa:
+
 ```text
 D:/robo-cortes-dark/cache
 D:/robo-cortes-dark/cache/live_blocks
@@ -227,6 +229,58 @@ D:/robo-cortes-dark/cortes/live_preview
 D:/robo-cortes-dark/cortes/ready_hd
 D:/robo-cortes-dark/fila_local.jsonl
 ```
+
+Para isolar uma execucao em outra pasta, use `--output-root`:
+
+```powershell
+python main.py "URL_DA_LIVE" --modo live-clips --session-id futebol_live_001 --output-root "G:\robo-cortes-live\futebol_live_001"
+```
+
+Esse argumento redireciona `cache`, `live_blocks`, `vod_blocks`, `cortes`, `live_preview`, `ready_hd`, `needs_review`, `rejected`, `fila_local.jsonl` e `run_logs`. Sem `--output-root`, o comportamento antigo no Drive D continua.
+
+Use `--output-tag` para gerar as subpastas de `cortes/` com um sufixo, sem sobrescrever uma execucao anterior (util para comparar testes lado a lado):
+
+```powershell
+python main.py "URL_DA_LIVE" --modo live-clips --session-id futebol_live_001 --output-root "G:\robo-cortes-live\futebol_live_001" --output-tag smart
+```
+
+Isso gera `cortes/live_preview_smart`, `cortes/ready_hd_smart`, `cortes/needs_review_smart` e `cortes/rejected_smart` em vez das pastas padrao. `cache/` e `fila_local.jsonl` continuam compartilhados (nao sao tageados).
+
+## Janela inteligente de corte (smart-event-window)
+
+Por padrao, um corte usa pre-roll/post-roll fixos (`--pre-roll-seconds`/`--post-roll-seconds` ou `--clip-duration`), o que pode juntar dois lances no mesmo mp4 quando os eventos estao proximos (ex.: um pico aos 3s e outro aos 27s dentro de um corte de 45s).
+
+Use `--smart-event-window` para calcular a janela do corte de forma adaptativa, com base no `event_type` do filtro de futebol e nos eventos vizinhos da sessao:
+
+```powershell
+python main.py "URL" --modo final-hd --usar-momentos-salvos --session-id sessao_001 --smart-event-window --output-root "G:\robo-cortes-live\sessao_001"
+```
+
+Regras aplicadas (`smart_window.py`, funcao `calculate_smart_event_window`):
+
+- cada corte tem 1 lance principal; pre-roll/post-roll ideais por `event_type`:
+  - `penalty_kick`: pre-roll 12s, post-roll 15s;
+  - `goal_or_chance`: pre-roll 20s, post-roll 17s;
+  - `goalkeeper_save`: pre-roll 15s, post-roll 15s;
+  - `big_chance`: pre-roll 18s, post-roll 15s;
+  - outros/`highlight`: usa `--pre-roll-seconds`/`--post-roll-seconds` informados (ou 15s/15s);
+- se o proximo evento da sessao cair dentro da janela, o fim do corte e antecipado (`end = proximo_pico - --min-event-separation`), nunca juntando dois lances no mesmo arquivo;
+- se o evento anterior estiver perto, o inicio e adiado pelo mesmo motivo;
+- a duracao nunca passa de `--max-clip-duration` (padrao 50s para futebol); o excesso e cortado do post-roll primeiro, protegendo o inicio da jogada;
+- `--no-multi-event-clips` isoladamente (sem `--smart-event-window`) so aplica a regra anti-junção usando os pre/post-roll fixos informados, sem trocar os valores por tipo de evento; `--smart-event-window` já ativa as duas coisas.
+
+Flags novas:
+
+- `--smart-event-window`: ativa a janela adaptativa completa (pre/post-roll por tipo + anti multi-lance).
+- `--no-multi-event-clips`: garante sozinha que dois eventos fortes nunca caiam no mesmo corte.
+- `--max-clip-duration`: duracao maxima do corte com janela inteligente (padrao 50).
+- `--min-event-separation`: folga minima, em segundos, entre o fim/inicio de um corte e o pico do evento vizinho (padrao 8).
+
+No `live-clips`/`near-live`, como os eventos chegam em tempo real, o corte so e renderizado depois de capturar um pouco alem do post-roll (`--min-event-separation` de folga extra), dando tempo do bot perceber um evento vizinho e encurtar a janela antes de gravar o arquivo final; se um evento novo aparecer dentro da janela de um corte ainda pendente, esse corte anterior e encurtado automaticamente.
+
+No `final-hd`/`pos-live`/`vod-clips`, como todos os timestamps da sessao ja sao conhecidos, a janela de cada corte e calculada olhando o evento anterior e o proximo da lista ordenada por tempo.
+
+Metadados extras ficam salvos em `fila_local.jsonl` (dentro de `metadata.smart_window` nos cortes finais, ou direto em `metadata` nos momentos/previews do near-live): `smart_start_seconds`, `smart_end_seconds`, `smart_duration_seconds`, `smart_pre_roll_seconds`, `smart_post_roll_seconds`, `previous_event_seconds`, `next_event_seconds`, `prevented_multi_event` e `window_reason`.
 
 ## Validacao dos cortes
 
@@ -257,6 +311,7 @@ Por padrao, arquivos intermediarios nao ficam na pasta final. Se precisar depura
 - `vod_scanner.py`: varre VOD/replay em blocos e salva timestamps deduplicados.
 - `moment_logger.py`: salva/lista momentos detectados em `fila_local.jsonl`.
 - `post_live_processor.py`: gera cortes definitivos com analise ou timestamps salvos.
+- `smart_window.py`: calcula a janela adaptativa de corte (`--smart-event-window`/`--no-multi-event-clips`), evitando juntar dois lances no mesmo mp4.
 - `clipper.py`: gera cortes nos layouts `original`, `vertical-fit` e `vertical-crop`, valida arquivo final e pode aplicar overlay opcional.
 - `overlay_editor.py`: titulo, descricao, marca e CTA final opcionais.
 - `caption_generator.py`: stub para futura legenda automatica.

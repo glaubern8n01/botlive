@@ -10,6 +10,7 @@ from live_watcher import monitorar_live, monitorar_near_live
 from moment_logger import salvar_momento
 from overlay_editor import OverlayConfig
 from post_live_processor import processar_pos_live
+from runtime_paths import get_output_root, queue_file, run_logs_dir, set_output_root, set_output_tag
 from source_downloader import resolver_fonte_video
 from vod_scanner import scan_vod_completo
 
@@ -164,6 +165,10 @@ def _processar_vod_clips(args: argparse.Namespace) -> None:
         keep_intermediate=args.keep_intermediate,
         target_height=args.target_height,
         render_source="vod" if args.prefer_final_render_from_source else args.render_source,
+        smart_event_window=args.smart_event_window,
+        no_multi_event_clips=args.no_multi_event_clips,
+        max_clip_duration=args.max_clip_duration,
+        min_event_separation=args.min_event_separation,
     )
 
 
@@ -241,9 +246,50 @@ def main() -> None:
     parser.add_argument("--descricao", default=None, help="Descricao curta opcional na tela.")
     parser.add_argument("--marca", default=None, help="Marca/nome do perfil opcional.")
     parser.add_argument("--cta", default=None, help="CTA opcional nos segundos finais.")
+    parser.add_argument(
+        "--output-root",
+        default=None,
+        help="Pasta base para cache, cortes, fila_local.jsonl e run_logs. Padrao: D:/robo-cortes-dark.",
+    )
+    parser.add_argument(
+        "--output-tag",
+        default=None,
+        help="Sufixo opcional nas subpastas de cortes (ex.: smart -> live_preview_smart, ready_hd_smart), "
+        "para testar lado a lado sem sobrescrever cortes existentes.",
+    )
+    parser.add_argument(
+        "--smart-event-window",
+        action="store_true",
+        help="Ativa janela de corte adaptativa por event_type (pre/post-roll ajustados) e impede "
+        "que dois lances fortes caiam no mesmo corte (inclui --no-multi-event-clips).",
+    )
+    parser.add_argument(
+        "--no-multi-event-clips",
+        action="store_true",
+        help="Encurta o corte se outro evento forte cair dentro da janela, para nunca juntar dois "
+        "lances no mesmo mp4. Ativado automaticamente por --smart-event-window.",
+    )
+    parser.add_argument(
+        "--max-clip-duration",
+        type=int,
+        default=50,
+        help="Duracao maxima do corte com janela inteligente, em segundos. Padrao: 50 (futebol).",
+    )
+    parser.add_argument(
+        "--min-event-separation",
+        type=int,
+        default=8,
+        help="Distancia minima (segundos) entre o fim/inicio de um corte e o pico do evento vizinho, "
+        "usada pela janela inteligente para nunca juntar dois lances.",
+    )
     args = parser.parse_args()
 
+    set_output_root(args.output_root)
+    set_output_tag(args.output_tag)
     preparar_pastas()
+    print(f"[paths] output_root={get_output_root()}")
+    print(f"[paths] fila_local={queue_file()}")
+    print(f"[paths] run_logs={run_logs_dir()}")
 
     if args.modo == "live":
         monitorar_live(
@@ -273,6 +319,10 @@ def main() -> None:
             output_layout=args.output_layout,
             content_filter=args.content_filter,
             strict_football_filter=args.strict_football_filter,
+            smart_event_window=args.smart_event_window,
+            no_multi_event_clips=args.no_multi_event_clips,
+            max_clip_duration=args.max_clip_duration,
+            min_event_separation=args.min_event_separation,
         )
         return
 
@@ -327,6 +377,10 @@ def main() -> None:
         keep_intermediate=args.keep_intermediate,
         target_height=args.target_height,
         render_source="vod" if args.prefer_final_render_from_source else args.render_source,
+        smart_event_window=args.smart_event_window,
+        no_multi_event_clips=args.no_multi_event_clips,
+        max_clip_duration=args.max_clip_duration,
+        min_event_separation=args.min_event_separation,
     )
     print("[sistema] Finalizado.")
 

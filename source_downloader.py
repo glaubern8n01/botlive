@@ -5,10 +5,8 @@ from uuid import uuid4
 
 from yt_dlp import YoutubeDL
 
-from clipper import CACHE_DIR, TEMP_DIR, preparar_pastas
-
-
-SOURCE_DIR = CACHE_DIR / "sources"
+from clipper import preparar_pastas
+from runtime_paths import sources_dir, temp_dir
 
 
 def _is_url(value: str) -> bool:
@@ -36,7 +34,7 @@ def resolver_fonte_video(source: str) -> Path:
             return source_path
 
     job_id = uuid4().hex[:12]
-    work_dir = SOURCE_DIR / job_id
+    work_dir = sources_dir() / job_id
     work_dir.mkdir(parents=True, exist_ok=True)
 
     ydl_opts = {
@@ -46,7 +44,7 @@ def resolver_fonte_video(source: str) -> Path:
         "noplaylist": True,
         "quiet": False,
         "no_warnings": False,
-        "paths": {"home": str(work_dir), "temp": str(TEMP_DIR)},
+        "paths": {"home": str(work_dir), "temp": str(temp_dir())},
     }
 
     with YoutubeDL(ydl_opts) as ydl:

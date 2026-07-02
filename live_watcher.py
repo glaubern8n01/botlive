@@ -8,11 +8,13 @@ from typing import Optional
 from uuid import uuid4
 
 import imageio_ffmpeg
-from clipper import OutputLayout, TEMP_DIR, criar_preview_de_arquivo, validar_video_final
+from clipper import OutputLayout, criar_preview_de_arquivo, validar_video_final
 from football_content_filter import FootballContentResult, classify_football_content
 from highlight_detector import detectar_melhores_momentos
 from live_buffer import LiveBlock, capturar_bloco
 from moment_logger import salvar_momento, salvar_preview_evento, source_id_from_url
+from runtime_paths import temp_dir
+from smart_window import calculate_smart_event_window, smart_window_metadata
 
 
 @dataclass
@@ -26,6 +28,7 @@ class PendingPreview:
     reason: str
     event_type: str
     metadata: dict
+    previous_event_seconds: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -190,23 +193,33 @@ def _window_blocks(blocks: list[LiveBlock], start_seconds: int, end_seconds: int
     return sorted(selected, key=lambda item: item.start_offset_seconds)
 
 
-def _can_render_preview(blocks: list[LiveBlock], pending: PendingPreview, allow_partial: bool = False) -> bool:
+def _can_render_preview(
+    blocks: list[LiveBlock],
+    pending: PendingPreview,
+    allow_partial: bool = False,
+    lookahead_seconds: int = 0,
+) -> bool:
     if not blocks:
         return False
     available_start = min(block.start_offset_seconds for block in blocks)
     available_end = max(block.start_offset_seconds + block.duration_seconds for block in blocks)
     if pending.event_start_seconds < available_start:
         return False
-    return allow_partial or pending.event_end_seconds <= available_end
+    if allow_partial:
+        return True
+    # Espera capturar um pouco alem do post-roll antes de renderizar, para dar
+    # chance de detectar um evento vizinho e encurtar a janela (anti multi-lance).
+    required_end = pending.event_end_seconds + max(0, lookahead_seconds)
+    return available_end >= required_end
 
 
 def _concat_blocks(blocks: list[LiveBlock]) -> Optional[Path]:
     if not blocks:
         return None
-    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    temp_dir().mkdir(parents=True, exist_ok=True)
     concat_id = uuid4().hex
-    list_path = TEMP_DIR / f"near_live_blocks_{concat_id}.txt"
-    concat_path = TEMP_DIR / f"near_live_range_{concat_id}.mp4"
+    list_path = temp_dir() / f"near_live_blocks_{concat_id}.txt"
+    concat_path = temp_dir() / f"near_live_range_{concat_id}.mp4"
     list_path.write_text(
         "\n".join(f"file '{block.path.as_posix()}'" for block in blocks) + "\n",
         encoding="utf-8",
@@ -242,8 +255,6 @@ def _renderizar_preview(
     session_id: str,
     blocks: list[LiveBlock],
     pending: PendingPreview,
-    pre_roll_seconds: int,
-    post_roll_seconds: int,
     output_layout: OutputLayout,
 ) -> Optional[Path]:
     selected = _window_blocks(blocks, pending.event_start_seconds, pending.event_end_seconds)
@@ -263,13 +274,17 @@ def _renderizar_preview(
     try:
         concat_start = selected[0].start_offset_seconds
         adjusted_peak = max(0, int(pending.timestamp_seconds) - concat_start)
+        # Usa a janela real do pending (pode ter sido encurtada pelo smart-window),
+        # nunca os valores fixos de pre/post-roll da sessao inteira.
+        seconds_before = max(0, int(pending.timestamp_seconds) - int(pending.event_start_seconds))
+        seconds_after = max(1, int(pending.event_end_seconds) - int(pending.timestamp_seconds))
         preview_id = f"{session_id}_{pending.timestamp_seconds}_{uuid4().hex[:8]}"
         preview_path = criar_preview_de_arquivo(
             input_video_path=concat_path,
             peak_timestamp=adjusted_peak,
             preview_id=preview_id,
-            seconds_before=pre_roll_seconds,
-            seconds_after=post_roll_seconds,
+            seconds_before=seconds_before,
+            seconds_after=seconds_after,
             output_layout=output_layout,
         )
         validation = validar_video_final(preview_path, require_audio=False)
@@ -323,19 +338,18 @@ def _tentar_renderizar_pendentes(
     session_id: str,
     blocks: list[LiveBlock],
     pending: list[PendingPreview],
-    pre_roll_seconds: int,
-    post_roll_seconds: int,
     output_layout: OutputLayout,
     max_previews: int,
     preview_paths: list[Path],
     allow_partial: bool = False,
+    lookahead_seconds: int = 0,
 ) -> list[PendingPreview]:
     remaining: list[PendingPreview] = []
     for item in pending:
         if len(preview_paths) >= max_previews:
             remaining.append(item)
             continue
-        if not _can_render_preview(blocks, item, allow_partial=allow_partial):
+        if not _can_render_preview(blocks, item, allow_partial=allow_partial, lookahead_seconds=lookahead_seconds):
             remaining.append(item)
             continue
         preview_path = _renderizar_preview(
@@ -343,8 +357,6 @@ def _tentar_renderizar_pendentes(
             session_id=session_id,
             blocks=blocks,
             pending=item,
-            pre_roll_seconds=pre_roll_seconds,
-            post_roll_seconds=post_roll_seconds,
             output_layout=output_layout,
         )
         if preview_path is not None:
@@ -367,15 +379,27 @@ def monitorar_near_live(
     output_layout: OutputLayout = "original",
     content_filter: str = "none",
     strict_football_filter: bool = False,
+    smart_event_window: bool = False,
+    no_multi_event_clips: bool = False,
+    max_clip_duration: int = 50,
+    min_event_separation: int = 8,
 ) -> NearLiveResult:
     if block_seconds < 30 or block_seconds > 60:
         raise ValueError("--block-seconds deve ficar entre 30 e 60 segundos.")
 
     pre_roll = 12 if pre_roll_seconds is None else max(0, int(pre_roll_seconds))
     post_roll = 33 if post_roll_seconds is None else max(1, int(post_roll_seconds))
+    use_smart_window = smart_event_window or no_multi_event_clips
+    lookahead_seconds = min_event_separation if use_smart_window else 0
     session_id = session_id or _new_session_id(source_url)
     print(f"[near-live] Sessao: {session_id}")
     print(f"[near-live] Capturando blocos de {block_seconds}s e gerando previews.")
+    if use_smart_window:
+        print(
+            f"[near-live] Janela inteligente ativa (smart_event_window={smart_event_window}, "
+            f"no_multi_event_clips={no_multi_event_clips}, max_clip_duration={max_clip_duration}s, "
+            f"min_event_separation={min_event_separation}s)."
+        )
 
     saved_ids: list[str] = []
     preview_paths: list[Path] = []
@@ -385,6 +409,7 @@ def monitorar_near_live(
     analysis_failures = 0
     block_index = 0
     start_offset = 0
+    last_event_timestamp: Optional[int] = None
 
     while len(preview_paths) < max_cortes:
         if max_blocks is not None and block_index >= max_blocks:
@@ -448,8 +473,51 @@ def monitorar_near_live(
                     print(f"[near-live] timestamp rejeitado pelo filtro: {global_timestamp}s")
                     continue
 
-                event_start = max(0, int(global_timestamp) - pre_roll)
-                event_end = int(global_timestamp) + post_roll
+                smart_metadata: dict = {}
+                if use_smart_window:
+                    window = calculate_smart_event_window(
+                        event_peak_seconds=global_timestamp,
+                        event_type=event_type if smart_event_window else None,
+                        previous_event_seconds=last_event_timestamp,
+                        next_event_seconds=None,
+                        pre_roll_seconds=pre_roll,
+                        post_roll_seconds=post_roll,
+                        max_clip_duration=max_clip_duration,
+                        min_event_separation=min_event_separation,
+                    )
+                    event_start = window.start_seconds
+                    event_end = window.end_seconds
+                    smart_metadata = smart_window_metadata(window)
+                    # Evento novo pode invadir a janela de um pendente anterior:
+                    # encurta o anterior em vez de deixar dois lances no mesmo mp4.
+                    for earlier in pending:
+                        if earlier.timestamp_seconds >= global_timestamp:
+                            continue
+                        if earlier.event_end_seconds <= global_timestamp - min_event_separation:
+                            continue
+                        shrunk = calculate_smart_event_window(
+                            event_peak_seconds=earlier.timestamp_seconds,
+                            event_type=earlier.event_type if smart_event_window else None,
+                            previous_event_seconds=earlier.previous_event_seconds,
+                            next_event_seconds=global_timestamp,
+                            pre_roll_seconds=pre_roll,
+                            post_roll_seconds=post_roll,
+                            max_clip_duration=max_clip_duration,
+                            min_event_separation=min_event_separation,
+                        )
+                        earlier.event_start_seconds = shrunk.start_seconds
+                        earlier.event_end_seconds = shrunk.end_seconds
+                        earlier.metadata.update(smart_window_metadata(shrunk))
+                        earlier.metadata["event_start_seconds"] = shrunk.start_seconds
+                        earlier.metadata["event_end_seconds"] = shrunk.end_seconds
+                        print(
+                            f"[near-live][smart-window] evento {earlier.timestamp_seconds}s encurtado "
+                            f"para {shrunk.start_seconds}-{shrunk.end_seconds}s (novo evento em {global_timestamp}s)"
+                        )
+                else:
+                    event_start = max(0, int(global_timestamp) - pre_roll)
+                    event_end = int(global_timestamp) + post_roll
+
                 metadata = {
                     "mode": "near_live",
                     "block_timestamp_seconds": candidate.timestamp_seconds,
@@ -462,7 +530,9 @@ def monitorar_near_live(
                     "event_end_seconds": event_end,
                     "preview_status": "pending",
                     "render_source": "live_preview",
+                    "block_seconds": block_seconds,
                     **filter_metadata,
+                    **smart_metadata,
                 }
                 record = salvar_momento(
                     source_url=source_url,
@@ -486,8 +556,10 @@ def monitorar_near_live(
                         reason=candidate.reason,
                         event_type=event_type,
                         metadata=metadata,
+                        previous_event_seconds=last_event_timestamp,
                     )
                 )
+                last_event_timestamp = int(global_timestamp)
                 print(
                     f"[near-live][momento] salvo {record.id}: "
                     f"{global_timestamp}s event_type={event_type} score={candidate.score}"
@@ -500,14 +572,16 @@ def monitorar_near_live(
             session_id=session_id,
             blocks=blocks,
             pending=pending,
-            pre_roll_seconds=pre_roll,
-            post_roll_seconds=post_roll,
             output_layout=output_layout,
             max_previews=max_cortes,
             preview_paths=preview_paths,
+            lookahead_seconds=lookahead_seconds,
         )
 
-        keep_after = max(0, start_offset - (pre_roll + post_roll + block_seconds))
+        retention_margin = pre_roll + post_roll + block_seconds
+        if use_smart_window:
+            retention_margin = max(retention_margin, max_clip_duration + lookahead_seconds + block_seconds)
+        keep_after = max(0, start_offset - retention_margin)
         blocks = [item for item in blocks if (item.start_offset_seconds + item.duration_seconds) >= keep_after]
         block_index += 1
         start_offset += block_seconds
@@ -518,8 +592,6 @@ def monitorar_near_live(
             session_id=session_id,
             blocks=blocks,
             pending=pending,
-            pre_roll_seconds=pre_roll,
-            post_roll_seconds=post_roll,
             output_layout=output_layout,
             max_previews=max_cortes,
             preview_paths=preview_paths,

@@ -16,13 +16,11 @@ try:
 except ImportError:  # MoviePy 2.x
     from moviepy import VideoFileClip
 
-from clipper import CACHE_DIR, preparar_pastas
+from clipper import preparar_pastas
 from football_content_filter import FootballContentResult, classify_football_content
 from highlight_detector import HighlightCandidate, detectar_melhores_momentos
 from moment_logger import salvar_momento
-
-
-VOD_BLOCKS_DIR = CACHE_DIR / "vod_blocks"
+from runtime_paths import vod_blocks_dir
 
 
 @dataclass(frozen=True)
@@ -99,7 +97,7 @@ def capturar_bloco_vod(
     block_seconds: int,
 ) -> Optional[Path]:
     preparar_pastas()
-    session_dir = VOD_BLOCKS_DIR / session_id
+    session_dir = vod_blocks_dir() / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
     output_path = session_dir / f"vod_block_{block_index:06d}_{start_seconds:06d}.mp4"
     if output_path.exists() and output_path.stat().st_size > 0:

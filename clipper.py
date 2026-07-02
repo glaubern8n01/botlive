@@ -9,6 +9,14 @@ import numpy as np
 from PIL import Image
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import download_range_func
+from runtime_paths import (
+    cache_dir,
+    cortes_dir,
+    ensure_output_dirs,
+    live_blocks_dir,
+    live_preview_dir,
+    temp_dir,
+)
 
 if not hasattr(Image, "ANTIALIAS"):
     Image.ANTIALIAS = Image.Resampling.LANCZOS
@@ -19,11 +27,6 @@ except ImportError:  # MoviePy 2.x
     from moviepy import ColorClip, CompositeVideoClip, VideoFileClip
 
 
-BASE_DIR = Path("D:/robo-cortes-dark")
-CACHE_DIR = BASE_DIR / "cache"
-CORTES_DIR = BASE_DIR / "cortes"
-LIVE_PREVIEW_DIR = CORTES_DIR / "live_preview"
-TEMP_DIR = CACHE_DIR / "tmp"
 OutputLayout = Literal["original", "vertical-fit", "vertical-crop"]
 
 
@@ -40,18 +43,15 @@ class VideoValidationResult:
 
 
 def preparar_pastas() -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    CORTES_DIR.mkdir(parents=True, exist_ok=True)
-    LIVE_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
-    TEMP_DIR.mkdir(parents=True, exist_ok=True)
-    os.environ["TMP"] = str(TEMP_DIR)
-    os.environ["TEMP"] = str(TEMP_DIR)
-    os.environ["TMPDIR"] = str(TEMP_DIR)
+    ensure_output_dirs()
+    os.environ["TMP"] = str(temp_dir())
+    os.environ["TEMP"] = str(temp_dir())
+    os.environ["TMPDIR"] = str(temp_dir())
 
 
 def limpar_cache() -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    for item in CACHE_DIR.iterdir():
+    cache_dir().mkdir(parents=True, exist_ok=True)
+    for item in cache_dir().iterdir():
         if item.is_dir():
             shutil.rmtree(item, ignore_errors=True)
         else:
@@ -60,11 +60,11 @@ def limpar_cache() -> None:
 
 def limpar_arquivos_gerados() -> None:
     preparar_pastas()
-    for path in CORTES_DIR.glob("*.mp4"):
+    for path in cortes_dir().glob("*.mp4"):
         path.unlink(missing_ok=True)
-    live_blocks_dir = CACHE_DIR / "live_blocks"
-    if live_blocks_dir.exists():
-        for item in live_blocks_dir.iterdir():
+    blocks_dir = live_blocks_dir()
+    if blocks_dir.exists():
+        for item in blocks_dir.iterdir():
             if item.is_dir():
                 shutil.rmtree(item, ignore_errors=True)
             else:
@@ -108,7 +108,7 @@ def baixar_trecho(
 
     start = max(0, int(peak_timestamp) - seconds_before)
     end = int(peak_timestamp) + seconds_after
-    work_dir = CACHE_DIR / f"job_{clip_id}"
+    work_dir = cache_dir() / f"job_{clip_id}"
     work_dir.mkdir(parents=True, exist_ok=True)
 
     ydl_opts = {
@@ -120,7 +120,7 @@ def baixar_trecho(
         "noplaylist": True,
         "quiet": False,
         "no_warnings": False,
-        "paths": {"home": str(work_dir), "temp": str(TEMP_DIR)},
+        "paths": {"home": str(work_dir), "temp": str(temp_dir())},
     }
 
     print(
@@ -188,7 +188,7 @@ def aplicar_crop_vertical(
                 fps=30,
                 preset="medium",
                 threads=os.cpu_count() or 4,
-                temp_audiofile=str(TEMP_DIR / f"{output_path.stem}_audio.m4a"),
+                temp_audiofile=str(temp_dir() / f"{output_path.stem}_audio.m4a"),
                 remove_temp=True,
                 verbose=False,
                 logger=None,
@@ -210,7 +210,7 @@ def _write_clip(clip: VideoFileClip, output_path: Path, preset: str = "medium") 
     }
     if clip.audio is not None:
         kwargs["audio_codec"] = "aac"
-        kwargs["temp_audiofile"] = str(TEMP_DIR / f"{output_path.stem}_audio.m4a")
+        kwargs["temp_audiofile"] = str(temp_dir() / f"{output_path.stem}_audio.m4a")
         kwargs["remove_temp"] = True
     else:
         kwargs["audio"] = False
@@ -360,7 +360,7 @@ def criar_corte_vertical_de_arquivo(
 ) -> Path:
     preparar_pastas()
     input_video_path = Path(input_video_path)
-    output_path = CORTES_DIR / f"corte_{clip_id}.mp4"
+    output_path = cortes_dir() / f"corte_{clip_id}.mp4"
 
     source = VideoFileClip(str(input_video_path))
     try:
@@ -369,7 +369,7 @@ def criar_corte_vertical_de_arquivo(
         if end <= start:
             raise ValueError(f"Janela invalida para corte: start={start}, end={end}")
 
-        segment_path = CACHE_DIR / f"segment_{clip_id}.mp4"
+        segment_path = cache_dir() / f"segment_{clip_id}.mp4"
         segment = source.subclip(start, end)
         try:
             segment.write_videofile(
@@ -379,7 +379,7 @@ def criar_corte_vertical_de_arquivo(
                 fps=30,
                 preset="ultrafast",
                 threads=os.cpu_count() or 4,
-                temp_audiofile=str(TEMP_DIR / f"{clip_id}_segment_audio.m4a"),
+                temp_audiofile=str(temp_dir() / f"{clip_id}_segment_audio.m4a"),
                 remove_temp=True,
                 verbose=False,
                 logger=None,
@@ -420,8 +420,8 @@ def criar_preview_de_arquivo(
         output_layout=output_layout,
         keep_intermediate=False,
     )
-    LIVE_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
-    target_path = LIVE_PREVIEW_DIR / output_path.name
+    live_preview_dir().mkdir(parents=True, exist_ok=True)
+    target_path = live_preview_dir() / output_path.name
     if target_path.exists():
         target_path.unlink()
     output_path.replace(target_path)
@@ -443,7 +443,7 @@ def criar_corte_vertical(
     target_height: Optional[int] = None,
 ) -> Path:
     preparar_pastas()
-    output_path = CORTES_DIR / f"corte_{clip_id}.mp4"
+    output_path = cortes_dir() / f"corte_{clip_id}.mp4"
 
     try:
         input_path = baixar_trecho(

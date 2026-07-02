@@ -4,15 +4,11 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
+from runtime_paths import get_output_root, moment_fallback_file, queue_file, run_logs_dir
 
-BASE_DIR = Path("D:/robo-cortes-dark")
-QUEUE_FILE = BASE_DIR / "fila_local.jsonl"
-RUN_LOGS_DIR = Path(__file__).resolve().parent / "run_logs"
-FALLBACK_FILE = RUN_LOGS_DIR / "fila_local_moment_fallback.jsonl"
 MOMENT_EVENT = "moment_detected"
 PREVIEW_EVENT = "near_live_preview"
 
@@ -44,22 +40,22 @@ def source_id_from_url(source_url: str) -> str:
 
 
 def append_jsonl(payload: dict[str, Any]) -> None:
-    BASE_DIR.mkdir(parents=True, exist_ok=True)
+    get_output_root().mkdir(parents=True, exist_ok=True)
     try:
-        with QUEUE_FILE.open("a", encoding="utf-8") as file:
+        with queue_file().open("a", encoding="utf-8") as file:
             file.write(json.dumps(payload, ensure_ascii=False) + "\n")
     except OSError as exc:
-        RUN_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        run_logs_dir().mkdir(parents=True, exist_ok=True)
         fallback = {
             **payload,
             "storage": "run_logs_fallback",
             "fallback_reason": f"{type(exc).__name__}: {exc}",
-            "intended_queue_file": str(QUEUE_FILE),
+            "intended_queue_file": str(queue_file()),
             "fallback_created_at": utc_now(),
         }
-        with FALLBACK_FILE.open("a", encoding="utf-8") as file:
+        with moment_fallback_file().open("a", encoding="utf-8") as file:
             file.write(json.dumps(fallback, ensure_ascii=False) + "\n")
-        print(f"[momentos][fallback] status salvo em {FALLBACK_FILE}")
+        print(f"[momentos][fallback] status salvo em {moment_fallback_file()}")
 
 
 def salvar_momento(
@@ -120,11 +116,12 @@ def salvar_preview_evento(
 
 
 def _iter_jsonl() -> list[dict[str, Any]]:
-    if not QUEUE_FILE.exists():
+    current_queue = queue_file()
+    if not current_queue.exists():
         return []
 
     rows: list[dict[str, Any]] = []
-    with QUEUE_FILE.open("r", encoding="utf-8") as file:
+    with current_queue.open("r", encoding="utf-8") as file:
         for line in file:
             line = line.strip()
             if not line:
