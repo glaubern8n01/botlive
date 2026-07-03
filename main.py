@@ -2,14 +2,22 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
 import imageio_ffmpeg
 
+# Consoles Windows (cp1252) nao encodam emoji; titulos de live com emoji
+# derrubavam o scan inteiro num print. Nunca deixar print matar o pipeline.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 from clipper import preparar_pastas
 from football_content_filter import classify_football_content
+from gta_content_filter import classify_gta_content
 from highlight_detector import detectar_melhores_momentos
 from live_watcher import monitorar_live, monitorar_near_live
 from moment_logger import salvar_momento
@@ -152,6 +160,45 @@ def _salvar_timestamps_arquivo_local(
                 "football_studio_penalty": football_result.studio_penalty,
                 "football_static_penalty": football_result.static_penalty,
             }
+        elif content_filter == "gta":
+            segment_path = _extrair_trecho_para_classificacao(
+                Path(video_path),
+                candidate.timestamp_seconds,
+            )
+            if segment_path is None:
+                print(
+                    "[vod-clips][gta] falha ao extrair trecho para classificar "
+                    f"t={candidate.timestamp_seconds}s; candidato ignorado."
+                )
+                continue
+            try:
+                segment_start = max(0, int(candidate.timestamp_seconds) - 45 // 2)
+                gta_result = classify_gta_content(
+                    segment_path,
+                    candidate_block_seconds=candidate.timestamp_seconds - segment_start,
+                    score_base=candidate.score,
+                )
+            finally:
+                segment_path.unlink(missing_ok=True)
+            print(
+                "[vod-clips][gta] "
+                f"t={candidate.timestamp_seconds}s type={gta_result.content_type} "
+                f"action={gta_result.action} reason={gta_result.reason}"
+            )
+            if gta_result.action == "reject":
+                print(f"[vod-clips] candidato rejeitado pelo filtro gta: {candidate.timestamp_seconds}s")
+                continue
+            football_metadata = {
+                "content_filter": "gta",
+                "event_type": gta_result.content_type,
+                "football_action": gta_result.action,
+                "football_label": gta_result.content_type,
+                "football_reason": gta_result.reason,
+                "gta_motion_median": gta_result.game_motion_median,
+                "gta_static_ui_ratio": gta_result.static_ui_ratio,
+                "gta_audio_rms_mean": gta_result.audio_rms_mean,
+                "gta_audio_transient": gta_result.audio_transient_ratio,
+            }
         record = salvar_momento(
             source_url=source,
             timestamp_seconds=candidate.timestamp_seconds,
@@ -291,9 +338,10 @@ def main() -> None:
     parser.add_argument("--max-blocks", type=int, default=None, help="Opcional para limitar blocos nos modos live/scan-vod.")
     parser.add_argument(
         "--content-filter",
-        choices=["none", "football"],
+        choices=["none", "football", "gta"],
         default="none",
-        help="Filtro simples de conteudo para scan-vod. football prioriza blocos com campo/jogo.",
+        help="Filtro de conteudo por nicho. football prioriza lance de jogo; "
+        "gta separa acao (ready) / conversa animada (needs_review) / morto (reject).",
     )
     parser.add_argument(
         "--strict-football-filter",

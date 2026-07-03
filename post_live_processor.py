@@ -325,8 +325,10 @@ def _preparar_video_cache_para_corte(
     concat_id = uuid4().hex
     list_path = temp_dir() / f"cached_blocks_{concat_id}.txt"
     concat_path = temp_dir() / f"cached_range_{concat_id}.mp4"
+    # Caminho absoluto: o demuxer concat resolve caminhos relativos a partir
+    # da pasta da PROPRIA lista, quebrando com --output-root relativo.
     list_path.write_text(
-        "\n".join(f"file '{path.as_posix()}'" for _, path in blocks) + "\n",
+        "\n".join(f"file '{path.resolve().as_posix()}'" for _, path in blocks) + "\n",
         encoding="utf-8",
     )
     command = [
@@ -650,7 +652,9 @@ def processar_pos_live(
                 output_layout=output_layout,
                 keep_intermediate=keep_intermediate,
                 review_action=review_action,
-                football_metadata=football_metadata if football_metadata.get("content_filter") == "football" else None,
+                football_metadata=football_metadata
+                if football_metadata.get("content_filter") in {"football", "gta"}
+                else None,
                 target_height=target_height,
                 render_source=render_source,
                 smart_seconds_before=smart_seconds_before,

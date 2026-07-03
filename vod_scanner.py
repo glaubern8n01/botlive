@@ -18,6 +18,7 @@ except ImportError:  # MoviePy 2.x
 
 from clipper import preparar_pastas
 from football_content_filter import FootballContentResult, classify_football_content
+from gta_content_filter import classify_gta_content
 from highlight_detector import HighlightCandidate, detectar_melhores_momentos
 from moment_logger import salvar_momento
 from runtime_paths import vod_blocks_dir
@@ -260,8 +261,8 @@ def scan_vod_completo(
 ) -> list[ScannedMoment]:
     if block_seconds < 30 or block_seconds > 60:
         raise ValueError("--block-seconds deve ficar entre 30 e 60 segundos.")
-    if content_filter not in {"none", "football"}:
-        raise ValueError("--content-filter deve ser none ou football.")
+    if content_filter not in {"none", "football", "gta"}:
+        raise ValueError("--content-filter deve ser none, football ou gta.")
     if focus_final_minutes is not None and focus_final_minutes <= 0:
         raise ValueError("--focus-final-minutes deve ser maior que zero.")
     if start_seconds is not None and start_seconds < 0:
@@ -409,6 +410,48 @@ def scan_vod_completo(
             reason = (
                 f"{candidate.reason}; score_base={score_base}; "
                 f"football={football_content.reason}"
+            )
+        elif content_filter == "gta":
+            gta_result = classify_gta_content(
+                block_path,
+                candidate_block_seconds=candidate.timestamp_seconds,
+                score_base=candidate.score,
+            )
+            candidate_action_counts[gta_result.action] += 1
+            print(
+                "[gta-filter] "
+                f"t={global_timestamp}s type={gta_result.content_type} "
+                f"motion_med={gta_result.game_motion_median} static_ui={gta_result.static_ui_ratio} "
+                f"a_mean={gta_result.audio_rms_mean} a_trans={gta_result.audio_transient_ratio} "
+                f"action={gta_result.action} reason=\"{gta_result.reason}\""
+            )
+            if gta_result.action == "reject":
+                non_game_blocks += 1
+                print(
+                    "[scan-vod] candidato rejeitado pelo filtro gta: "
+                    f"timestamp={global_timestamp}s reason={gta_result.reason}"
+                )
+                continue
+            adjusted_score = gta_result.score_final
+            reason = f"{candidate.reason}; gta={gta_result.reason}"
+            # Reusa o container de resultado para os campos do ScannedMoment;
+            # o filtro de futebol em si nao e tocado por este caminho.
+            football_content = FootballContentResult(
+                content_type=gta_result.content_type,  # type: ignore[arg-type]
+                football_confidence=0.0,
+                interview_penalty=0.0,
+                studio_penalty=0.0,
+                static_penalty=0.0,
+                green_field_ratio=0.0,
+                motion_score=gta_result.game_motion_median,
+                visual_change_score=gta_result.game_motion_p95,
+                emotion_score=gta_result.audio_rms_mean,
+                penalty_score=0.0,
+                scoreboard_like=False,
+                score_final=min(1.0, gta_result.score_final),
+                action=gta_result.action,
+                reason=gta_result.reason,
+                score_final_raw=gta_result.score_final,
             )
         scanned = ScannedMoment(
             timestamp_seconds=global_timestamp,

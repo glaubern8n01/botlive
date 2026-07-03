@@ -220,8 +220,10 @@ def _concat_blocks(blocks: list[LiveBlock]) -> Optional[Path]:
     concat_id = uuid4().hex
     list_path = temp_dir() / f"near_live_blocks_{concat_id}.txt"
     concat_path = temp_dir() / f"near_live_range_{concat_id}.mp4"
+    # Caminho absoluto: o demuxer concat resolve caminhos relativos a partir
+    # da pasta da PROPRIA lista, quebrando com --output-root relativo.
     list_path.write_text(
-        "\n".join(f"file '{block.path.as_posix()}'" for block in blocks) + "\n",
+        "\n".join(f"file '{block.path.resolve().as_posix()}'" for block in blocks) + "\n",
         encoding="utf-8",
     )
     command = [
