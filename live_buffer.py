@@ -4,12 +4,13 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 import imageio_ffmpeg
 from yt_dlp import YoutubeDL
 
 from clipper import preparar_pastas
-from runtime_paths import live_blocks_dir
+from runtime_paths import live_blocks_dir, temp_dir
 
 
 def _is_url(value: str) -> bool:
@@ -72,11 +73,17 @@ def _run_ffmpeg(command: list[str], timeout_seconds: int) -> None:
 
 
 def _tem_primeiro_frame(video_path: Path) -> bool:
+    # ffmpeg retorna codigo 0 mesmo quando o arquivo nao tem nenhum frame de
+    # video (ex.: -ss alem do fim do arquivo). Por isso exportamos 1 frame de
+    # verdade para um JPG temporario e checamos se ele foi gerado.
     if not video_path.exists() or video_path.stat().st_size < 1024:
         return False
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    temp_dir().mkdir(parents=True, exist_ok=True)
+    probe_path = temp_dir() / f"probe_{video_path.stem}_{uuid4().hex[:8]}.jpg"
     command = [
         ffmpeg,
+        "-y",
         "-hide_banner",
         "-loglevel",
         "error",
@@ -84,15 +91,15 @@ def _tem_primeiro_frame(video_path: Path) -> bool:
         str(video_path),
         "-frames:v",
         "1",
-        "-f",
-        "null",
-        "-",
+        str(probe_path),
     ]
     try:
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
-        return result.returncode == 0
+        return result.returncode == 0 and probe_path.exists() and probe_path.stat().st_size > 0
     except Exception:
         return False
+    finally:
+        probe_path.unlink(missing_ok=True)
 
 
 def capturar_bloco(

@@ -354,7 +354,11 @@ def scan_vod_completo(
             content_type_counts[football_content.content_type] += 1
             action_counts[football_content.action] += 1
             _log_football_filter(start, football_content)
-            if football_content.action == "reject":
+            # No gate por bloco os scores de energia (audio/moção do candidato)
+            # ainda nao existem (= 0), entao "unknown" aqui significa apenas
+            # "sem evidencia negativa" e o bloco segue para a detecção; a
+            # decisao strict final acontece no nivel do candidato.
+            if football_content.action == "reject" and football_content.category != "unknown":
                 non_game_blocks += 1
                 print(f"[scan-vod] bloco rejeitado pelo filtro football: {football_content.reason}")
                 continue
@@ -399,7 +403,9 @@ def scan_vod_completo(
                     f"timestamp={global_timestamp}s reason={football_content.reason}"
                 )
                 continue
-            adjusted_score = football_content.score_final
+            # Raw (sem clamp em 1.0): senao todos os momentos aprovados empatam
+            # em 1.0 e o ranking/dedupe do pos-live vira loteria.
+            adjusted_score = football_content.score_final_raw
             reason = (
                 f"{candidate.reason}; score_base={score_base}; "
                 f"football={football_content.reason}"

@@ -304,7 +304,8 @@ def _preparar_video_cache_para_corte(
     if not session_dir.exists():
         return None, candidate, None
 
-    block_seconds = int(football_metadata.get("block_seconds") or 30)
+    # 45 e o default real de --block-seconds em todos os modos de captura.
+    block_seconds = int(football_metadata.get("block_seconds") or 45)
     window_start = max(0, int(candidate.timestamp_seconds) - seconds_before)
     window_end = int(candidate.timestamp_seconds) + seconds_after
     blocks: list[tuple[int, Path]] = []
@@ -532,14 +533,21 @@ def processar_pos_live(
                 min_gap_seconds=min_gap_seconds,
             )
         if not moments:
-            print("[pos-live] Nenhum timestamp salvo para esse filtro. Tentando usar timestamps salvos recentes.")
-            moments = listar_melhores_momentos(limit=max_cortes, min_gap_seconds=min_gap_seconds)
-        if not moments:
-            print("[pos-live] Nenhum timestamp salvo encontrado. Buscando melhores momentos no video.")
+            print(
+                "[pos-live] Nenhum timestamp salvo para essa combinacao de source + session_id. "
+                "Nada sera renderizado: timestamps de outras sessoes nunca sao reaproveitados. "
+                f"Confira o --session-id ({session_id!r}) e use a MESMA URL/arquivo do scan/live."
+            )
+            return []
         else:
             print(f"[pos-live] Usando {len(moments)} timestamp(s) salvo(s).")
+            # Chave igual ao timestamp do candidato em _candidate_from_moment
+            # (com vod_offset aplicado), senao offset != 0 perde os metadados.
             moment_metadata_by_timestamp = {
-                int(moment.timestamp_seconds): {**(moment.metadata or {}), "_block_file": moment.block_file}
+                max(0, int(moment.timestamp_seconds) + int(vod_offset_seconds)): {
+                    **(moment.metadata or {}),
+                    "_block_file": moment.block_file,
+                }
                 for moment in moments
             }
             candidates = [_candidate_from_moment(moment, vod_offset_seconds) for moment in moments]

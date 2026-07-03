@@ -5,23 +5,29 @@ from typing import Optional
 
 
 # Pre-roll/post-roll ideais por tipo de evento de futebol (regras do usuario).
+# Medido em VOD real: o pico do detector erra a explosao de audio em ate ~12s
+# (amostragem de 3s + blocos alinhados em keyframe). O pre-roll precisa cobrir
+# esse erro E a jogada antes do grito (passe/corrida/chute), estilo replay.
 DEFAULT_PRE_ROLL_BY_EVENT_TYPE: dict[str, int] = {
-    "penalty_kick": 12,
-    "goal_or_chance": 20,
-    "goalkeeper_save": 15,
-    "big_chance": 18,
+    "penalty_kick": 20,
+    "goal_or_chance": 25,
+    "goalkeeper_save": 20,
+    "big_chance": 22,
 }
 DEFAULT_POST_ROLL_BY_EVENT_TYPE: dict[str, int] = {
-    "penalty_kick": 15,
-    "goal_or_chance": 17,
-    "goalkeeper_save": 15,
-    "big_chance": 15,
+    "penalty_kick": 18,
+    "goal_or_chance": 20,
+    "goalkeeper_save": 18,
+    "big_chance": 18,
 }
 
 MIN_PRE_ROLL_SECONDS = 10
 MIN_POST_ROLL_SECONDS = 8
 DEFAULT_MAX_CLIP_DURATION = 50
 DEFAULT_MIN_EVENT_SEPARATION = 8
+# validar_video_final rejeita cortes com duracao <= 5s; a janela nunca pode
+# ficar menor que isso, mesmo com eventos vizinhos muito proximos.
+MIN_WINDOW_SECONDS = 6
 
 
 @dataclass(frozen=True)
@@ -102,9 +108,11 @@ def calculate_smart_event_window(
             start += trim_pre
         reasons.append(f"duracao limitada a {max_clip_duration}s (maximo padrao)")
 
-    if end <= start:
-        end = start + max(3, MIN_POST_ROLL_SECONDS // 2)
-        reasons.append("janela minima de seguranca aplicada (eventos muito proximos)")
+    if end - start < MIN_WINDOW_SECONDS:
+        end = start + MIN_WINDOW_SECONDS
+        reasons.append(
+            f"janela minima de {MIN_WINDOW_SECONDS}s aplicada (eventos muito proximos)"
+        )
 
     duration = end - start
     return SmartEventWindow(

@@ -30,7 +30,24 @@ run_logs/
 cache/
 cortes/
 live_blocks/
+vod_blocks/
+live_preview*/
+ready_hd*/
+needs_review*/
+rejected*/
 fila_local.jsonl
+
+# output-roots de teste locais
+teste_vod_real*/
+robo-cortes*/
+
+# credenciais em qualquer formato
+*.pem
+*.key
+*.p12
+credentials*.json
+token*.json
+secrets*
 
 D:/robo-cortes-dark/cache/
 D:/robo-cortes-dark/cortes/

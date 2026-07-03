@@ -69,6 +69,9 @@ class FootballContentResult:
     action: FootballAction
     reason: str
     category: FootballCategory = "unknown"
+    # score_final sem clamp: preserva a magnitude real para ranquear/deduplicar
+    # momentos (o clamp em 1.0 fazia todo momento aprovado empatar em 1.0).
+    score_final_raw: float = 0.0
     active_play_score: float = 0.0
     pregame_score: float = 0.0
     postgame_score: float = 0.0
@@ -174,18 +177,26 @@ def _sample_frames(video_path: Path) -> tuple[list[np.ndarray], float]:
 
 
 def _play_motion_shape(distributed_motion: float) -> float:
-    """Jogada real ativa uma fatia moderada da grade de movimento (jogadores +
-    bola), nao o quadro quase inteiro de uma vez (pan de camera/corte de
-    estadio) nem quase nada (plano parado/estudio)."""
+    """Jogada real ativa a grade de movimento acima de um piso. Medido em
+    transmissao real 360p: a grade satura em 0.69-1.00 durante o jogo inteiro
+    (compressao + pan + torcida), entao movimento alto NAO pode ser penalizado
+    como "pan de estadio"; apenas plano quase parado zera o sinal."""
     if distributed_motion <= 0.05:
         return 0.0
     if distributed_motion <= 0.16:
         return _clamp((distributed_motion - 0.05) / 0.11)
-    if distributed_motion <= 0.55:
+    return 1.0
+
+
+def _green_plateau(green_ratio: float) -> float:
+    """Campo visivel em jogo aberto varia com o enquadramento: medido em
+    transmissao real, a media por bloco fica em 0.33-0.72 (frames de camera
+    aberta chegam a 0.94). So penaliza extremos: sem campo ou verde quase puro."""
+    if green_ratio < 0.15:
+        return _clamp(green_ratio / 0.15)
+    if green_ratio <= 0.80:
         return 1.0
-    if distributed_motion <= 0.80:
-        return _clamp(1.0 - (distributed_motion - 0.55) / 0.25)
-    return 0.15
+    return _clamp(1.0 - (green_ratio - 0.80) / 0.20)
 
 
 def classify_football_content(
@@ -353,38 +364,42 @@ def classify_football_metrics(
         chance_score = _clamp((emotion_score * 0.55) + (candidate_motion_score * 0.20) + (audio_score * 0.15) + (visual_change_score * 0.10))
 
     negative_score = interview_penalty + studio_penalty + static_penalty
-    score_final = (score_base * field_score) + emotion_score + penalty_score - negative_score
-    score_final = round(_clamp(score_final, -1.0, 1.0), 4)
+    score_final_raw = round(
+        float((score_base * field_score) + emotion_score + penalty_score - negative_score), 4
+    )
+    # O clamp continua valendo para as decisoes de acao (limiares calibrados
+    # em -1..1); o valor bruto vai no resultado para ranking nao saturar.
+    score_final = round(_clamp(score_final_raw, -1.0, 1.0), 4)
 
     # --- Camada conservadora: campo/placar/torcida sozinhos NAO provam jogada
     # ativa. pre-jogo, pos-jogo, estudio, VAR/grafico e torcida/estadio puro
     # tambem tem grama, placar, movimento de camera e emocao na torcida.
 
     motion_shape = _play_motion_shape(distributed_motion)
-    green_centered = _clamp(1.0 - abs(green_ratio - 0.22) / 0.22)
+    green_plateau = _green_plateau(green_ratio)
     skin_penalty_factor = 1.0 if skin_ratio < 0.055 else _clamp(1.0 - (skin_ratio - 0.055) / 0.10)
 
+    # Sinais base (campo + movimento) sozinhos ficam em 0.40 no maximo: um
+    # bloco sem energia (audio/moção do candidato zerados) nunca vira
+    # active_play por conta propria — quem confirma o lance e a energia.
     active_play_score = _clamp(
-        green_centered * 0.30
-        + motion_shape * 0.30
-        + audio_score * 0.15
-        + candidate_motion_score * 0.15
-        + visual_change_score * 0.10
+        green_plateau * 0.22
+        + motion_shape * 0.18
+        + audio_score * 0.25
+        + candidate_motion_score * 0.20
+        + visual_change_score * 0.15
     )
     active_play_score = _clamp(active_play_score * skin_penalty_factor)
     if green_ratio < 0.06:
         active_play_score *= 0.35
-    if green_ratio > 0.45:
-        active_play_score *= 0.5
     active_play_score = round(active_play_score, 4)
 
-    wide_shot_signal = _clamp((green_ratio - 0.30) / 0.25) if green_ratio > 0.30 else 0.0
+    # Pre/pos-jogo: so panoramica realmente PARADA denuncia (grama alta +
+    # movimento quase nulo). Os antigos sinais "muito verde" e "pan grande"
+    # disparavam em jogo real (verde 0.33-0.72 e grade saturada, medidos).
     static_wide_signal = 1.0 if (green_ratio > 0.20 and distributed_motion < 0.05) else 0.0
-    big_pan_signal = 1.0 if (green_ratio > 0.20 and distributed_motion > 0.72) else 0.0
     low_energy_signal = _clamp(1.0 - audio_score)
-    pregame_postgame_score = _clamp(
-        wide_shot_signal * 0.40 + static_wide_signal * 0.25 + big_pan_signal * 0.25 + low_energy_signal * 0.10
-    )
+    pregame_postgame_score = _clamp(static_wide_signal * 0.60 + low_energy_signal * 0.40)
     if skin_ratio > 0.09:
         pregame_postgame_score *= 0.4
     pregame_score = postgame_score = round(pregame_postgame_score, 4)
@@ -507,6 +522,7 @@ def classify_football_metrics(
         penalty_score=round(penalty_score, 4),
         scoreboard_like=scoreboard,
         score_final=score_final,
+        score_final_raw=score_final_raw,
         action=action,
         reason=", ".join(reasons),
         category=category,

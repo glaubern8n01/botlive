@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 from pathlib import Path
+from typing import Optional
+from uuid import uuid4
+
+import imageio_ffmpeg
 
 from clipper import preparar_pastas
 from football_content_filter import classify_football_content
@@ -10,7 +15,7 @@ from live_watcher import monitorar_live, monitorar_near_live
 from moment_logger import salvar_momento
 from overlay_editor import OverlayConfig
 from post_live_processor import processar_pos_live
-from runtime_paths import get_output_root, queue_file, run_logs_dir, set_output_root, set_output_tag
+from runtime_paths import get_output_root, queue_file, run_logs_dir, set_output_root, set_output_tag, temp_dir
 from source_downloader import resolver_fonte_video
 from vod_scanner import scan_vod_completo
 
@@ -29,6 +34,54 @@ def _overlay_from_args(args: argparse.Namespace) -> OverlayConfig:
     )
 
 
+def _extrair_trecho_para_classificacao(
+    video_path: Path,
+    center_seconds: int,
+    window_seconds: int = 45,
+) -> Optional[Path]:
+    """Extrai um trecho curto e leve (sem audio, 320px) so para o filtro football.
+
+    O filtro amostra ~10 frames do arquivo recebido; classificar o arquivo
+    inteiro de um VOD longo nao diz nada sobre o lance. Aqui cada candidato
+    ganha seu proprio trecho de ~45s ao redor do pico, como no scan-vod.
+    """
+    start = max(0, int(center_seconds) - window_seconds // 2)
+    temp_dir().mkdir(parents=True, exist_ok=True)
+    segment_path = temp_dir() / f"football_probe_{uuid4().hex[:8]}.mp4"
+    command = [
+        imageio_ffmpeg.get_ffmpeg_exe(),
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        str(start),
+        "-i",
+        str(video_path),
+        "-t",
+        str(window_seconds),
+        "-an",
+        "-vf",
+        "scale=320:-2",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-crf",
+        "30",
+        str(segment_path),
+    ]
+    try:
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=180)
+    except Exception:
+        segment_path.unlink(missing_ok=True)
+        return None
+    if result.returncode != 0 or not segment_path.exists() or segment_path.stat().st_size == 0:
+        segment_path.unlink(missing_ok=True)
+        return None
+    return segment_path
+
+
 def _salvar_timestamps_arquivo_local(
     source: str,
     session_id: str,
@@ -43,35 +96,6 @@ def _salvar_timestamps_arquivo_local(
     video_path = resolver_fonte_video(source)
     print(f"[vod-clips] Arquivo local para analise: {video_path}")
 
-    football_metadata: dict = {
-        "content_filter": content_filter,
-        "football_action": "save_ready",
-        "football_label": "nao_avaliado",
-    }
-    if content_filter == "football":
-        football_result = classify_football_content(
-            Path(video_path),
-            strict=strict_football_filter,
-        )
-        football_metadata = {
-            "content_filter": "football",
-            "football_action": football_result.action,
-            "football_label": football_result.content_type,
-            "football_reason": football_result.reason,
-            "football_score": football_result.football_confidence,
-            "football_interview_penalty": football_result.interview_penalty,
-            "football_studio_penalty": football_result.studio_penalty,
-            "football_static_penalty": football_result.static_penalty,
-        }
-        print(
-            "[vod-clips][football] "
-            f"type={football_result.content_type} action={football_result.action} "
-            f"reason={football_result.reason}"
-        )
-        if football_result.action == "reject":
-            print("[vod-clips] Arquivo rejeitado pelo filtro football. Nenhum timestamp salvo.")
-            return 0
-
     candidates = detectar_melhores_momentos(
         video_path=video_path,
         max_cortes=max_cortes,
@@ -82,6 +106,52 @@ def _salvar_timestamps_arquivo_local(
     )
     saved = 0
     for index, candidate in enumerate(candidates, start=1):
+        football_metadata: dict = {
+            "content_filter": content_filter,
+            "football_action": "save_ready",
+            "football_label": "nao_avaliado",
+        }
+        if content_filter == "football":
+            segment_path = _extrair_trecho_para_classificacao(
+                Path(video_path),
+                candidate.timestamp_seconds,
+            )
+            if segment_path is None:
+                print(
+                    "[vod-clips][football] falha ao extrair trecho para classificar "
+                    f"t={candidate.timestamp_seconds}s; candidato ignorado."
+                )
+                continue
+            try:
+                football_result = classify_football_content(
+                    segment_path,
+                    strict=strict_football_filter,
+                    score_base=candidate.score,
+                    audio_score=candidate.audio_score,
+                    candidate_motion_score=candidate.motion_score,
+                    visual_change_score=candidate.brightness_score,
+                )
+            finally:
+                segment_path.unlink(missing_ok=True)
+            print(
+                "[vod-clips][football] "
+                f"t={candidate.timestamp_seconds}s type={football_result.content_type} "
+                f"action={football_result.action} reason={football_result.reason}"
+            )
+            if football_result.action == "reject":
+                print(f"[vod-clips] candidato rejeitado pelo filtro football: {candidate.timestamp_seconds}s")
+                continue
+            football_metadata = {
+                "content_filter": "football",
+                "event_type": football_result.content_type,
+                "football_action": football_result.action,
+                "football_label": football_result.content_type,
+                "football_reason": football_result.reason,
+                "football_score": football_result.football_confidence,
+                "football_interview_penalty": football_result.interview_penalty,
+                "football_studio_penalty": football_result.studio_penalty,
+                "football_static_penalty": football_result.static_penalty,
+            }
         record = salvar_momento(
             source_url=source,
             timestamp_seconds=candidate.timestamp_seconds,
@@ -103,6 +173,8 @@ def _salvar_timestamps_arquivo_local(
         )
         saved += 1
         print(f"[vod-clips] salvo {record.id}: {candidate.timestamp_seconds}s score={candidate.score}")
+    if saved == 0:
+        print("[vod-clips] Nenhum candidato aprovado para essa sessao.")
     return saved
 
 

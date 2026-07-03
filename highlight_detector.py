@@ -23,6 +23,27 @@ class HighlightCandidate:
     reason: str
 
 
+# Escalas absolutas de referencia para "atividade real" (valores medidos:
+# conteudo real tem audio_rms ate ~0.40 e motion ate ~0.17; bloco quase parado
+# fica em ~0.008/0.006). Como a normalizacao por percentil e relativa ao
+# proprio bloco, sem esse fator um bloco morno ganharia score alto so por ser
+# o maximo local. Calibragem fina pendente de validacao com VOD real.
+AUDIO_RMS_REF = 0.08
+MOTION_REF = 0.04
+BRIGHTNESS_DELTA_REF = 0.04
+# Piso do amortecimento: atividade zero reduz o score relativo a 30%.
+ACTIVITY_FLOOR = 0.30
+
+
+def _activity_factor(raw_audio: float, raw_motion: float, raw_brightness_delta: float) -> float:
+    activity = (
+        min(1.0, raw_audio / AUDIO_RMS_REF) * 0.55
+        + min(1.0, raw_motion / MOTION_REF) * 0.35
+        + min(1.0, raw_brightness_delta / BRIGHTNESS_DELTA_REF) * 0.10
+    )
+    return ACTIVITY_FLOOR + (1.0 - ACTIVITY_FLOOR) * activity
+
+
 def _normalize(values: list[float]) -> list[float]:
     if not values:
         return []
@@ -113,13 +134,16 @@ def detectar_melhores_momentos(
         brightness_scores = _normalize(raw_brightness_delta)
 
         candidates: list[HighlightCandidate] = []
-        for timestamp, audio_score, motion_score, brightness_score in zip(
-            timestamps,
-            audio_scores,
-            motion_scores,
-            brightness_scores,
+        for index, (timestamp, audio_score, motion_score, brightness_score) in enumerate(
+            zip(
+                timestamps,
+                audio_scores,
+                motion_scores,
+                brightness_scores,
+            )
         ):
             score = (audio_score * 0.55) + (motion_score * 0.35) + (brightness_score * 0.10)
+            score *= _activity_factor(raw_audio[index], raw_motion[index], raw_brightness_delta[index])
             reasons = []
             if audio_score >= 0.65:
                 reasons.append("audio alto")
