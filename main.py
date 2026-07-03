@@ -402,6 +402,18 @@ def main() -> None:
         help="Distancia minima (segundos) entre o fim/inicio de um corte e o pico do evento vizinho, "
         "usada pela janela inteligente para nunca juntar dois lances.",
     )
+    parser.add_argument(
+        "--live-retention-seconds",
+        type=int,
+        default=900,
+        help="Idade maxima (segundos) de um bloco de live no disco antes de ser apagado no modo "
+        "near-live continuo. Piso automatico: maior janela de clipe + 2 blocos. Padrao: 900 (15 min).",
+    )
+    parser.add_argument(
+        "--no-peak-refine",
+        action="store_true",
+        help="Desliga o refino fino do pico pela explosao de audio no modo near-live.",
+    )
     args = parser.parse_args()
 
     set_output_root(args.output_root)
@@ -443,6 +455,8 @@ def main() -> None:
             no_multi_event_clips=args.no_multi_event_clips,
             max_clip_duration=args.max_clip_duration,
             min_event_separation=args.min_event_separation,
+            retention_seconds=args.live_retention_seconds,
+            refine_peak=not args.no_peak_refine,
         )
         return
 

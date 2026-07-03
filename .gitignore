@@ -40,6 +40,7 @@ fila_local.jsonl
 # output-roots de teste locais
 teste_vod_real*/
 robo-cortes*/
+teste_live_c/
 
 # credenciais em qualquer formato
 *.pem

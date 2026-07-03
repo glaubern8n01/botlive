@@ -89,6 +89,61 @@ def _audio_rms(clip: VideoFileClip, start: float, end: float) -> float:
     return float(np.sqrt(np.mean(np.square(samples))))
 
 
+def refinar_pico_por_audio(
+    video_path: str | Path,
+    peak_seconds: float,
+    search_radius_seconds: float = 12.0,
+    step_seconds: float = 0.25,
+    min_transient_ratio: float = 1.5,
+) -> float:
+    """Refina o pico para o instante da explosao de audio dentro da janela.
+
+    O detector amostra a cada ~3s com janela de 6s, entao o pico bruto pode
+    errar em ate ~12s (hoje absorvido pelo pre-roll). Aqui o RMS e reamostrado
+    em passos finos SO ao redor do pico e o instante do maior transiente vira
+    o pico novo. Sem transiente claro (pico < min_transient_ratio x mediana),
+    o pico original e mantido. Nunca desloca alem de search_radius_seconds.
+    """
+    video_path = Path(video_path)
+    try:
+        clip = VideoFileClip(str(video_path))
+    except Exception:
+        return float(peak_seconds)
+    try:
+        if clip.audio is None:
+            return float(peak_seconds)
+        duration = float(clip.duration or 0.0)
+        window_start = max(0.0, float(peak_seconds) - search_radius_seconds)
+        window_end = min(duration, float(peak_seconds) + search_radius_seconds)
+        if window_end - window_start < 2.0:
+            return float(peak_seconds)
+
+        values: list[float] = []
+        t = window_start
+        while t < window_end:
+            segment = clip.audio.subclip(t, min(window_end, t + step_seconds))
+            chunks = list(segment.iter_chunks(fps=11025, chunksize=8192))
+            if chunks:
+                samples = np.vstack(chunks)
+                values.append(float(np.sqrt(np.mean(np.square(samples)))))
+            else:
+                values.append(0.0)
+            t += step_seconds
+
+        if len(values) < 8:
+            return float(peak_seconds)
+        series = np.asarray(values)
+        median = float(np.median(series))
+        index = int(np.argmax(series))
+        if float(series[index]) < max(median, 1e-6) * min_transient_ratio:
+            return float(peak_seconds)
+        return round(window_start + index * step_seconds + step_seconds / 2, 2)
+    except Exception:
+        return float(peak_seconds)
+    finally:
+        clip.close()
+
+
 def detectar_melhores_momentos(
     video_path: str | Path,
     max_cortes: int = 8,

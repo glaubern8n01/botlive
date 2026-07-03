@@ -169,6 +169,10 @@ def capturar_bloco(
                             start_offset_seconds=start_offset_seconds,
                             duration_seconds=block_seconds,
                         )
+                    # Sem frame valido: cai no fallback yt-dlp em vez de deixar
+                    # o fluxo repetir o MESMO comando direto logo abaixo (BUG 7:
+                    # captura direta rodava duas vezes e queimava 45s a toa).
+                    raise RuntimeError("captura direta terminou sem frame de video valido.")
                 except Exception as exc:
                     print(f"[stream] ffmpeg direto falhou: {exc}")
                     print("[stream] tentando resolver com yt-dlp...")
