@@ -101,7 +101,13 @@ def baixar_trecho(
     seconds_after: int = 30,
     limpar_cache_antes: bool = True,
     target_height: Optional[int] = None,
-) -> Path:
+) -> tuple[Path, bool]:
+    """Baixa o trecho [peak-before, peak+after] do VOD.
+
+    Retorna (arquivo, precise). precise=True significa corte exato por
+    re-encode do yt-dlp (force_keyframes_at_cuts): o arquivo JA E o corte
+    final e nao precisa de novo encode para layout original.
+    """
     preparar_pastas()
     if limpar_cache_antes:
         limpar_cache()
@@ -130,6 +136,7 @@ def baixar_trecho(
         f"etapa=yt-dlp_range comando=yt-dlp --download-sections '*{start}-{end}' "
         f"--output \"{work_dir / 'raw_%(id)s.%(ext)s'}\" continuou=em_execucao"
     )
+    precise = True
     try:
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
@@ -139,6 +146,7 @@ def baixar_trecho(
             f"timestamp={peak_timestamp}s etapa=yt-dlp_range motivo={exc} "
             "comando=yt-dlp_range_precise continuou=tentando_fallback"
         )
+        precise = False
         fallback_opts = dict(ydl_opts)
         fallback_opts["force_keyframes_at_cuts"] = False
         fallback_opts.pop("paths", None)
@@ -146,57 +154,7 @@ def baixar_trecho(
         with YoutubeDL(fallback_opts) as ydl:
             ydl.download([video_url])
 
-    return _find_downloaded_video(work_dir)
-
-
-def aplicar_crop_vertical(
-    input_path: Path,
-    output_path: Path,
-    target_width: int = 1080,
-    target_height: int = 1920,
-    focus_x: float = 0.5,
-) -> None:
-    preparar_pastas()
-    focus_x = min(1.0, max(0.0, focus_x))
-
-    clip = VideoFileClip(str(input_path))
-    try:
-        source_w, source_h = clip.size
-        target_ratio = target_width / target_height
-        source_ratio = source_w / source_h
-
-        if source_ratio > target_ratio:
-            crop_h = source_h
-            crop_w = int(crop_h * target_ratio)
-            x1 = int((source_w - crop_w) * focus_x)
-            y1 = 0
-        else:
-            crop_w = source_w
-            crop_h = int(crop_w / target_ratio)
-            x1 = 0
-            y1 = max(0, int((source_h - crop_h) / 2))
-
-        x2 = min(source_w, x1 + crop_w)
-        y2 = min(source_h, y1 + crop_h)
-
-        vertical = clip.crop(x1=x1, y1=y1, x2=x2, y2=y2).resize((target_width, target_height))
-        try:
-            vertical.write_videofile(
-                str(output_path),
-                codec="libx264",
-                audio_codec="aac",
-                fps=30,
-                preset="medium",
-                threads=os.cpu_count() or 4,
-                temp_audiofile=str(temp_dir() / f"{output_path.stem}_audio.m4a"),
-                remove_temp=True,
-                verbose=False,
-                logger=None,
-            )
-        finally:
-            vertical.close()
-    finally:
-        clip.close()
+    return _find_downloaded_video(work_dir), precise
 
 
 def _write_clip(clip: VideoFileClip, output_path: Path, preset: str = "medium") -> None:
@@ -217,24 +175,23 @@ def _write_clip(clip: VideoFileClip, output_path: Path, preset: str = "medium") 
     clip.write_videofile(str(output_path), **kwargs)
 
 
-def _render_original(input_path: Path, output_path: Path) -> None:
-    clip = VideoFileClip(str(input_path))
-    try:
-        _write_clip(clip, output_path, preset="ultrafast")
-    finally:
-        clip.close()
-
-
-def aplicar_vertical_fit(
-    input_path: Path,
-    output_path: Path,
+def _aplicar_layout_em_clip(
+    clip: VideoFileClip,
+    output_layout: OutputLayout,
+    focus_x: float = 0.5,
     target_width: int = 1080,
     target_height: int = 1920,
-) -> None:
-    preparar_pastas()
-    source = VideoFileClip(str(input_path))
-    try:
-        source_w, source_h = source.size
+) -> tuple[VideoFileClip, list]:
+    """Aplica o layout sobre um clip aberto, SEM escrever arquivo.
+
+    Retorna (clip_final, clips_auxiliares_para_fechar). E o coracao da
+    passada unica: corte + layout viram um unico write_videofile no chamador.
+    """
+    if output_layout == "original":
+        return clip, []
+
+    if output_layout == "vertical-fit":
+        source_w, source_h = clip.size
         scale = min(target_width / source_w, target_height / source_h)
         fit_w = max(2, int(source_w * scale))
         fit_h = max(2, int(source_h * scale))
@@ -242,19 +199,55 @@ def aplicar_vertical_fit(
             fit_w -= 1
         if fit_h % 2:
             fit_h -= 1
-
-        resized = source.resize((fit_w, fit_h))
-        background = ColorClip(size=(target_width, target_height), color=(0, 0, 0)).set_duration(source.duration)
+        resized = clip.resize((fit_w, fit_h))
+        background = ColorClip(size=(target_width, target_height), color=(0, 0, 0)).set_duration(clip.duration)
         fitted = CompositeVideoClip([background, resized.set_position("center")], size=(target_width, target_height))
-        if source.audio is not None:
-            fitted = fitted.set_audio(source.audio)
-        try:
-            _write_clip(fitted, output_path, preset="medium")
-        finally:
-            fitted.close()
-            resized.close()
+        if clip.audio is not None:
+            fitted = fitted.set_audio(clip.audio)
+        return fitted, [resized, background]
+
+    if output_layout == "vertical-crop":
+        focus_x = min(1.0, max(0.0, focus_x))
+        source_w, source_h = clip.size
+        target_ratio = target_width / target_height
+        source_ratio = source_w / source_h
+        if source_ratio > target_ratio:
+            crop_h = source_h
+            crop_w = int(crop_h * target_ratio)
+            x1 = int((source_w - crop_w) * focus_x)
+            y1 = 0
+        else:
+            crop_w = source_w
+            crop_h = int(crop_w / target_ratio)
+            x1 = 0
+            y1 = max(0, int((source_h - crop_h) / 2))
+        x2 = min(source_w, x1 + crop_w)
+        y2 = min(source_h, y1 + crop_h)
+        vertical = clip.crop(x1=x1, y1=y1, x2=x2, y2=y2).resize((target_width, target_height))
+        return vertical, []
+
+    raise ValueError(f"Layout invalido: {output_layout}")
+
+
+def _render_com_layout(
+    clip: VideoFileClip,
+    output_path: Path,
+    output_layout: OutputLayout,
+    focus_x: float = 0.5,
+    preset: str = "medium",
+) -> None:
+    """Um unico encode: aplica o layout no clip aberto e escreve o arquivo."""
+    final, extras = _aplicar_layout_em_clip(clip, output_layout, focus_x)
+    try:
+        _write_clip(final, output_path, preset=preset)
     finally:
-        source.close()
+        if final is not clip:
+            final.close()
+        for item in extras:
+            try:
+                item.close()
+            except Exception:
+                pass
 
 
 def renderizar_layout(
@@ -265,15 +258,20 @@ def renderizar_layout(
 ) -> Path:
     input_path = Path(input_path)
     output_path = Path(output_path)
-    if output_layout == "original":
-        _render_original(input_path, output_path)
-    elif output_layout == "vertical-fit":
-        aplicar_vertical_fit(input_path, output_path)
-    elif output_layout == "vertical-crop":
-        aplicar_crop_vertical(input_path=input_path, output_path=output_path, focus_x=focus_x)
-    else:
-        raise ValueError(f"Layout invalido: {output_layout}")
+    clip = VideoFileClip(str(input_path))
+    try:
+        _render_com_layout(clip, output_path, output_layout, focus_x=focus_x)
+    finally:
+        clip.close()
     return output_path
+
+
+def aplicar_vertical_fit(input_path: Path, output_path: Path, **_ignored) -> None:
+    renderizar_layout(input_path, output_path, output_layout="vertical-fit")
+
+
+def aplicar_crop_vertical(input_path: Path, output_path: Path, focus_x: float = 0.5, **_ignored) -> None:
+    renderizar_layout(input_path, output_path, output_layout="vertical-crop", focus_x=focus_x)
 
 
 def _video_has_audio(path: Path) -> bool:
@@ -362,6 +360,8 @@ def criar_corte_vertical_de_arquivo(
     input_video_path = Path(input_video_path)
     output_path = cortes_dir() / f"corte_{clip_id}.mp4"
 
+    # Passada unica: subclip -> layout -> um write_videofile. O antigo arquivo
+    # de segmento intermediario era um encode extra que so degradava qualidade.
     source = VideoFileClip(str(input_video_path))
     try:
         start = max(0, int(peak_timestamp) - seconds_before)
@@ -369,38 +369,22 @@ def criar_corte_vertical_de_arquivo(
         if end <= start:
             raise ValueError(f"Janela invalida para corte: start={start}, end={end}")
 
-        segment_path = cache_dir() / f"segment_{clip_id}.mp4"
         segment = source.subclip(start, end)
         try:
-            segment.write_videofile(
-                str(segment_path),
-                codec="libx264",
-                audio_codec="aac",
-                fps=30,
-                preset="ultrafast",
-                threads=os.cpu_count() or 4,
-                temp_audiofile=str(temp_dir() / f"{clip_id}_segment_audio.m4a"),
-                remove_temp=True,
-                verbose=False,
-                logger=None,
-            )
+            _render_com_layout(segment, output_path, output_layout, focus_x=focus_x)
         finally:
             segment.close()
     finally:
         source.close()
 
-    try:
-        renderizar_layout(segment_path, output_path, output_layout=output_layout, focus_x=focus_x)
-        if overlay_config and getattr(overlay_config, "enabled", False):
-            from overlay_editor import aplicar_overlay_no_video
+    if overlay_config and getattr(overlay_config, "enabled", False):
+        from overlay_editor import aplicar_overlay_no_video
 
-            final_path = aplicar_overlay_no_video(output_path, overlay_config)
-            if not keep_intermediate and final_path != output_path:
-                output_path.unlink(missing_ok=True)
-            return final_path
-        return output_path
-    finally:
-        segment_path.unlink(missing_ok=True)
+        final_path = aplicar_overlay_no_video(output_path, overlay_config)
+        if not keep_intermediate and final_path != output_path:
+            output_path.unlink(missing_ok=True)
+        return final_path
+    return output_path
 
 
 def criar_preview_de_arquivo(
@@ -446,7 +430,7 @@ def criar_corte_vertical(
     output_path = cortes_dir() / f"corte_{clip_id}.mp4"
 
     try:
-        input_path = baixar_trecho(
+        input_path, precise = baixar_trecho(
             video_url=video_url,
             peak_timestamp=peak_timestamp,
             clip_id=clip_id,
@@ -455,7 +439,15 @@ def criar_corte_vertical(
             limpar_cache_antes=limpar_cache_antes,
             target_height=target_height,
         )
-        renderizar_layout(input_path, output_path, output_layout=output_layout, focus_x=focus_x)
+        if output_layout == "original" and precise:
+            # O trecho baixado com force_keyframes_at_cuts JA E o corte exato:
+            # re-encodar aqui so degradava a imagem e dobrava o tempo.
+            if output_path.exists():
+                output_path.unlink()
+            shutil.move(str(input_path), str(output_path))
+            print(f"[render] layout original sem re-encode: trecho yt-dlp movido para {output_path.name}")
+        else:
+            renderizar_layout(input_path, output_path, output_layout=output_layout, focus_x=focus_x)
         if overlay_config and getattr(overlay_config, "enabled", False):
             from overlay_editor import aplicar_overlay_no_video
 
