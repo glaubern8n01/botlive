@@ -33,6 +33,21 @@ def _is_url(value: str) -> bool:
     return lowered.startswith(("http://", "https://", "rtmp://", "m3u8://"))
 
 
+def _publish_config_from_args(args: argparse.Namespace):
+    """Monta a config da publicacao vertical. Sem --publish-vertical -> None,
+    e o pipeline roda exatamente como hoje (o publisher nem e importado)."""
+    if not args.publish_vertical:
+        return None
+    from publisher import PublishConfig
+
+    return PublishConfig(
+        enabled=True,
+        nicho=args.content_filter if args.content_filter != "none" else None,
+        credito_streamer=args.credito_streamer,
+        credito_canal=args.credito_canal,
+    )
+
+
 def _overlay_from_args(args: argparse.Namespace) -> OverlayConfig:
     return OverlayConfig(
         title=args.titulo,
@@ -288,6 +303,7 @@ def _processar_vod_clips(args: argparse.Namespace) -> None:
         no_multi_event_clips=args.no_multi_event_clips,
         max_clip_duration=args.max_clip_duration,
         min_event_separation=args.min_event_separation,
+        publish_config=_publish_config_from_args(args),
     )
 
 
@@ -361,6 +377,22 @@ def main() -> None:
         type=int,
         default=None,
         help="No scan-vod, limita quantos blocos serao analisados para teste rapido.",
+    )
+    parser.add_argument(
+        "--publish-vertical",
+        action="store_true",
+        help="OPT-IN: apos cada corte concluido, gera versao vertical 9:16 legendada + publish.json. "
+        "Sem essa flag, o pipeline roda exatamente como hoje.",
+    )
+    parser.add_argument(
+        "--credito-streamer",
+        default=None,
+        help="@ do streamer na tarja de baixo do vertical (ex: @paulinho).",
+    )
+    parser.add_argument(
+        "--credito-canal",
+        default=None,
+        help="Canal proprio na tarja de baixo. Sem esse valor, usa o default do nicho (--content-filter).",
     )
     parser.add_argument("--titulo", default=None, help="Titulo opcional no topo do corte.")
     parser.add_argument("--descricao", default=None, help="Descricao curta opcional na tela.")
@@ -515,6 +547,7 @@ def main() -> None:
         no_multi_event_clips=args.no_multi_event_clips,
         max_clip_duration=args.max_clip_duration,
         min_event_separation=args.min_event_separation,
+        publish_config=_publish_config_from_args(args),
     )
     print("[sistema] Finalizado.")
 

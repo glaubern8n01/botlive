@@ -71,6 +71,7 @@ def _registrar_e_renderizar(
     smart_seconds_before: Optional[int] = None,
     smart_seconds_after: Optional[int] = None,
     smart_metadata: Optional[dict] = None,
+    publish_config: Optional[object] = None,
 ) -> CorteResultado:
     if smart_seconds_before is not None and smart_seconds_after is not None:
         seconds_before = max(0, int(smart_seconds_before))
@@ -201,6 +202,23 @@ def _registrar_e_renderizar(
             f"{validation.width}x{validation.height} | {validation.duration_seconds:.1f}s | "
             f"fonte={actual_render_source} | fallback={fallback_used}"
         )
+        # Publicacao vertical e sempre POS-corte e opt-in (--publish-vertical):
+        # o horizontal ja esta salvo acima; falha aqui nunca derruba o pipeline.
+        if publish_config is not None and getattr(publish_config, "enabled", False):
+            try:
+                from publisher import publicar_corte
+
+                publicar_corte(
+                    output_path,
+                    nicho=getattr(publish_config, "nicho", None),
+                    credito_streamer=getattr(publish_config, "credito_streamer", None),
+                    credito_canal=getattr(publish_config, "credito_canal", None),
+                )
+            except Exception as publish_exc:
+                print(
+                    f"[publisher][falha] corte {corte_id}: {publish_exc}; "
+                    "horizontal preservado, pipeline segue."
+                )
         return CorteResultado(
             corte_id=corte_id,
             output_path=output_path,
@@ -518,6 +536,7 @@ def processar_pos_live(
     no_multi_event_clips: bool = False,
     max_clip_duration: int = 50,
     min_event_separation: int = 8,
+    publish_config: Optional[object] = None,
 ) -> list[CorteResultado]:
     candidates: list[HighlightCandidate] = []
     moment_metadata_by_timestamp: dict[int, dict] = {}
@@ -660,6 +679,7 @@ def processar_pos_live(
                 smart_seconds_before=smart_seconds_before,
                 smart_seconds_after=smart_seconds_after,
                 smart_metadata=smart_metadata,
+                publish_config=publish_config,
             )
         )
     return resultados

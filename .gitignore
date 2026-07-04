@@ -41,6 +41,7 @@ fila_local.jsonl
 teste_vod_real*/
 robo-cortes*/
 teste_live_c/
+teste_publicacao/
 
 # credenciais em qualquer formato
 *.pem

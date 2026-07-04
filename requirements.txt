@@ -6,3 +6,4 @@ imageio-ffmpeg
 supabase
 python-dotenv
 pytchat
+faster-whisper

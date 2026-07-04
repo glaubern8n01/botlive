@@ -1,0 +1,183 @@
+from __future__ import annotations
+
+import json
+import shutil
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+from caption_ai import gerar_legenda
+from clipper import validar_video_final
+from transcriber import transcrever_fala
+from vertical_meme import MemeTextConfig, credito_canal_para_nicho, renderizar_vertical_meme
+
+
+# Orquestrador de publicacao, sempre POS-corte: recebe um corte horizontal ja
+# pronto e validado e gera a versao vertical legendada + publish.json. Se
+# qualquer etapa falhar, o horizontal ja esta salvo e nada se perde.
+
+# Preco por 1M tokens (entrada, saida) dos modelos conhecidos, para registrar
+# o custo real no publish.json. Modelo fora da tabela -> custo_usd = None.
+PRECOS_USD_POR_MTOKEN = {
+    "claude-haiku-4-5": (1.0, 5.0),
+}
+
+
+@dataclass(frozen=True)
+class PublishConfig:
+    """Configuracao da publicacao vertical vinda do CLI (--publish-vertical)."""
+
+    enabled: bool = False
+    nicho: Optional[str] = None
+    credito_streamer: Optional[str] = None
+    credito_canal: Optional[str] = None
+
+
+def _custo_usd(model: Optional[str], tokens_in: int, tokens_out: int) -> Optional[float]:
+    if not model or model not in PRECOS_USD_POR_MTOKEN:
+        return None
+    preco_in, preco_out = PRECOS_USD_POR_MTOKEN[model]
+    return round(tokens_in / 1e6 * preco_in + tokens_out / 1e6 * preco_out, 6)
+
+
+def publicar_corte(
+    corte_path: str | Path,
+    nicho: Optional[str] = None,
+    credito_streamer: Optional[str] = None,
+    credito_canal: Optional[str] = None,
+    saida_dir: Optional[str | Path] = None,
+) -> dict:
+    """Gera vertical legendado + publish.json para um corte horizontal pronto.
+
+    Nunca levanta excecao: erros de transcricao/IA caem em fallback e erro no
+    render vertical fica registrado no json (o horizontal permanece intacto).
+    Retorna o registro salvo no publish.json.
+    """
+    started = time.monotonic()
+    corte_path = Path(corte_path)
+    target_dir = Path(saida_dir) if saida_dir else corte_path.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    horizontal_path = corte_path
+    if target_dir != corte_path.parent:
+        horizontal_path = target_dir / corte_path.name
+        shutil.copy2(corte_path, horizontal_path)
+
+    # 1. Fala -> texto (local, gratis). Sem fala/erro -> texto vazio, segue.
+    t0 = time.monotonic()
+    transcricao = transcrever_fala(corte_path)
+    tempo_transcricao = time.monotonic() - t0
+
+    # 2. Texto -> legenda clickbait (unico custo). Sem chave/erro -> fallback.
+    t0 = time.monotonic()
+    legenda = gerar_legenda(transcricao.text, nicho=nicho, streamer=credito_streamer)
+    tempo_ia = time.monotonic() - t0
+
+    # 3. Corte + legenda -> vertical 9:16. Falha aqui NAO perde o corte.
+    canal = credito_canal_para_nicho(nicho, credito_canal)
+    vertical_path: Optional[Path] = target_dir / f"{corte_path.stem}_vertical.mp4"
+    vertical_erro: Optional[str] = None
+    t0 = time.monotonic()
+    try:
+        renderizar_vertical_meme(
+            corte_path,
+            vertical_path,
+            MemeTextConfig(
+                legenda=legenda.legenda,
+                credito_streamer=credito_streamer,
+                canal_proprio=canal,
+            ),
+        )
+        validation = validar_video_final(vertical_path, require_audio=False)
+        if not validation.valid:
+            raise RuntimeError(f"vertical invalido: {validation.reason}")
+    except Exception as exc:
+        vertical_erro = str(exc)
+        if vertical_path is not None:
+            vertical_path.unlink(missing_ok=True)
+        vertical_path = None
+    tempo_render = time.monotonic() - t0
+
+    registro = {
+        "corte": corte_path.name,
+        "horizontal": str(horizontal_path),
+        "vertical": str(vertical_path) if vertical_path else None,
+        "vertical_erro": vertical_erro,
+        "nicho": nicho,
+        "credito_streamer": credito_streamer,
+        "credito_canal": canal,
+        "legenda": legenda.legenda,
+        "legenda_fonte": legenda.source,
+        "legenda_fraca": legenda.weak,
+        "legenda_modelo": legenda.model,
+        "legenda_erro": legenda.error,
+        "tokens": {"entrada": legenda.prompt_tokens, "saida": legenda.completion_tokens},
+        "custo_usd": _custo_usd(legenda.model, legenda.prompt_tokens, legenda.completion_tokens),
+        "transcricao": transcricao.text,
+        "transcricao_erro": transcricao.error,
+        "tempos_s": {
+            "transcricao": round(tempo_transcricao, 1),
+            "ia": round(tempo_ia, 1),
+            "render_vertical": round(tempo_render, 1),
+            "total": round(time.monotonic() - started, 1),
+        },
+        "gerado_em": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+    json_path = target_dir / f"{corte_path.stem}_publish.json"
+    json_path.write_text(json.dumps(registro, ensure_ascii=False, indent=4), encoding="utf-8")
+
+    status = "ok" if vertical_erro is None else f"vertical_erro={vertical_erro}"
+    print(
+        f"[publisher] {corte_path.name} | legenda={legenda.legenda!r} "
+        f"fonte={legenda.source} fraca={legenda.weak} | {status} | "
+        f"tempos={registro['tempos_s']}"
+    )
+    return registro
+
+
+def _listar_cortes(entrada: Path) -> list[Path]:
+    if entrada.is_file():
+        return [entrada]
+    cortes = [
+        path
+        for path in sorted(entrada.glob("corte_*.mp4"))
+        if not path.stem.endswith("_vertical")
+    ]
+    if not cortes:
+        raise SystemExit(f"Nenhum corte_*.mp4 encontrado em {entrada}")
+    return cortes
+
+
+if __name__ == "__main__":
+    import argparse
+
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(errors="replace")
+
+    parser = argparse.ArgumentParser(
+        description="Gera versao vertical legendada + publish.json para cortes ja prontos."
+    )
+    parser.add_argument("entrada", help="Arquivo de corte ou pasta com corte_*.mp4.")
+    parser.add_argument("--nicho", choices=["football", "gta"], default=None)
+    parser.add_argument("--credito", default=None, help="@ do streamer na tarja de baixo.")
+    parser.add_argument(
+        "--credito-canal",
+        default=None,
+        help="Canal proprio abaixo do credito. Sem esse valor, usa o default do --nicho.",
+    )
+    parser.add_argument("--saida", default=None, help="Pasta de saida. Padrao: mesma pasta do corte.")
+    args = parser.parse_args()
+
+    for corte in _listar_cortes(Path(args.entrada)):
+        publicar_corte(
+            corte,
+            nicho=args.nicho,
+            credito_streamer=args.credito,
+            credito_canal=args.credito_canal,
+            saida_dir=args.saida,
+        )
