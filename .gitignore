@@ -44,6 +44,7 @@ teste_live_c/
 teste_publicacao/
 
 # credenciais em qualquer formato
+.tokens/
 *.pem
 *.key
 *.p12

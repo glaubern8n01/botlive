@@ -28,12 +28,17 @@ PRECOS_USD_POR_MTOKEN = {
 
 @dataclass(frozen=True)
 class PublishConfig:
-    """Configuracao da publicacao vertical vinda do CLI (--publish-vertical)."""
+    """Configuracao da publicacao vertical vinda do CLI (--publish-vertical).
+
+    social carrega um SocialConfig (social_publisher) quando o auto-post nas
+    redes esta ligado (--post-youtube); None = sem auto-post, como hoje.
+    """
 
     enabled: bool = False
     nicho: Optional[str] = None
     credito_streamer: Optional[str] = None
     credito_canal: Optional[str] = None
+    social: Optional[object] = None
 
 
 def _custo_usd(model: Optional[str], tokens_in: int, tokens_out: int) -> Optional[float]:
@@ -49,6 +54,7 @@ def publicar_corte(
     credito_streamer: Optional[str] = None,
     credito_canal: Optional[str] = None,
     saida_dir: Optional[str | Path] = None,
+    social_config: Optional[object] = None,
 ) -> dict:
     """Gera vertical legendado + publish.json para um corte horizontal pronto.
 
@@ -110,6 +116,7 @@ def publicar_corte(
         "credito_streamer": credito_streamer,
         "credito_canal": canal,
         "legenda": legenda.legenda,
+        "hashtags": list(legenda.hashtags),
         "legenda_fonte": legenda.source,
         "legenda_fraca": legenda.weak,
         "legenda_modelo": legenda.model,
@@ -136,6 +143,17 @@ def publicar_corte(
         f"fonte={legenda.source} fraca={legenda.weak} | {status} | "
         f"tempos={registro['tempos_s']}"
     )
+
+    # Auto-post nas redes: sempre depois do json salvo e opt-in (--post-youtube).
+    # postar_redes nunca levanta excecao, mas o try garante que nem um bug do
+    # modulo social derruba a publicacao (json e videos ja estao no disco).
+    if social_config is not None and getattr(social_config, "enabled", False):
+        try:
+            from social_publisher import postar_redes
+
+            postar_redes(registro, social_config, json_path=json_path)
+        except Exception as social_exc:
+            print(f"[social][falha] {corte_path.name}: {social_exc}; pipeline segue.")
     return registro
 
 
@@ -171,7 +189,30 @@ if __name__ == "__main__":
         help="Canal proprio abaixo do credito. Sem esse valor, usa o default do --nicho.",
     )
     parser.add_argument("--saida", default=None, help="Pasta de saida. Padrao: mesma pasta do corte.")
+    parser.add_argument(
+        "--post-youtube",
+        action="store_true",
+        help="OPT-IN: apos gerar o publish.json, posta horizontal + vertical no YouTube.",
+    )
+    parser.add_argument(
+        "--post-dry-run",
+        action="store_true",
+        help="Simula o auto-post: grava o bloco 'postagens' no json sem subir nada.",
+    )
+    parser.add_argument("--post-visibilidade", choices=["private", "unlisted", "public"], default="unlisted")
+    parser.add_argument("--post-conta", default="principal", help="Conta autorizada (token em .tokens/).")
     args = parser.parse_args()
+
+    social_config = None
+    if args.post_youtube:
+        from social_publisher import SocialConfig
+
+        social_config = SocialConfig(
+            redes=("youtube",),
+            dry_run=args.post_dry_run,
+            visibilidade=args.post_visibilidade,
+            conta=args.post_conta,
+        )
 
     for corte in _listar_cortes(Path(args.entrada)):
         publicar_corte(
@@ -180,4 +221,5 @@ if __name__ == "__main__":
             credito_streamer=args.credito,
             credito_canal=args.credito_canal,
             saida_dir=args.saida,
+            social_config=social_config,
         )

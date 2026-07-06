@@ -213,6 +213,7 @@ def _registrar_e_renderizar(
                     nicho=getattr(publish_config, "nicho", None),
                     credito_streamer=getattr(publish_config, "credito_streamer", None),
                     credito_canal=getattr(publish_config, "credito_canal", None),
+                    social_config=getattr(publish_config, "social", None),
                 )
             except Exception as publish_exc:
                 print(

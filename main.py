@@ -37,14 +37,28 @@ def _publish_config_from_args(args: argparse.Namespace):
     """Monta a config da publicacao vertical. Sem --publish-vertical -> None,
     e o pipeline roda exatamente como hoje (o publisher nem e importado)."""
     if not args.publish_vertical:
+        if args.post_youtube:
+            raise SystemExit("--post-youtube requer --publish-vertical (o post usa o publish.json gerado por ele).")
         return None
     from publisher import PublishConfig
+
+    social = None
+    if args.post_youtube:
+        from social_publisher import SocialConfig
+
+        social = SocialConfig(
+            redes=("youtube",),
+            dry_run=args.post_dry_run,
+            visibilidade=args.post_visibilidade,
+            conta=args.post_conta,
+        )
 
     return PublishConfig(
         enabled=True,
         nicho=args.content_filter if args.content_filter != "none" else None,
         credito_streamer=args.credito_streamer,
         credito_canal=args.credito_canal,
+        social=social,
     )
 
 
@@ -383,6 +397,28 @@ def main() -> None:
         action="store_true",
         help="OPT-IN: apos cada corte concluido, gera versao vertical 9:16 legendada + publish.json. "
         "Sem essa flag, o pipeline roda exatamente como hoje.",
+    )
+    parser.add_argument(
+        "--post-youtube",
+        action="store_true",
+        help="OPT-IN: apos o publish.json de cada corte, posta horizontal + vertical no YouTube "
+        "(YouTube Data API v3, gratuita). Requer --publish-vertical.",
+    )
+    parser.add_argument(
+        "--post-dry-run",
+        action="store_true",
+        help="Simula o auto-post: grava o bloco 'postagens' no publish.json sem subir nada.",
+    )
+    parser.add_argument(
+        "--post-visibilidade",
+        choices=["private", "unlisted", "public"],
+        default="unlisted",
+        help="Visibilidade do video postado. Padrao: unlisted (nao listado), seguro para teste.",
+    )
+    parser.add_argument(
+        "--post-conta",
+        default="principal",
+        help="Nome da conta autorizada no YouTube (token em .tokens/youtube/<conta>.json).",
     )
     parser.add_argument(
         "--credito-streamer",

@@ -31,6 +31,16 @@ FALLBACK_POR_NICHO = {
 }
 FALLBACK_GENERICO = "OLHA O QUE ACONTECEU NA LIVE"
 
+# Hashtags fixas por nicho, usadas quando a IA esta desligada ou falha.
+# "#shorts" fica de fora de proposito: quem decide o destino (Short ou video
+# normal) e o publisher de rede, que adiciona a tag na hora do post vertical.
+HASHTAGS_MAX = 8
+HASHTAGS_FALLBACK_POR_NICHO = {
+    "football": ("#futebol", "#gols", "#lances", "#futebolbrasileiro", "#cortes"),
+    "gta": ("#gta", "#gtarp", "#gta5", "#rp", "#cortes"),
+}
+HASHTAGS_FALLBACK_GENERICO = ("#live", "#cortes", "#streamer")
+
 _PROMPT_SISTEMA = (
     "Voce cria legendas clickbait curtas para cortes de streamer em portugues do Brasil."
 )
@@ -49,14 +59,21 @@ Regras:
 - Se a fala nao tiver drama (ex.: pedido de like, conversa comum), faca uma
   legenda neutra e curta sobre o que foi dito e marque a forca como "fraco".
 
+Crie tambem de 4 a 6 hashtags para o post nas redes.
+Regras das hashtags:
+- Minusculas, sem espaco, sem acento, cada uma comecando com #.
+- Primeiro as do nicho ({nicho}), depois 1 ou 2 sobre o momento da fala.
+- NAO use #shorts nem #fyp (o sistema adiciona quando precisa).
+
 Responda SOMENTE com JSON neste formato:
-{{"legenda": "TEXTO DA LEGENDA", "forca": "forte" ou "fraco"}}"""
+{{"legenda": "TEXTO DA LEGENDA", "forca": "forte" ou "fraco", "hashtags": ["#exemplo1", "#exemplo2"]}}"""
 
 
 @dataclass(frozen=True)
 class LegendaResultado:
     legenda: str
     source: str  # "ia" | "fallback" | "sem_fala"
+    hashtags: tuple[str, ...] = ()
     weak: bool = False
     error: Optional[str] = None
     model: Optional[str] = None
@@ -116,6 +133,31 @@ def _legenda_fallback(nicho: Optional[str], streamer: Optional[str], config_fall
     if streamer:
         return _sanitizar_legenda(f"{base} DE {streamer}")
     return base
+
+
+def _hashtags_fallback(nicho: Optional[str]) -> tuple[str, ...]:
+    return HASHTAGS_FALLBACK_POR_NICHO.get(nicho or "", HASHTAGS_FALLBACK_GENERICO)
+
+
+def _sanitizar_hashtags(raw: Any, nicho: Optional[str]) -> tuple[str, ...]:
+    """Normaliza a lista vinda da IA: #minusculo, sem espaco, sem duplicata.
+
+    Lista vazia/invalida cai nas hashtags fixas do nicho, para o post nunca
+    sair sem hashtag nenhuma.
+    """
+    if not isinstance(raw, (list, tuple)):
+        return _hashtags_fallback(nicho)
+    limpas: list[str] = []
+    for item in raw:
+        tag = re.sub(r"[^\w]", "", str(item).strip().lower())
+        if not tag or len(tag) > 30:
+            continue
+        tag = f"#{tag}"
+        if tag not in limpas and tag not in {"#shorts", "#fyp"}:
+            limpas.append(tag)
+        if len(limpas) >= HASHTAGS_MAX:
+            break
+    return tuple(limpas) if limpas else _hashtags_fallback(nicho)
 
 
 def _sanitizar_legenda(text: str) -> str:
@@ -188,7 +230,7 @@ def _chamar_api(transcricao: str, nicho: Optional[str], config: dict[str, Any]) 
             {"role": "user", "content": _prompt_usuario(transcricao, nicho)},
         ],
         "temperature": 0.7,
-        "max_tokens": 120,
+        "max_tokens": 220,
     }
     request = urllib.request.Request(
         f"{config['base_url']}/chat/completions",
@@ -217,13 +259,16 @@ def gerar_legenda(
     """
     config = _config()
     fallback = _legenda_fallback(nicho, streamer, config["fallback"])
+    hashtags_fallback = _hashtags_fallback(nicho)
 
     if not (transcricao or "").strip():
-        return LegendaResultado(legenda=fallback, source="sem_fala")
+        return LegendaResultado(legenda=fallback, source="sem_fala", hashtags=hashtags_fallback)
 
     if not config["api_key"] or not config["model"]:
         missing = "PUBLISH_AI_API_KEY" if not config["api_key"] else "PUBLISH_AI_MODEL"
-        return LegendaResultado(legenda=fallback, source="fallback", error=f"{missing} ausente")
+        return LegendaResultado(
+            legenda=fallback, source="fallback", hashtags=hashtags_fallback, error=f"{missing} ausente"
+        )
 
     try:
         if config["provider"] == "anthropic":
@@ -237,15 +282,20 @@ def gerar_legenda(
         if data and data.get("legenda"):
             legenda = _sanitizar_legenda(str(data["legenda"]))
             weak = str(data.get("forca", "")).strip().lower() == "fraco"
+            hashtags = _sanitizar_hashtags(data.get("hashtags"), nicho)
         else:
             # JSON quebrado: usa o texto cru como legenda, melhor que fallback.
             legenda = _sanitizar_legenda(content)
             weak = False
+            hashtags = hashtags_fallback
         if not legenda:
-            return LegendaResultado(legenda=fallback, source="fallback", error="ia retornou legenda vazia")
+            return LegendaResultado(
+                legenda=fallback, source="fallback", hashtags=hashtags_fallback, error="ia retornou legenda vazia"
+            )
         return LegendaResultado(
             legenda=legenda,
             source="ia",
+            hashtags=hashtags,
             weak=weak,
             model=config["model"],
             prompt_tokens=prompt_tokens,
@@ -253,7 +303,7 @@ def gerar_legenda(
         )
     except Exception as exc:
         reason = exc.read().decode("utf-8", "replace")[:300] if isinstance(exc, urllib.error.HTTPError) else str(exc)
-        return LegendaResultado(legenda=fallback, source="fallback", error=reason)
+        return LegendaResultado(legenda=fallback, source="fallback", hashtags=hashtags_fallback, error=reason)
 
 
 if __name__ == "__main__":
@@ -271,6 +321,7 @@ if __name__ == "__main__":
 
     result = gerar_legenda(args.texto, nicho=args.nicho, streamer=args.streamer)
     print(f"legenda: {result.legenda}")
+    print(f"hashtags: {' '.join(result.hashtags)}")
     print(f"fonte={result.source} fraca={result.weak} modelo={result.model}")
     print(f"tokens: entrada={result.prompt_tokens} saida={result.completion_tokens}")
     if result.error:
