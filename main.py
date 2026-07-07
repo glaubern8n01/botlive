@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import subprocess
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
@@ -321,9 +324,87 @@ def _processar_vod_clips(args: argparse.Namespace) -> None:
     )
 
 
+def _ler_lista_links(caminho: str) -> list[str]:
+    """Le o arquivo de lote: um link por linha; linhas vazias e comentarios (#) sao ignorados."""
+    arquivo = Path(caminho)
+    if not arquivo.exists():
+        raise SystemExit(f"--lista-links: arquivo nao encontrado: {caminho}")
+    links: list[str] = []
+    for linha in arquivo.read_text(encoding="utf-8-sig").splitlines():
+        linha = linha.strip()
+        if not linha or linha.startswith("#"):
+            continue
+        links.append(linha)
+    if not links:
+        raise SystemExit(f"--lista-links: nenhum link valido em {caminho}")
+    return links
+
+
+def _processar_lote(args: argparse.Namespace) -> None:
+    """Roda o pipeline completo para cada link da lista, em sequencia.
+
+    Falha em um link nao derruba o lote: registra o motivo e segue pro proximo.
+    Cada link ganha um session-id proprio (sufixo -NN) para os timestamps salvos
+    de um link nunca vazarem no render do outro.
+    """
+    links = _ler_lista_links(args.lista_links)
+    base_session = args.session_id or datetime.now().strftime("lote-%Y%m%d-%H%M%S")
+    total = len(links)
+    resultados: list[tuple[str, str, str, float]] = []
+
+    for indice, link in enumerate(links, start=1):
+        print("\n" + "=" * 72)
+        print(f"[lote] Link {indice}/{total}: {link}")
+        print("=" * 72)
+        link_args = copy.copy(args)
+        link_args.source = link
+        link_args.session_id = f"{base_session}-{indice:02d}"
+        print(f"[lote] session-id deste link: {link_args.session_id}")
+        inicio = time.monotonic()
+        try:
+            _executar_pipeline(link_args)
+        except KeyboardInterrupt:
+            raise
+        except SystemExit as exc:
+            motivo = str(exc.code) if exc.code is not None else "SystemExit"
+            resultados.append((link, "falha", motivo, time.monotonic() - inicio))
+            print(f"[lote] Link {indice}/{total} FALHOU: {motivo}")
+        except Exception as exc:
+            motivo = f"{type(exc).__name__}: {exc}"
+            resultados.append((link, "falha", motivo, time.monotonic() - inicio))
+            print(f"[lote] Link {indice}/{total} FALHOU: {motivo}")
+        else:
+            resultados.append((link, "ok", "", time.monotonic() - inicio))
+            print(f"[lote] Link {indice}/{total} concluido.")
+
+    sucesso = sum(1 for _, status, _, _ in resultados if status == "ok")
+    falhas = total - sucesso
+    print("\n" + "=" * 72)
+    print(f"[lote] RESUMO: {total} link(s) processado(s) | {sucesso} ok | {falhas} falha(s)")
+    print("=" * 72)
+    for indice, (link, status, motivo, duracao) in enumerate(resultados, start=1):
+        marcador = "OK   " if status == "ok" else "FALHA"
+        linha = f"[lote]   {indice:02d}. {marcador} {duracao:6.1f}s  {link}"
+        if motivo:
+            linha += f"  -> {motivo}"
+        print(linha)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Robo autonomo de cortes dark para lives e VODs.")
-    parser.add_argument("source", help="URL da live/video ou caminho de um arquivo local.")
+    parser.add_argument(
+        "source",
+        nargs="?",
+        default=None,
+        help="URL da live/video ou caminho de um arquivo local. Opcional apenas com --lista-links.",
+    )
+    parser.add_argument(
+        "--lista-links",
+        default=None,
+        help="Arquivo texto com um link por linha (aceita comentarios com #). Processa cada link "
+        "em sequencia com o pipeline completo; falha em um link nao interrompe os demais. "
+        "Com --session-id, cada link recebe o sufixo -01, -02...",
+    )
     parser.add_argument(
         "--modo",
         choices=["atual", "live", "near-live", "live-clips", "pos-live", "final-hd", "scan-vod", "vod-clips"],
@@ -484,6 +565,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.lista_links and args.source:
+        parser.error("use o source posicional OU --lista-links, nao os dois ao mesmo tempo.")
+    if not args.lista_links and not args.source:
+        parser.error("informe a URL/arquivo (source) ou --lista-links arquivo.txt.")
+
     set_output_root(args.output_root)
     set_output_tag(args.output_tag)
     preparar_pastas()
@@ -491,6 +577,19 @@ def main() -> None:
     print(f"[paths] fila_local={queue_file()}")
     print(f"[paths] run_logs={run_logs_dir()}")
 
+    if args.lista_links:
+        _processar_lote(args)
+        return
+
+    _executar_pipeline(args)
+
+
+def _executar_pipeline(args: argparse.Namespace) -> None:
+    """Pipeline completo para UM link, identico ao fluxo de sempre.
+
+    O modo lote (--lista-links) chama esta funcao uma vez por link; o modo de
+    link unico chega aqui direto do main sem nenhuma mudanca de comportamento.
+    """
     if args.modo == "live":
         monitorar_live(
             source_url=args.source,
