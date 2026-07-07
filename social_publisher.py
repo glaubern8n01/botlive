@@ -65,8 +65,10 @@ def postar_redes(
     postagens = registro.get("postagens") or {}
     for rede in config.redes:
         anterior = postagens.get(rede)
-        if anterior and not anterior.get("erro"):
-            print(f"[social] {rede}: ja postado/simulado antes, pulando (idempotente).")
+        # Idempotente so para post REAL bem-sucedido; bloco de dry-run ou com
+        # erro e substituido na proxima tentativa.
+        if anterior and not anterior.get("erro") and not anterior.get("dry_run"):
+            print(f"[social] {rede}: ja postado antes, pulando (idempotente).")
             continue
         t0 = time.monotonic()
         try:

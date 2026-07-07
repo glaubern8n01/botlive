@@ -26,10 +26,10 @@ CAPTION_MAX_LINES = 2
 FONTS_DIR = Path(__file__).resolve().parent / "fonts"
 
 # Credito do canal proprio por nicho. Troca por comando (--credito-canal) ou
-# editando aqui; o placeholder do gta sera definido pelo dono depois.
+# editando aqui.
 CREDITO_CANAL_POR_NICHO = {
     "football": "Futebol Respira",
-    "gta": "@canalgta",
+    "gta": "@GTA6brasilcortesoficial",
 }
 
 

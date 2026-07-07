@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -24,6 +27,132 @@ CATEGORIA_POR_NICHO = {"gta": "20", "football": "17"}
 CATEGORIA_DEFAULT = "24"
 
 DESTINOS = ("horizontal", "vertical")
+
+# OAuth: o client secret (baixado do Google Cloud Console) e os refresh tokens
+# vivem em .tokens/ (gitignored), ancorados na pasta do repo para funcionar de
+# qualquer cwd. Um token por conta/canal: .tokens/youtube/<conta>.json.
+# Fallback sem arquivo: YT_CLIENT_ID + YT_CLIENT_SECRET no .env.
+SCOPES = (
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+)
+TOKENS_DIR = Path(__file__).resolve().parent / ".tokens" / "youtube"
+CLIENT_SECRET_FILE_DEFAULT = TOKENS_DIR / "client_secret.json"
+
+
+def _carregar_dotenv() -> None:
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(Path(__file__).resolve().parent / ".env")
+    except Exception:
+        pass
+
+
+def _token_path(conta: str) -> Path:
+    return TOKENS_DIR / f"{conta}.json"
+
+
+def _client_config() -> dict:
+    """Config OAuth do app: arquivo client_secret.json ou YT_CLIENT_ID/SECRET do .env."""
+    _carregar_dotenv()
+    secret_file = Path(os.environ.get("YT_CLIENT_SECRET_FILE") or CLIENT_SECRET_FILE_DEFAULT)
+    if secret_file.is_file():
+        return json.loads(secret_file.read_text(encoding="utf-8"))
+    client_id = os.environ.get("YT_CLIENT_ID")
+    client_secret = os.environ.get("YT_CLIENT_SECRET")
+    if client_id and client_secret:
+        return {
+            "installed": {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": ["http://localhost"],
+            }
+        }
+    raise RuntimeError(
+        f"credenciais OAuth ausentes: coloque o client_secret.json em {CLIENT_SECRET_FILE_DEFAULT} "
+        "ou defina YT_CLIENT_ID e YT_CLIENT_SECRET no .env"
+    )
+
+
+def autorizar(conta: str) -> Path:
+    """Fluxo OAuth unico por conta: abre o navegador, salva o refresh token.
+
+    Roda uma vez por conta/canal; depois o sistema renova o access token
+    sozinho. App em modo Testing no Google Cloud -> refresh token expira em
+    7 dias (publicar o app 'Em producao' resolve).
+    """
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    flow = InstalledAppFlow.from_client_config(_client_config(), list(SCOPES))
+    creds = flow.run_local_server(
+        port=0,
+        authorization_prompt_message="[yt-auth] abra o link no navegador se nao abrir sozinho:\n{url}",
+        success_message="Autorizado! Pode fechar esta aba e voltar ao terminal.",
+    )
+    TOKENS_DIR.mkdir(parents=True, exist_ok=True)
+    token_path = _token_path(conta)
+    token_path.write_text(creds.to_json(), encoding="utf-8")
+    print(f"[yt-auth] token da conta {conta!r} salvo em {token_path}")
+    return token_path
+
+
+def _credenciais(conta: str):
+    """Carrega o token salvo e renova o access token se preciso. Erro aqui tem
+    sempre instrucao clara de como resolver (reautorizar)."""
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+
+    token_path = _token_path(conta)
+    ajuda = f"rode: python yt_publisher.py autorizar --conta {conta}"
+    if not token_path.is_file():
+        raise RuntimeError(f"conta {conta!r} nao autorizada ({token_path} inexistente); {ajuda}")
+    creds = Credentials.from_authorized_user_file(str(token_path), list(SCOPES))
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            token_path.write_text(creds.to_json(), encoding="utf-8")
+        except Exception as exc:
+            raise RuntimeError(
+                f"refresh token da conta {conta!r} invalido/expirado ({exc}); {ajuda}. "
+                "Lembrete: app em modo Testing expira o token em 7 dias."
+            ) from exc
+    if not creds.valid:
+        raise RuntimeError(f"credenciais da conta {conta!r} invalidas; {ajuda}")
+    return creds
+
+
+def _service(conta: str):
+    from googleapiclient.discovery import build
+
+    return build("youtube", "v3", credentials=_credenciais(conta), cache_discovery=False)
+
+
+def testar_auth(conta: str) -> dict:
+    """Prova a conexao listando o canal da conta (channels.list, 1 unidade de cota)."""
+    response = (
+        _service(conta)
+        .channels()
+        .list(part="snippet,statistics", mine=True)
+        .execute()
+    )
+    itens = response.get("items") or []
+    if not itens:
+        raise RuntimeError(
+            "nenhum canal encontrado nesta conta Google; confira se escolheu a conta/canal certo na autorizacao"
+        )
+    canal = itens[0]
+    info = {
+        "canal": canal["snippet"]["title"],
+        "channel_id": canal["id"],
+        "inscritos": canal["statistics"].get("subscriberCount"),
+        "videos": canal["statistics"].get("videoCount"),
+    }
+    print(f"[yt-auth] conta {conta!r} conectada ao canal: {info['canal']}")
+    print(f"[yt-auth] channel_id={info['channel_id']} inscritos={info['inscritos']} videos={info['videos']}")
+    return info
 
 
 def _sanitizar_titulo(text: str) -> str:
@@ -108,13 +237,93 @@ def _video_path(registro: dict, destino: str) -> Optional[Path]:
     return path if path.is_file() else None
 
 
+# Cota do dia estourou nesta execucao: os proximos cortes nem tentam a API,
+# so registram o motivo no json (a cota reseta a meia-noite PT).
+_quota_bloqueada = False
+
+_UPLOAD_TENTATIVAS = 3
+_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+_HTTP_RETRIAVEIS = {500, 502, 503, 504}
+_MOTIVOS_COTA = {"quotaExceeded", "dailyLimitExceeded", "uploadLimitExceeded", "rateLimitExceeded"}
+
+
+def _motivo_http(exc) -> str:
+    """Extrai o 'reason' de um HttpError da API (ex.: quotaExceeded)."""
+    try:
+        for detail in exc.error_details or []:
+            if detail.get("reason"):
+                return str(detail["reason"])
+    except Exception:
+        pass
+    return ""
+
+
 def _upload(video_path: Path, metadados: dict, conta: str) -> dict:
-    # Sub-etapa C: OAuth (token em .tokens/youtube/<conta>.json) + upload
-    # resumavel via google-api-python-client, com import lazy aqui dentro.
-    raise RuntimeError(
-        "upload real do YouTube ainda nao implementado (sub-etapa C); "
-        "use --post-dry-run por enquanto"
+    """Upload resumavel via videos.insert (~100 unidades de cota).
+
+    Retenta ate 3x em erro 5xx/rede; cota estourada bloqueia novas tentativas
+    na execucao inteira e levanta erro claro (quem contem e o social_publisher).
+    """
+    global _quota_bloqueada
+    if _quota_bloqueada:
+        raise RuntimeError("cota diaria do YouTube estourada nesta execucao; reseta a meia-noite PT")
+
+    from googleapiclient.errors import HttpError
+    from googleapiclient.http import MediaFileUpload
+
+    body = {
+        "snippet": {
+            "title": metadados["titulo"],
+            "description": metadados["descricao"],
+            "tags": metadados["tags"],
+            "categoryId": metadados["categoria_id"],
+        },
+        "status": {
+            "privacyStatus": metadados["visibilidade"],
+            "selfDeclaredMadeForKids": metadados["made_for_kids"],
+        },
+    }
+    media = MediaFileUpload(
+        str(video_path), mimetype="video/mp4", chunksize=_UPLOAD_CHUNK_BYTES, resumable=True
     )
+    request = _service(conta).videos().insert(part="snippet,status", body=body, media_body=media)
+
+    response = None
+    tentativa = 0
+    while response is None:
+        try:
+            status, response = request.next_chunk()
+            if status:
+                print(f"[yt-upload] {video_path.name}: {int(status.progress() * 100)}%")
+            tentativa = 0
+        except HttpError as exc:
+            motivo = _motivo_http(exc)
+            if motivo in _MOTIVOS_COTA:
+                _quota_bloqueada = True
+                raise RuntimeError(
+                    f"cota do YouTube estourada ({motivo}); reseta a meia-noite PT, "
+                    "reposte depois com: python social_publisher.py <pasta> --rede youtube"
+                ) from exc
+            if exc.resp.status in _HTTP_RETRIAVEIS and tentativa < _UPLOAD_TENTATIVAS:
+                tentativa += 1
+                espera = 2 ** tentativa
+                print(f"[yt-upload] erro {exc.resp.status}, tentativa {tentativa}/{_UPLOAD_TENTATIVAS} em {espera}s")
+                time.sleep(espera)
+                continue
+            raise RuntimeError(f"upload falhou (HTTP {exc.resp.status} {motivo}): {exc}") from exc
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            if tentativa < _UPLOAD_TENTATIVAS:
+                tentativa += 1
+                espera = 2 ** tentativa
+                print(f"[yt-upload] erro de rede ({exc}), tentativa {tentativa}/{_UPLOAD_TENTATIVAS} em {espera}s")
+                time.sleep(espera)
+                continue
+            raise RuntimeError(f"upload falhou apos {_UPLOAD_TENTATIVAS} tentativas de rede: {exc}") from exc
+
+    video_id = response["id"]
+    url = f"https://youtu.be/{video_id}"
+    print(f"[yt-upload] {video_path.name} publicado ({metadados['visibilidade']}): {url}")
+    return {"video_id": video_id, "url": url}
 
 
 def postar_corte_registro(registro: dict, config) -> dict:
@@ -158,20 +367,38 @@ def postar_corte_registro(registro: dict, config) -> dict:
 
 if __name__ == "__main__":
     import argparse
-    import json
 
     for _stream in (sys.stdout, sys.stderr):
         if hasattr(_stream, "reconfigure"):
             _stream.reconfigure(errors="replace")
 
-    parser = argparse.ArgumentParser(
-        description="Mostra os metadados de YouTube que um publish.json geraria (sem postar)."
-    )
-    parser.add_argument("publish_json", help="Caminho de um *_publish.json.")
-    parser.add_argument("--visibilidade", default="unlisted")
+    parser = argparse.ArgumentParser(description="Plugin YouTube do auto-post: OAuth e utilidades.")
+    sub = parser.add_subparsers(dest="comando", required=True)
+
+    p_auth = sub.add_parser("autorizar", help="Fluxo OAuth unico: abre o navegador e salva o refresh token.")
+    p_auth.add_argument("--conta", default="principal", help="Nome do token em .tokens/youtube/<conta>.json.")
+
+    p_teste = sub.add_parser("testar-auth", help="Lista o canal da conta para provar a conexao (1 unidade de cota).")
+    p_teste.add_argument("--conta", default="principal")
+
+    p_meta = sub.add_parser("metadados", help="Mostra os metadados que um publish.json geraria (sem postar).")
+    p_meta.add_argument("publish_json", help="Caminho de um *_publish.json.")
+    p_meta.add_argument("--visibilidade", default="unlisted")
+
     args = parser.parse_args()
 
-    registro = json.loads(Path(args.publish_json).read_text(encoding="utf-8"))
-    for destino in DESTINOS:
-        print(f"--- {destino} ---")
-        print(json.dumps(montar_metadados(registro, destino, args.visibilidade), ensure_ascii=False, indent=4))
+    if args.comando == "autorizar":
+        try:
+            autorizar(args.conta)
+        except Exception as exc:
+            raise SystemExit(f"[yt-auth][falha] {exc}")
+    elif args.comando == "testar-auth":
+        try:
+            testar_auth(args.conta)
+        except Exception as exc:
+            raise SystemExit(f"[yt-auth][falha] {exc}")
+    else:
+        registro = json.loads(Path(args.publish_json).read_text(encoding="utf-8"))
+        for destino in DESTINOS:
+            print(f"--- {destino} ---")
+            print(json.dumps(montar_metadados(registro, destino, args.visibilidade), ensure_ascii=False, indent=4))

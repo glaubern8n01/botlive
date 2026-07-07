@@ -7,3 +7,6 @@ supabase
 python-dotenv
 pytchat
 faster-whisper
+# auto-post no YouTube (--post-youtube); import lazy, opcional sem a flag
+google-api-python-client
+google-auth-oauthlib
