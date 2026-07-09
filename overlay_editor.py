@@ -26,13 +26,18 @@ class OverlayConfig:
         return any([self.title, self.description, self.brand, self.cta])
 
 
+FONTS_DIR = Path(__file__).resolve().parent / "fonts"
+
+
 def _font(size: int) -> ImageFont.ImageFont:
+    # Anton embarcada no repo: mesma cara no Windows local e no Linux da VPS.
     for candidate in [
-        "C:/Windows/Fonts/arialbd.ttf",
-        "C:/Windows/Fonts/arial.ttf",
+        FONTS_DIR / "Anton-Regular.ttf",
+        Path("C:/Windows/Fonts/arialbd.ttf"),
+        Path("C:/Windows/Fonts/arial.ttf"),
     ]:
-        if Path(candidate).exists():
-            return ImageFont.truetype(candidate, size=size)
+        if candidate.exists():
+            return ImageFont.truetype(str(candidate), size=size)
     return ImageFont.load_default()
 
 

@@ -1,0 +1,26 @@
+# Secrets: NUNCA entram na imagem. Vao por env var (EasyPanel) e volume (.tokens).
+.env
+.tokens
+
+# Controle de versao e ferramentas locais
+.git
+.gitignore
+.agents
+.claude
+.codex
+
+# Testes locais, logs e artefatos pesados
+teste_gta
+teste_live_c
+teste_publicacao
+teste_vod_real
+test_source.mp4
+*.log
+run_logs
+backups
+docs
+__pycache__
+
+# Arquivos do proprio build
+Dockerfile
+.dockerignore

@@ -518,7 +518,7 @@ def main() -> None:
     parser.add_argument(
         "--output-root",
         default=None,
-        help="Pasta base para cache, cortes, fila_local.jsonl e run_logs. Padrao: D:/robo-cortes-dark.",
+        help="Pasta base para cache, cortes, fila_local.jsonl e run_logs. Padrao: env BOTLIVE_OUTPUT_ROOT; sem ela, D:/robo-cortes-dark no Windows ou /data/botlive/output no Linux.",
     )
     parser.add_argument(
         "--output-tag",

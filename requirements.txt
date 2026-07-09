@@ -1,12 +1,13 @@
+# yt-dlp sem pin de proposito: precisa acompanhar as mudancas do YouTube.
 yt-dlp
 moviepy==1.0.3
-pillow
-numpy
-imageio-ffmpeg
+pillow==12.1.1
+numpy==2.4.3
+imageio-ffmpeg==0.6.0
 supabase
 python-dotenv
 pytchat
-faster-whisper
+faster-whisper==1.2.1
 # auto-post no YouTube (--post-youtube); import lazy, opcional sem a flag
 google-api-python-client
 google-auth-oauthlib

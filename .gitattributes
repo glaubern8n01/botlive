@@ -1,0 +1,2 @@
+# Shell script roda dentro do container Linux: CRLF quebra o bash.
+docker-entrypoint.sh text eol=lf

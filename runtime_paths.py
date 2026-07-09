@@ -1,10 +1,27 @@
 from __future__ import annotations
 
+import os
+import platform
 from pathlib import Path
 from typing import Optional
 
 
-DEFAULT_OUTPUT_ROOT = Path("D:/robo-cortes-dark")
+def _default_output_root() -> Path:
+    """Resolve o output root padrao quando --output-root nao e passado.
+
+    Prioridade: env BOTLIVE_OUTPUT_ROOT > default do SO (Windows mantem
+    D:/robo-cortes-dark; Linux/VPS usa /data/botlive/output, montado como
+    volume no Docker).
+    """
+    env_root = os.environ.get("BOTLIVE_OUTPUT_ROOT", "").strip()
+    if env_root:
+        return Path(env_root)
+    if platform.system() == "Windows":
+        return Path("D:/robo-cortes-dark")
+    return Path("/data/botlive/output")
+
+
+DEFAULT_OUTPUT_ROOT = _default_output_root()
 _output_root = DEFAULT_OUTPUT_ROOT
 _output_tag: Optional[str] = None
 

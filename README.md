@@ -238,6 +238,8 @@ python main.py "URL_DA_LIVE" --modo live-clips --session-id futebol_live_001 --o
 
 Esse argumento redireciona `cache`, `live_blocks`, `vod_blocks`, `cortes`, `live_preview`, `ready_hd`, `needs_review`, `rejected`, `fila_local.jsonl` e `run_logs`. Sem `--output-root`, o comportamento antigo no Drive D continua.
 
+A prioridade de resolucao da pasta base e: `--output-root` (flag) > env `BOTLIVE_OUTPUT_ROOT` > default do sistema (`D:/robo-cortes-dark` no Windows, `/data/botlive/output` no Linux/Docker). No Windows sem env nada muda.
+
 Use `--output-tag` para gerar as subpastas de `cortes/` com um sufixo, sem sobrescrever uma execucao anterior (util para comparar testes lado a lado):
 
 ```powershell
@@ -363,6 +365,44 @@ python main.py "D:\videos\live.mp4" --modo pos-live --max-cortes 3 --titulo "GTA
 ```powershell
 pip install -r requirements.txt
 ```
+
+## Deploy na VPS (Docker + EasyPanel)
+
+A imagem Docker roda o pipeline completo no Linux: `python:3.12-slim` + ffmpeg (apt) + fonte Anton embarcada + modelo whisper `small` pre-baixado no build (~460MB, runtime nunca baixa nada). Usuario nao-root `botlive` (uid 1000).
+
+### Build e teste local
+
+```powershell
+docker build -t botlive .
+docker run --rm -v botlive_output:/data/botlive/output -e BOTLIVE_SOURCE="URL_DO_VOD" -e BOTLIVE_MODO=vod-clips -e BOTLIVE_CONTENT_FILTER=football -e BOTLIVE_STRICT_FOOTBALL=1 botlive
+```
+
+Argumentos diretos no container ignoram as envs (escape hatch para comandos avulsos):
+
+```powershell
+docker run --rm -it -v botlive_tokens:/app/.tokens botlive python yt_publisher.py auth --conta principal
+```
+
+### EasyPanel (VPS 69.62.96.161)
+
+1. Criar App a partir do repo privado do GitHub (conectar via GitHub App do EasyPanel), build type `Dockerfile`.
+2. Montar dois volumes:
+    - `/data/botlive/output` — cache, cortes, fila_local.jsonl, run_logs (dados).
+    - `/app/.tokens` — tokens OAuth do YouTube (secrets, leitura+escrita: o refresh regrava o token).
+3. Configurar as env vars (nao usar arquivo `.env` no container):
+    - Pipeline: `BOTLIVE_SOURCE` **ou** `BOTLIVE_LISTA_LINKS` (mutuamente exclusivos), `BOTLIVE_MODO`, `BOTLIVE_SESSION_ID`, `BOTLIVE_CONTENT_FILTER`, `BOTLIVE_STRICT_FOOTBALL=1`, `BOTLIVE_RETENTION` (segundos), `BOTLIVE_MAX_CORTES`, `BOTLIVE_CLIP_DURATION`, `BOTLIVE_TARGET_HEIGHT`, `BOTLIVE_OUTPUT_LAYOUT`.
+    - Publicacao: `BOTLIVE_PUBLISH_VERTICAL=1`, `BOTLIVE_POST_YOUTUBE=1`, `BOTLIVE_POST_VISIBILIDADE`, `BOTLIVE_POST_CONTA`, `BOTLIVE_CREDITO_STREAMER`, `BOTLIVE_CREDITO_CANAL`.
+    - Flags nao mapeadas: `BOTLIVE_EXTRA_ARGS` (ex.: `--smart-event-window --no-multi-event-clips`).
+    - Secrets do `.env.example`: `ROBO_SUPABASE_URL`, `ROBO_SUPABASE_KEY`, `ROBO_SUPABASE_CLIPS_TABLE`, `PUBLISH_AI_*`, `YT_CLIENT_ID`, `YT_CLIENT_SECRET`.
+4. Recursos: 2 vCPU / 4 GB RAM. Restart policy `always` para o modo live 24h.
+
+### OAuth do YouTube na VPS
+
+A primeira autorizacao e interativa (abre navegador) e nao funciona na VPS. Autorize no PC Windows (`python yt_publisher.py auth --conta principal`) e copie `.tokens/youtube/*.json` para o volume montado em `/app/.tokens` (mesma estrutura: `/app/.tokens/youtube/principal.json`). Se o volume for montado como root e der erro de permissao, na VPS: `chown -R 1000:1000` na pasta do volume.
+
+### O que NUNCA entra na imagem
+
+`.env` e `.tokens/` estao no `.dockerignore` — secrets vao por env var e volume, nunca no build. `teste_*/`, logs e `.git` tambem ficam fora.
 
 ## Supabase
 
