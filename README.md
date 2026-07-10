@@ -393,6 +393,7 @@ docker run --rm -it -v botlive_tokens:/app/.tokens botlive python yt_publisher.p
     - Pipeline: `BOTLIVE_SOURCE` **ou** `BOTLIVE_LISTA_LINKS` (mutuamente exclusivos), `BOTLIVE_MODO`, `BOTLIVE_SESSION_ID`, `BOTLIVE_CONTENT_FILTER`, `BOTLIVE_STRICT_FOOTBALL=1`, `BOTLIVE_RETENTION` (segundos), `BOTLIVE_MAX_CORTES`, `BOTLIVE_CLIP_DURATION`, `BOTLIVE_TARGET_HEIGHT`, `BOTLIVE_OUTPUT_LAYOUT`.
     - Publicacao: `BOTLIVE_PUBLISH_VERTICAL=1`, `BOTLIVE_POST_YOUTUBE=1`, `BOTLIVE_POST_VISIBILIDADE`, `BOTLIVE_POST_CONTA`, `BOTLIVE_CREDITO_STREAMER`, `BOTLIVE_CREDITO_CANAL`.
     - Flags nao mapeadas: `BOTLIVE_EXTRA_ARGS` (ex.: `--smart-event-window --no-multi-event-clips`).
+    - Bloqueio "Sign in to confirm you're not a bot" (IP de datacenter): `BOTLIVE_YT_CLIENT=android` faz o yt-dlp se apresentar como app (aceita lista: `android,web`). Se nao bastar, plano B: `BOTLIVE_COOKIES_FILE=/app/.tokens/cookies.txt` apontando para um cookies.txt (formato Netscape) exportado de um navegador logado, copiado para o volume de tokens.
     - Secrets do `.env.example`: `ROBO_SUPABASE_URL`, `ROBO_SUPABASE_KEY`, `ROBO_SUPABASE_CLIPS_TABLE`, `PUBLISH_AI_*`, `YT_CLIENT_ID`, `YT_CLIENT_SECRET`.
 4. Recursos: 2 vCPU / 4 GB RAM. Restart policy `always` para o modo live 24h.
 

@@ -11,6 +11,7 @@ from yt_dlp import YoutubeDL
 
 from clipper import preparar_pastas
 from runtime_paths import live_blocks_dir, temp_dir
+from ytdlp_config import com_opcoes_env
 
 
 def _is_url(value: str) -> bool:
@@ -44,7 +45,7 @@ def _resolve_stream_url(live_url: str) -> str:
         "no_warnings": True,
         "noplaylist": True,
     }
-    with YoutubeDL(ydl_opts) as ydl:
+    with YoutubeDL(com_opcoes_env(ydl_opts)) as ydl:
         info = ydl.extract_info(live_url, download=False)
 
     direct_url = info.get("url")

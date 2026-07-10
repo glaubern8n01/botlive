@@ -11,6 +11,8 @@ import numpy as np
 from PIL import Image
 from yt_dlp import YoutubeDL
 
+from ytdlp_config import com_opcoes_env
+
 try:
     from moviepy.editor import VideoFileClip
 except ImportError:  # MoviePy 2.x
@@ -69,7 +71,7 @@ def resolver_vod_para_scan(source_url: str) -> VodInfo:
         "no_warnings": True,
         "noplaylist": True,
     }
-    with YoutubeDL(ydl_opts) as ydl:
+    with YoutubeDL(com_opcoes_env(ydl_opts)) as ydl:
         info = ydl.extract_info(source_url, download=False)
 
     direct_url = info.get("url")

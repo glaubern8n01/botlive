@@ -17,6 +17,7 @@ from runtime_paths import (
     live_preview_dir,
     temp_dir,
 )
+from ytdlp_config import com_opcoes_env
 
 if not hasattr(Image, "ANTIALIAS"):
     Image.ANTIALIAS = Image.Resampling.LANCZOS
@@ -138,7 +139,7 @@ def baixar_trecho(
     )
     precise = True
     try:
-        with YoutubeDL(ydl_opts) as ydl:
+        with YoutubeDL(com_opcoes_env(ydl_opts)) as ydl:
             ydl.download([video_url])
     except Exception as exc:
         print(
@@ -151,7 +152,7 @@ def baixar_trecho(
         fallback_opts["force_keyframes_at_cuts"] = False
         fallback_opts.pop("paths", None)
         fallback_opts["quiet"] = False
-        with YoutubeDL(fallback_opts) as ydl:
+        with YoutubeDL(com_opcoes_env(fallback_opts)) as ydl:
             ydl.download([video_url])
 
     return _find_downloaded_video(work_dir), precise

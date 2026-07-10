@@ -7,6 +7,7 @@ from yt_dlp import YoutubeDL
 
 from clipper import preparar_pastas
 from runtime_paths import sources_dir, temp_dir
+from ytdlp_config import com_opcoes_env
 
 
 def _is_url(value: str) -> bool:
@@ -47,7 +48,7 @@ def resolver_fonte_video(source: str) -> Path:
         "paths": {"home": str(work_dir), "temp": str(temp_dir())},
     }
 
-    with YoutubeDL(ydl_opts) as ydl:
+    with YoutubeDL(com_opcoes_env(ydl_opts)) as ydl:
         ydl.download([source])
 
     return _find_source_video(work_dir)
