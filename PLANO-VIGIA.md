@@ -197,6 +197,23 @@ leitura/escrita autenticada quando ele existir — fora do escopo agora.
 | V3 | Vigia DRY-RUN (`--vigia-dry-run`): loop completo, decide e LOGA o que faria, grava `vigia_streams`, não dispara nada | rodar 1h contra lives reais e auditar decisões no log/tabela | BAIXO/MÉDIO |
 | V4 | Modo VOD-depois real (sem dedup): fim de live → achar VOD → subprocesso vod-clips | 1 canal manual, live curta de teste; cortes saem sozinhos pós-live | MÉDIO |
 | V5 | Modo live real: subprocesso live-clips + âncora capture_start_utc + concorrência | live de teste; preview clips saindo ao vivo; âncora gravada | MÉDIO/ALTO |
+
+> **V5 — RESULTADO DO TESTE REAL (12/07/2026, VPS, live cirilobang):** a camada do
+> VIGIA passou inteira — despacho idempotente (disabled/skipped_no_slot despacham;
+> running/done/failed nunca), âncora capture_start_utc gravada no ledger, colheita
+> ok, varredura de órfãos no boot e terminate pós-fim implementados; job live não
+> tem NENHUMA flag de post por construção. O que FALHOU foi a Etapa C contra LIVE
+> da Twitch (não é código do vigia): bloco 0 fechou com 26s, depois 210s sem
+> blocos (consumidor desistiu) e o bloco 1 saiu com dur=21387s — timestamps
+> quebrados, quase certo por DESCONTINUIDADE do HLS ao vivo da Twitch (ads
+> preroll/midroll com SCTE; o segmentador `-c copy` do ffmpeg não fecha segmento).
+> A Etapa C foi validada em live do YouTube e simulação local; VOD da Twitch
+> funciona (CloudFront sem descontinuidade). **Ticket pro Opus:** endurecer
+> live_capture p/ Twitch live — candidatos: streamlink `--twitch-disable-ads`
+> como resolvedor alternativo, `-fflags +genpts`/tratamento de descontinuidade no
+> ffmpeg, ou re-encode leve dos blocos ao invés de `-c copy` só no caso Twitch
+> live. Reproduzir: `python main.py https://twitch.tv/<canal_ao_vivo> --modo
+> live-clips --session-id teste --content-filter gta`.
 | V6 | Dedup completo: `vigia_clip_index` + `--dedup-stream-id` no vod-clips | mesma live processada nos 2 modos; VOD NÃO repete cortes do live e complementa | ALTO |
 | V7 | Endurecimento: auto-post c/ teto diário, retenção de disco, restart-safe, alertas de erro no `vigia_streams` | derrubar Supabase/Helix/container no meio e ver sobreviver | ALTO |
 

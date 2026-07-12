@@ -6,14 +6,17 @@ Orquestrador: NAO processa video. Observa a Twitch (Helix), decide o que fazer
 e dispara SUBPROCESSOS `python main.py` nos modos ja validados. Estado vive na
 tabela vigia_streams (Supabase) — restart-safe e com lock por unique(stream_id).
 
-Escopo implementado (V3 + V4):
+Escopo implementado (V3 + V4 + V5):
 - descoberta manual (vigia_channels) e aberta (categoria por viewers);
 - deteccao de inicio/fim de live; agendamento e disparo do reprocesso de VOD;
+- disparo de live-clips (Etapa C) em lives ativas, com ancora capture_start_utc
+  gravada no ledger para o dedup do V6; o job live NAO posta nada (previews);
 - TRAVA de posts: orcamento diario max_posts_per_day respeitado ANTES de todo job;
+- varredura de orfaos no boot e encerramento de captura zumbi pos-fim (grace);
 - --vigia-dry-run: decide e loga tudo, nao dispara nada.
 
-Pendente (por decisao de plano): V5 (disparo do modo live) e V6 (dedup) — o
-vigia marca live_job_status='disabled' e nao escreve em vigia_clip_index ainda.
+Pendente (por decisao de plano): V6 (dedup live x VOD) — vigia_clip_index ainda
+nao e escrito; a ancora do V5 ja deixa o caminho pronto.
 """
 
 import json
@@ -35,6 +38,7 @@ CHANNELS_TABLE = "vigia_channels"
 STREAMS_TABLE = "vigia_streams"
 UPLOAD_MARKER = "publicado ("  # linha do yt_publisher: "... publicado (unlisted): url"
 END_MISS_CYCLES = 3  # ciclos consecutivos ausente antes de declarar fim de live
+END_GRACE_SECONDS = 240  # apos o fim declarado, prazo para a captura live morrer sozinha
 
 
 def _utc_now() -> datetime:
@@ -88,9 +92,11 @@ class Vigia:
         self.dry_run = dry_run
         self.api = TwitchHelix()
         self._running_vod_jobs: dict[str, tuple[subprocess.Popen, Path, str]] = {}
+        self._running_live_jobs: dict[str, tuple[subprocess.Popen, Path, str]] = {}
+        self._terminated_by_grace: set[str] = set()
         self._last_config: Optional[VigiaConfig] = None
-        self._warned_live_pending = False
         self._miss_counts: dict[str, int] = {}
+        self._orphan_sweep_done = False
 
     # ------------------------------------------------------------- supabase
 
@@ -290,7 +296,7 @@ class Vigia:
                 "origin": stream.get("_origin", "manual"),
                 "started_at": stream.get("started_at"),
                 "detected_at": _iso(_utc_now()),
-                "live_job_status": "disabled",  # V5 pendente por decisao de plano
+                "live_job_status": "disabled",  # o despacho (_processar_lives) decide no mesmo ciclo
                 "vod_job_status": "pending" if config.vod_mode_enabled else "disabled",
                 "dry_run": self.dry_run,
             }
@@ -304,9 +310,6 @@ class Vigia:
                 f"[vigia] LIVE detectada: {stream['user_login']} ({stream.get('_origin')}) "
                 f"viewers={stream.get('viewer_count')} stream_id={stream_id}"
             )
-            if config.live_mode_enabled and not self._warned_live_pending:
-                self._warned_live_pending = True
-                print("[vigia] live_mode_enabled=true, mas o disparo ao vivo e a etapa V5 (pendente). Ignorando por ora.")
 
     def _marcar_encerradas(self, live_now: dict[str, dict[str, Any]]) -> None:
         """Fim de live com tolerancia de END_MISS_CYCLES ciclos consecutivos.
@@ -401,6 +404,122 @@ class Vigia:
                 return str(video["url"])
         return None
 
+    # ------------------------------------------------------------- jobs LIVE
+
+    def _processar_lives(self, config: VigiaConfig, live_now: dict[str, dict[str, Any]]) -> None:
+        """Despacha live-clips (Etapa C) para lives ativas, com idempotencia.
+
+        So despacha linhas em 'disabled'/'skipped_no_slot' — 'running/done/failed'
+        nunca redespacham, entao nao ha como duplicar captura do mesmo stream.
+        O job live NAO tem flag de post nenhuma: gera previews + momentos; quem
+        posta continua sendo o fluxo VOD (trava de posts validada no V4).
+        """
+        if not config.live_mode_enabled:
+            return
+        for stream_id in live_now:
+            row = self._ledger_get(stream_id)
+            if row is None:
+                continue
+            if bool(row.get("dry_run")) != self.dry_run:
+                continue
+            if row.get("live_job_status") not in {"disabled", "skipped_no_slot"}:
+                continue
+            if len(self._running_live_jobs) >= config.max_concurrent_captures:
+                if row.get("live_job_status") != "skipped_no_slot":
+                    self._ledger_update(stream_id, {"live_job_status": "skipped_no_slot"})
+                    print(f"[vigia] sem vaga de captura para {row['channel_login']}; tentando nos proximos ciclos.")
+                continue
+            self._disparar_live_job(config, row)
+
+    def _disparar_live_job(self, config: VigiaConfig, row: dict[str, Any]) -> None:
+        stream_id = str(row["stream_id"])
+        session_id = f"vigia_{stream_id}_live"
+        live_url = f"https://www.twitch.tv/{row['channel_login']}"
+        command = [
+            sys.executable,
+            str(REPO_DIR / "main.py"),
+            live_url,
+            "--modo", "live-clips",
+            "--session-id", session_id,
+            "--content-filter", config.content_filter,
+            "--max-cortes", str(config.max_cortes_live),
+            "--output-layout", "original",
+        ]
+
+        if self.dry_run:
+            print(f"[vigia][dry] dispararia LIVE job: {' '.join(command)}")
+            self._ledger_update(
+                stream_id,
+                {"live_job_status": "done", "error_message": "dry_run: comando apenas logado"},
+            )
+            return
+
+        # Ancora do dedup (V6): ts_vod ~= ts_live + (capture_start_utc - started_at).
+        capture_start = _iso(_utc_now())
+        run_logs_dir().mkdir(parents=True, exist_ok=True)
+        log_path = run_logs_dir() / f"{session_id}.log"
+        log_file = log_path.open("a", encoding="utf-8")
+        process = subprocess.Popen(
+            command, cwd=str(REPO_DIR), stdout=log_file, stderr=subprocess.STDOUT, text=True
+        )
+        log_file.close()
+        self._running_live_jobs[stream_id] = (process, log_path, session_id)
+        self._ledger_update(
+            stream_id, {"live_job_status": "running", "capture_start_utc": capture_start}
+        )
+        print(
+            f"[vigia] LIVE job iniciado: {row['channel_login']} pid={process.pid} "
+            f"ancora={capture_start} log={log_path}"
+        )
+
+    def _encerrar_capturas_apos_fim(self) -> None:
+        """Cinto de seguranca: live declarada encerrada mas captura ainda viva.
+
+        O near-live termina sozinho quando o produtor seca; se nao terminar em
+        END_GRACE_SECONDS apos o fim declarado, o vigia encerra o processo para
+        nunca deixar captura zumbi re-tentando para sempre.
+        """
+        if not self._running_live_jobs:
+            return
+        client = self._client()
+        if client is None:
+            return
+        for stream_id, (process, _log, _session) in list(self._running_live_jobs.items()):
+            if process.poll() is not None:
+                continue  # ja terminou; a colheita registra
+            row = self._ledger_get(stream_id)
+            ended_raw = (row or {}).get("ended_at")
+            if not ended_raw:
+                continue
+            ended = datetime.fromisoformat(str(ended_raw).replace("Z", "+00:00"))
+            if (_utc_now() - ended).total_seconds() < END_GRACE_SECONDS:
+                continue
+            print(f"[vigia] captura de {stream_id} viva {END_GRACE_SECONDS}s apos o fim; encerrando (terminate).")
+            self._terminated_by_grace.add(stream_id)
+            process.terminate()
+
+    def _varrer_orfaos(self) -> None:
+        """No boot: linhas 'running' sem processo em memoria sao de um vigia morto.
+
+        Dentro do container, restart mata os subprocessos junto; marcar failed e
+        deixar o fluxo VOD-depois cobrir o buraco e o caminho seguro.
+        """
+        client = self._client()
+        if client is None:
+            return
+        try:
+            for field in ("live_job_status", "vod_job_status"):
+                rows = client.table(STREAMS_TABLE).select("stream_id").eq(field, "running").execute().data or []
+                for row in rows:
+                    self._ledger_update(
+                        row["stream_id"],
+                        {field: "failed", "error_message": "orphaned_restart: vigia reiniciou com job em andamento"},
+                    )
+                    print(f"[vigia] orfao de restart: {row['stream_id']} {field} running -> failed")
+            self._orphan_sweep_done = True
+        except Exception as exc:
+            print(f"[vigia] varredura de orfaos falhou ({exc}); tentando no proximo ciclo.")
+
     # -------------------------------------------------------------- jobs VOD
 
     def _disparar_vod_job(self, config: VigiaConfig, row: dict[str, Any], vod_url: str) -> None:
@@ -453,29 +572,43 @@ class Vigia:
         print(f"[vigia] VOD job iniciado: {row['channel_login']} pid={process.pid} log={log_path}")
 
     def _colher_jobs(self) -> None:
-        for stream_id in list(self._running_vod_jobs):
-            process, log_path, session_id = self._running_vod_jobs[stream_id]
+        self._colher_de(self._running_vod_jobs, "vod_job_status", "VOD")
+        self._colher_de(self._running_live_jobs, "live_job_status", "LIVE")
+
+    def _colher_de(
+        self,
+        running: dict[str, tuple[subprocess.Popen, Path, str]],
+        status_field: str,
+        label: str,
+    ) -> None:
+        for stream_id in list(running):
+            process, log_path, session_id = running[stream_id]
             if process.poll() is None:
                 continue
-            del self._running_vod_jobs[stream_id]
+            del running[stream_id]
             uploads = 0
             try:
                 uploads = log_path.read_text(encoding="utf-8", errors="replace").count(UPLOAD_MARKER)
             except OSError:
                 pass
-            if process.returncode == 0:
-                self._ledger_update(stream_id, {"vod_job_status": "done", "uploads_done": uploads})
-                print(f"[vigia] VOD job concluido: stream {stream_id} uploads={uploads} (sessao {session_id})")
+            terminated_ok = stream_id in self._terminated_by_grace
+            self._terminated_by_grace.discard(stream_id)
+            if process.returncode == 0 or terminated_ok:
+                patch: dict[str, Any] = {status_field: "done", "uploads_done": uploads}
+                if terminated_ok:
+                    patch["error_message"] = "encerrado pelo vigia apos fim da live (grace)"
+                self._ledger_update(stream_id, patch)
+                print(f"[vigia] {label} job concluido: stream {stream_id} uploads={uploads} (sessao {session_id})")
             else:
                 self._ledger_update(
                     stream_id,
                     {
-                        "vod_job_status": "failed",
+                        status_field: "failed",
                         "uploads_done": uploads,
                         "error_message": f"exit={process.returncode}; ver {log_path.name}",
                     },
                 )
-                print(f"[vigia] VOD job FALHOU (exit={process.returncode}): ver {log_path}")
+                print(f"[vigia] {label} job FALHOU (exit={process.returncode}): ver {log_path}")
 
     # ------------------------------------------------------------------- run
 
@@ -489,6 +622,8 @@ class Vigia:
             print("[vigia] enabled=false na vigia_config; dormindo.")
             return max(config.poll_interval_seconds, 30)
 
+        if not self._orphan_sweep_done:
+            self._varrer_orfaos()
         self._colher_jobs()
         try:
             live_now, visao_completa = self._detectar_lives(config)
@@ -496,12 +631,17 @@ class Vigia:
             print(f"[vigia] Helix indisponivel neste ciclo: {exc}")
             return max(config.poll_interval_seconds, 30)
 
-        print(f"[vigia] ciclo: {len(live_now)} live(s) no alvo | jobs rodando: {len(self._running_vod_jobs)}")
+        print(
+            f"[vigia] ciclo: {len(live_now)} live(s) no alvo | "
+            f"capturas: {len(self._running_live_jobs)} | renders: {len(self._running_vod_jobs)}"
+        )
         self._registrar_novas(config, live_now)
         if visao_completa:
             self._marcar_encerradas(live_now)
         else:
             print("[vigia] visao incompleta das fontes; deteccao de fim adiada para o proximo ciclo.")
+        self._processar_lives(config, live_now)
+        self._encerrar_capturas_apos_fim()
         try:
             self._processar_vods(config)
         except TwitchAPIError as exc:
@@ -510,8 +650,8 @@ class Vigia:
 
 
 def run_vigia(dry_run: bool) -> None:
-    modo = "DRY-RUN (nada e processado)" if dry_run else "REAL (dispara jobs de VOD)"
-    print(f"[vigia] iniciando em modo {modo}. V5 (live) e V6 (dedup) pendentes por plano.")
+    modo = "DRY-RUN (nada e processado)" if dry_run else "REAL (dispara jobs live e de VOD)"
+    print(f"[vigia] iniciando em modo {modo}. V6 (dedup) pendente por plano; job live nunca posta.")
     try:
         vigia = Vigia(dry_run=dry_run)
     except TwitchAPIError as exc:
