@@ -1,0 +1,26 @@
+import { BrowserRouter, Routes, Route } from "react-router";
+import { AuthWrapper } from "./components/AuthWrapper";
+import { Layout } from "./components/Layout";
+import { Home } from "./pages/Home";
+import { Configuracao } from "./pages/Configuracao";
+import { Canais } from "./pages/Canais";
+import { Historico } from "./pages/Historico";
+import { Cortes } from "./pages/Cortes";
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthWrapper>
+        <Routes>
+          <Route path="/" element={<Layout />}>
+            <Route index element={<Home />} />
+            <Route path="configuracao" element={<Configuracao />} />
+            <Route path="canais" element={<Canais />} />
+            <Route path="historico" element={<Historico />} />
+            <Route path="cortes" element={<Cortes />} />
+          </Route>
+        </Routes>
+      </AuthWrapper>
+    </BrowserRouter>
+  );
+}
