@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ import imageio_ffmpeg
 
 from live_buffer import _is_url, _resolve_stream_url, _tem_primeiro_frame
 from runtime_paths import live_blocks_dir
+from ytdlp_config import tls_no_verify
 
 
 # Tolerancia (segundos) entre o fim real de um bloco e o inicio do proximo
@@ -29,6 +31,28 @@ MIN_BLOCK_DURATION_SECONDS = 1.0
 _OPENING_RE = re.compile(r"Opening '(?P<path>[^']+)' for writing")
 _DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
 _SHOWINFO_PTS_RE = re.compile(r"pts_time:(\d+(?:\.\d+)?)")
+
+_streamlink_ok: Optional[bool] = None
+
+
+def _is_twitch_live_url(source_url: str) -> bool:
+    """Live da Twitch (VOD /videos/ fica fora): o HLS ao vivo costura ads
+    (SCTE/EXT-X-DISCONTINUITY) e o conteudo carrega o PTS nativo da stream,
+    entao na emenda ad->conteudo o PTS salta a idade da live inteira."""
+    lowered = source_url.lower()
+    return "twitch.tv" in lowered and "/videos/" not in lowered
+
+
+def _streamlink_disponivel() -> bool:
+    global _streamlink_ok
+    if _streamlink_ok is None:
+        try:
+            import streamlink  # noqa: F401
+
+            _streamlink_ok = True
+        except ImportError:
+            _streamlink_ok = False
+    return _streamlink_ok
 
 
 @dataclass(frozen=True)
@@ -158,6 +182,7 @@ class ContinuousCapture:
 
         self._thread: Optional[threading.Thread] = None
         self._process: Optional[subprocess.Popen] = None
+        self._streamlink_process: Optional[subprocess.Popen] = None
         self._session_start_mono: Optional[float] = None
         self._emitted = 0
         self._next_segment_number = 0
@@ -188,6 +213,7 @@ class ContinuousCapture:
         process = self._process
         if process is not None and process.poll() is None:
             process.terminate()
+        self._cleanup_streamlink()
 
     def join(self, timeout: Optional[float] = None) -> None:
         if self._thread is not None:
@@ -236,17 +262,9 @@ class ContinuousCapture:
             return args, "URL resolvida via yt-dlp"
         return ["-i", self.source_url], "URL direta"
 
-    def _launch_ffmpeg(self) -> subprocess.Popen:
-        input_args, source_label = self._resolve_input()
-        print(f"[capture] fonte: {source_label}")
+    def _segment_output_args(self) -> list[str]:
         pattern = self.session_dir / "block_%06d.mp4"
-        command = [
-            imageio_ffmpeg.get_ffmpeg_exe(),
-            "-hide_banner",
-            "-loglevel",
-            "info",
-            "-nostats",
-            *input_args,
+        return [
             "-c",
             "copy",
             "-f",
@@ -266,6 +284,91 @@ class ContinuousCapture:
             "-segment_start_number",
             str(self._next_segment_number),
             str(pattern),
+        ]
+
+    def _cleanup_streamlink(self) -> None:
+        process = self._streamlink_process
+        self._streamlink_process = None
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+
+    def _launch_ffmpeg_via_streamlink(self) -> subprocess.Popen:
+        """Twitch AO VIVO: streamlink no meio do caminho, filtrando os
+        segmentos de ad (preroll/midroll) por padrao e entregando TS continuo
+        no stdout; o ffmpeg segmenta a partir do pipe.
+
+        Sem o filtro, o -c copy engole a descontinuidade do ad: o ad roda numa
+        linha de tempo propria (~0) e o conteudo carrega o PTS nativo da
+        stream, entao a emenda salta a idade da live inteira (horas) — o
+        segmentador trava e o bloco sai com duracao absurda (bug do V5).
+        Limitacao conhecida: durante midroll o conteudo nao existe para o
+        viewer; o bloco que atravessa o midroll pode inflar a duracao pelo
+        tamanho do intervalo (raro e sem conserto possivel no cliente).
+        """
+        self._pending_run_anchor = None
+        sl_cmd = [sys.executable, "-m", "streamlink"]
+        if tls_no_verify():
+            sl_cmd.append("--http-no-ssl-verify")
+        # Paridade com o formato do yt-dlp (best[height<=720]/best).
+        sl_cmd += ["--stdout", self.source_url, "720p,720p60,best"]
+        print("[capture] fonte: pipe streamlink (Twitch live, ads filtrados)")
+        log_handle = (self.session_dir / "streamlink.log").open("ab")
+        try:
+            self._streamlink_process = subprocess.Popen(
+                sl_cmd,
+                stdout=subprocess.PIPE,
+                stderr=log_handle,
+            )
+        finally:
+            log_handle.close()
+        assert self._streamlink_process.stdout is not None
+        command = [
+            imageio_ffmpeg.get_ffmpeg_exe(),
+            "-hide_banner",
+            "-loglevel",
+            "info",
+            "-nostats",
+            "-i",
+            "pipe:0",
+            *self._segment_output_args(),
+        ]
+        process = subprocess.Popen(
+            command,
+            stdin=self._streamlink_process.stdout,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        # Fecha a ponta local do pipe: se o ffmpeg morrer, o streamlink leva
+        # erro de escrita e encerra em vez de ficar orfao.
+        self._streamlink_process.stdout.close()
+        return process
+
+    def _launch_ffmpeg(self) -> subprocess.Popen:
+        self._cleanup_streamlink()
+        if self._local_source is None and _is_twitch_live_url(self.source_url):
+            if _streamlink_disponivel():
+                return self._launch_ffmpeg_via_streamlink()
+            print(
+                "[capture] AVISO: Twitch live sem streamlink instalado — caindo no HLS "
+                "direto, que quebra com ads (pip install streamlink)."
+            )
+        input_args, source_label = self._resolve_input()
+        print(f"[capture] fonte: {source_label}")
+        command = [
+            imageio_ffmpeg.get_ffmpeg_exe(),
+            "-hide_banner",
+            "-loglevel",
+            "info",
+            "-nostats",
+            *input_args,
+            *self._segment_output_args(),
         ]
         return subprocess.Popen(
             command,
@@ -404,6 +507,7 @@ class ContinuousCapture:
                     process.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     process.kill()
+            self._cleanup_streamlink()
             self._manifest_append({"event": "session_end", "blocks_emitted": self._emitted})
             self.block_queue.put(None)
             print(f"[capture] produtor encerrado. blocos emitidos: {self._emitted}")

@@ -36,20 +36,36 @@ def yt_player_client() -> Optional[list[str]]:
     return clients or None
 
 
+def tls_no_verify() -> bool:
+    """Desliga a verificacao TLS dos resolvedores (yt-dlp e streamlink), via
+    env BOTLIVE_TLS_NO_VERIFY=1.
+
+    Quirk de DEV LOCAL: antivirus que intercepta TLS (MITM) com CA propria sem
+    Basic Constraints critico — o Python 3.13+ liga VERIFY_X509_STRICT por
+    padrao e rejeita essa CA mesmo no bundle. Na VPS nao ha MITM e a env nunca
+    deve ser definida.
+    """
+    return os.environ.get("BOTLIVE_TLS_NO_VERIFY", "").strip().lower() in {"1", "true", "yes"}
+
+
 def com_opcoes_env(ydl_opts: dict) -> dict:
     """Retorna copia das opcoes do YoutubeDL com os ajustes opcionais de env:
 
     BOTLIVE_YT_CLIENT   -> extractor_args youtube:player_client
     BOTLIVE_COOKIES_FILE -> cookiefile
+    BOTLIVE_TLS_NO_VERIFY -> nocheckcertificate (quirk de dev local, ver acima)
 
     Sem nenhuma das envs, devolve as opcoes originais intactas.
     """
     cookies = cookies_path()
     clients = yt_player_client()
-    if cookies is None and clients is None:
+    no_verify = tls_no_verify()
+    if cookies is None and clients is None and not no_verify:
         return ydl_opts
 
     opts = dict(ydl_opts)
+    if no_verify:
+        opts["nocheckcertificate"] = True
     if cookies is not None:
         opts["cookiefile"] = str(cookies)
     if clients is not None:

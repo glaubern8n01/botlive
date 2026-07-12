@@ -1,5 +1,8 @@
 # yt-dlp sem pin de proposito: precisa acompanhar as mudancas do YouTube.
 yt-dlp
+# Twitch AO VIVO: filtra os segmentos de ad (SCTE/discontinuity) que quebravam
+# o -c copy da captura continua; sem pin pelo mesmo motivo do yt-dlp.
+streamlink
 moviepy==1.0.3
 pillow==12.1.1
 numpy==2.4.3

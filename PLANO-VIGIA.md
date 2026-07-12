@@ -214,6 +214,41 @@ leitura/escrita autenticada quando ele existir — fora do escopo agora.
 > ffmpeg, ou re-encode leve dos blocos ao invés de `-c copy` só no caso Twitch
 > live. Reproduzir: `python main.py https://twitch.tv/<canal_ao_vivo> --modo
 > live-clips --session-id teste --content-filter gta`.
+
+> **BUG DA ETAPA C EM TWITCH LIVE — RESOLVIDO (12/07/2026, sessão Fable, local):**
+> Reproduzido 3× em live real (chapo_dizona, GTA PT): bloco 0 = 26.3s (era o preroll
+> — o playlist trazia `twitch-stitched-ad` de 30.2s + `#EXT-X-DISCONTINUITY`),
+> stall >180s e o bloco 1 saindo com dur=17972–18707s. Causa confirmada: o ad roda
+> em linha de tempo própria (PTS ≈ 0) e o conteúdo carrega o PTS nativo da stream;
+> na emenda ad→conteúdo o PTS salta a idade da live (~5h ≈ 18000s) e o segmentador
+> `-c copy` trava e depois cospe o bloco com essa duração. Agravante: ad e conteúdo
+> têm codec params diferentes (1080p30 Main 3Mbps vs 1080p60 High 6Mbps) no mesmo
+> bitstream copiado.
+>
+> Candidatos testados na ordem combinada: **(1) `-fflags +genpts` REPROVADO** —
+> falha idêntica à baseline (genpts gera PTS *faltantes*, não conserta salto).
+> **(2) streamlink APROVADO** — 2 corridas limpas (6/6 blocos de 30.0s cravados)
+> intercaladas com 3 baselines quebradas na mesma live. **(3) re-encode: não foi
+> necessário.** Descoberta importante: o streamlink 8.x removeu
+> `--twitch-disable-ads` porque filtrar ads virou comportamento padrão do plugin;
+> a filtragem acontece no leitor HLS interno, então `--stream-url` NÃO serve — a
+> integração é por pipe: `streamlink --stdout <url> 720p,720p60,best | ffmpeg -i
+> pipe:0 -c copy -f segment ...`.
+>
+> Implementação (`live_capture.py`): pipe streamlink SOMENTE para live da Twitch
+> (`_is_twitch_live_url` exclui `/videos/`); YouTube live, arquivo local e VOD
+> seguem no caminho antigo intacto. Se o streamlink não estiver instalado, cai no
+> HLS direto com aviso. Regressão: YouTube live (Al Jazeera) 3/3 blocos, simulação
+> local 3/3, unitários da Etapa C 14/14, e vod-clips nem passa por live_capture.
+> Nova dependência: `streamlink` no requirements.txt (Docker instala no build).
+> Limitação conhecida: durante midroll o conteúdo NÃO existe pro viewer; um bloco
+> que atravessa midroll pode inflar a duração pelo tamanho do intervalo (sem
+> conserto possível no cliente). Pendências: validar streamlink de IP de
+> datacenter na VPS (yt-dlp foi validado 10/07; mesmos endpoints usher/gql) e
+> re-rodar o teste V5 ponta a ponta na VPS. Env nova opcional
+> `BOTLIVE_TLS_NO_VERIFY=1` (ytdlp_config) só pra dev local com antivírus fazendo
+> MITM de TLS (Python 3.13+ liga VERIFY_X509_STRICT e rejeita a CA do AVG);
+> NUNCA usar na VPS.
 | V6 | Dedup completo: `vigia_clip_index` + `--dedup-stream-id` no vod-clips | mesma live processada nos 2 modos; VOD NÃO repete cortes do live e complementa | ALTO |
 | V7 | Endurecimento: auto-post c/ teto diário, retenção de disco, restart-safe, alertas de erro no `vigia_streams` | derrubar Supabase/Helix/container no meio e ver sobreviver | ALTO |
 
