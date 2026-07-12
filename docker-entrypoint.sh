@@ -8,6 +8,16 @@ if [ "$#" -gt 0 ]; then
     exec "$@"
 fi
 
+# Modo vigia: sem SOURCE/LISTA (alvos vem do Supabase/Twitch). Servico continuo.
+if [ "${BOTLIVE_MODO:-}" = "vigia" ]; then
+    args=(--modo vigia)
+    if [ "${BOTLIVE_VIGIA_DRY:-0}" = "1" ]; then
+        args+=(--vigia-dry-run)
+    fi
+    echo "[entrypoint] python main.py ${args[*]}"
+    exec python main.py "${args[@]}"
+fi
+
 if [ -n "${BOTLIVE_SOURCE:-}" ] && [ -n "${BOTLIVE_LISTA_LINKS:-}" ]; then
     echo "[entrypoint] BOTLIVE_SOURCE e BOTLIVE_LISTA_LINKS sao mutuamente exclusivos." >&2
     exit 1

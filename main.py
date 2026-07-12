@@ -407,8 +407,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--modo",
-        choices=["atual", "live", "near-live", "live-clips", "pos-live", "final-hd", "scan-vod", "vod-clips"],
+        choices=["atual", "live", "near-live", "live-clips", "pos-live", "final-hd", "scan-vod", "vod-clips", "vigia"],
         default="atual",
+    )
+    parser.add_argument(
+        "--vigia-dry-run",
+        action="store_true",
+        help="No modo vigia: decide e loga o que faria (ledger em vigia_streams), sem disparar nenhum job.",
     )
     parser.add_argument("--max-cortes", type=int, default=8, help="Quantidade maxima de cortes.")
     parser.add_argument("--sample-every-seconds", type=int, default=3)
@@ -567,8 +572,10 @@ def main() -> None:
 
     if args.lista_links and args.source:
         parser.error("use o source posicional OU --lista-links, nao os dois ao mesmo tempo.")
-    if not args.lista_links and not args.source:
+    if args.modo != "vigia" and not args.lista_links and not args.source:
         parser.error("informe a URL/arquivo (source) ou --lista-links arquivo.txt.")
+    if args.modo == "vigia" and (args.source or args.lista_links):
+        parser.error("--modo vigia nao usa source nem --lista-links: os alvos vem do Supabase/Twitch.")
 
     set_output_root(args.output_root)
     set_output_tag(args.output_tag)
@@ -576,6 +583,13 @@ def main() -> None:
     print(f"[paths] output_root={get_output_root()}")
     print(f"[paths] fila_local={queue_file()}")
     print(f"[paths] run_logs={run_logs_dir()}")
+
+    if args.modo == "vigia":
+        # Import lazy: quem nao usa o vigia nao paga o import (mesmo padrao do publisher).
+        from watcher import run_vigia
+
+        run_vigia(dry_run=args.vigia_dry_run)
+        return
 
     if args.lista_links:
         _processar_lote(args)
