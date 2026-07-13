@@ -26,6 +26,8 @@ export type VigiaConfig = {
   post_youtube_enabled: boolean;
   post_visibilidade: 'private' | 'unlisted' | 'public';
   max_posts_per_day: number;
+  post_live_enabled: boolean;
+  max_posts_per_day_live: number;
   credito_streamer: string | null;
   credito_canal: string | null;
   updated_at: string;
@@ -68,6 +70,7 @@ export type VigiaStream = {
   vod_url: string | null;
   vod_attempts: number;
   uploads_done: number;
+  uploads_done_live: number;
   error_message: string | null;
   dry_run: boolean;
   updated_at: string;

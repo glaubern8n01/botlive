@@ -74,6 +74,10 @@ class VigiaConfig:
     post_youtube_enabled: bool = False
     post_visibilidade: str = "unlisted"
     max_posts_per_day: int = 4
+    # Post do modo live: SEMPRE private (rascunho no Studio, publicacao manual).
+    # Teto proprio para a soma live+VOD nunca estourar a quota do YouTube.
+    post_live_enabled: bool = False
+    max_posts_per_day_live: int = 2
     credito_streamer: Optional[str] = None
     credito_canal: Optional[str] = "@GTA6brasilcortesoficial"
 
@@ -175,8 +179,8 @@ class Vigia:
         patch = {**patch, "updated_at": _iso(_utc_now())}
         client.table(STREAMS_TABLE).update(patch).eq("stream_id", stream_id).execute()
 
-    def _uploads_used_today(self) -> Optional[int]:
-        """Soma uploads_done de hoje (UTC). None = nao deu pra apurar (trava fecha)."""
+    def _uploads_used_today(self, field: str = "uploads_done") -> Optional[int]:
+        """Soma uploads do dia (UTC) na coluna dada. None = nao deu pra apurar (trava fecha)."""
         client = self._client()
         if client is None:
             return None
@@ -184,44 +188,52 @@ class Vigia:
         try:
             response = (
                 client.table(STREAMS_TABLE)
-                .select("uploads_done")
+                .select(field)
                 .gte("updated_at", _iso(midnight))
                 .execute()
             )
-            return sum(int(row.get("uploads_done") or 0) for row in (response.data or []))
+            return sum(int(row.get(field) or 0) for row in (response.data or []))
         except Exception as exc:
-            print(f"[vigia] falha ao apurar uploads do dia ({exc}); trava de post FECHADA.")
+            print(f"[vigia] falha ao apurar uploads do dia ({field}: {exc}); trava de post FECHADA.")
             return None
 
     # ----------------------------------------------------------- trava post
 
-    def _post_allowed(self, config: VigiaConfig, uploads_expected: int) -> bool:
+    def _post_allowed(
+        self,
+        enabled: bool,
+        budget_raw: Any,
+        used_field: str,
+        uploads_expected: int,
+        label: str,
+    ) -> bool:
         """REGRA DE OURO: nunca postar sem orcamento diario apurado e suficiente.
 
         Qualquer duvida (config invalida, ledger inacessivel) => NAO posta.
-        O job roda mesmo assim SEM --post-youtube: os cortes ficam prontos no
-        disco com publish.json, postaveis depois.
+        O job roda mesmo assim SEM post: os cortes ficam prontos no disco,
+        postaveis depois. Orcamentos de live e VOD sao contados em colunas
+        separadas (uploads_done_live / uploads_done) com tetos proprios.
         """
-        if not config.post_youtube_enabled:
+        if not enabled:
             return False
         try:
-            budget = int(config.max_posts_per_day)
+            budget = int(budget_raw)
         except (TypeError, ValueError):
-            print("[vigia][trava] max_posts_per_day invalido; post DESLIGADO neste job.")
+            print(f"[vigia][trava:{label}] teto invalido; post DESLIGADO neste job.")
             return False
         if budget <= 0:
-            print("[vigia][trava] max_posts_per_day=0; post DESLIGADO neste job.")
+            print(f"[vigia][trava:{label}] teto=0; post DESLIGADO neste job.")
             return False
-        used = self._uploads_used_today()
+        used = self._uploads_used_today(used_field)
         if used is None:
             return False
         if used + uploads_expected > budget:
             print(
-                f"[vigia][trava] orcamento diario de posts esgotaria: usados={used} "
+                f"[vigia][trava:{label}] orcamento diario esgotaria: usados={used} "
                 f"+ previstos={uploads_expected} > teto={budget}. Job roda SEM post."
             )
             return False
-        print(f"[vigia][trava] post liberado: usados={used} previstos={uploads_expected} teto={budget}")
+        print(f"[vigia][trava:{label}] post liberado: usados={used} previstos={uploads_expected} teto={budget}")
         return True
 
     # ------------------------------------------------------------- descoberta
@@ -411,8 +423,9 @@ class Vigia:
 
         So despacha linhas em 'disabled'/'skipped_no_slot' — 'running/done/failed'
         nunca redespacham, entao nao ha como duplicar captura do mesmo stream.
-        O job live NAO tem flag de post nenhuma: gera previews + momentos; quem
-        posta continua sendo o fluxo VOD (trava de posts validada no V4).
+        Post no job live e opt-in (post_live_enabled) e SEMPRE private —
+        rascunho no Studio, publicacao manual — com teto diario proprio
+        (max_posts_per_day_live) independente do teto do VOD.
         """
         if not config.live_mode_enabled:
             return
@@ -445,6 +458,22 @@ class Vigia:
             "--max-cortes", str(config.max_cortes_live),
             "--output-layout", "original",
         ]
+
+        uploads_expected = int(config.max_cortes_live) * 2  # HD + vertical por corte
+        if self._post_allowed(
+            config.post_live_enabled, config.max_posts_per_day_live, "uploads_done_live", uploads_expected, "live"
+        ):
+            # Visibilidade FIXA em private por decisao de projeto: corte de live
+            # e rascunho; quem publica e o Glauber, manualmente, pelo Studio.
+            command += [
+                "--publish-vertical",
+                "--post-youtube",
+                "--post-visibilidade", "private",
+                "--post-conta", "principal",
+                "--credito-streamer", config.credito_streamer or f"@{row['channel_login']}",
+            ]
+            if config.credito_canal:
+                command += ["--credito-canal", config.credito_canal]
 
         if self.dry_run:
             print(f"[vigia][dry] dispararia LIVE job: {' '.join(command)}")
@@ -526,7 +555,9 @@ class Vigia:
         stream_id = str(row["stream_id"])
         session_id = f"vigia_{stream_id}_vod"
         uploads_expected = int(config.max_cortes_vod) * 2  # HD + vertical por corte
-        post = self._post_allowed(config, uploads_expected)
+        post = self._post_allowed(
+            config.post_youtube_enabled, config.max_posts_per_day, "uploads_done", uploads_expected, "vod"
+        )
 
         command = [
             sys.executable,
@@ -572,13 +603,14 @@ class Vigia:
         print(f"[vigia] VOD job iniciado: {row['channel_login']} pid={process.pid} log={log_path}")
 
     def _colher_jobs(self) -> None:
-        self._colher_de(self._running_vod_jobs, "vod_job_status", "VOD")
-        self._colher_de(self._running_live_jobs, "live_job_status", "LIVE")
+        self._colher_de(self._running_vod_jobs, "vod_job_status", "uploads_done", "VOD")
+        self._colher_de(self._running_live_jobs, "live_job_status", "uploads_done_live", "LIVE")
 
     def _colher_de(
         self,
         running: dict[str, tuple[subprocess.Popen, Path, str]],
         status_field: str,
+        uploads_field: str,
         label: str,
     ) -> None:
         for stream_id in list(running):
@@ -594,7 +626,7 @@ class Vigia:
             terminated_ok = stream_id in self._terminated_by_grace
             self._terminated_by_grace.discard(stream_id)
             if process.returncode == 0 or terminated_ok:
-                patch: dict[str, Any] = {status_field: "done", "uploads_done": uploads}
+                patch: dict[str, Any] = {status_field: "done", uploads_field: uploads}
                 if terminated_ok:
                     patch["error_message"] = "encerrado pelo vigia apos fim da live (grace)"
                 self._ledger_update(stream_id, patch)
@@ -604,7 +636,7 @@ class Vigia:
                     stream_id,
                     {
                         status_field: "failed",
-                        "uploads_done": uploads,
+                        uploads_field: uploads,
                         "error_message": f"exit={process.returncode}; ver {log_path.name}",
                     },
                 )
@@ -651,7 +683,10 @@ class Vigia:
 
 def run_vigia(dry_run: bool) -> None:
     modo = "DRY-RUN (nada e processado)" if dry_run else "REAL (dispara jobs live e de VOD)"
-    print(f"[vigia] iniciando em modo {modo}. V6 (dedup) pendente por plano; job live nunca posta.")
+    print(
+        f"[vigia] iniciando em modo {modo}. V6 (dedup) pendente por plano; "
+        "job live posta como PRIVATE quando post_live_enabled=true (teto proprio)."
+    )
     try:
         vigia = Vigia(dry_run=dry_run)
     except TwitchAPIError as exc:

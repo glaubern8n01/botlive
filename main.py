@@ -638,6 +638,7 @@ def _executar_pipeline(args: argparse.Namespace) -> None:
             min_event_separation=args.min_event_separation,
             retention_seconds=args.live_retention_seconds,
             refine_peak=not args.no_peak_refine,
+            publish_config=_publish_config_from_args(args),
         )
         return
 

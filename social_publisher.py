@@ -24,7 +24,8 @@ from typing import Optional
 
 REDES_DISPONIVEIS = {
     "youtube": "yt_publisher",
-    # futuras: "tiktok": "tiktok_publisher", "instagram": ..., "facebook": ...
+    "instagram": "instagram_publisher",  # Reels a partir do vertical 9:16
+    # futuras: "tiktok": "tiktok_publisher", "facebook": ...
 }
 
 VISIBILIDADES = ("private", "unlisted", "public")

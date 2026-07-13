@@ -33,6 +33,12 @@ create table if not exists vigia_config (
     -- => ~6 uploads/dia; cada corte hoje = 2 uploads HD+vertical). O vigia NUNCA
     -- dispara job com post ligado se o orcamento do dia nao couber.
     max_posts_per_day int not null default 4 check (max_posts_per_day >= 0),
+    -- Post do modo LIVE (cortes em tempo real): visibilidade e SEMPRE private
+    -- (rascunho no Studio, publicacao manual) — fixa no codigo, sem coluna.
+    -- Teto proprio: live e VOD tem orcamentos separados; a soma dos dois tetos
+    -- deve caber nos ~6 uploads/dia da quota.
+    post_live_enabled boolean not null default false,
+    max_posts_per_day_live int not null default 2 check (max_posts_per_day_live >= 0),
     credito_streamer text,
     credito_canal text default '@GTA6brasilcortesoficial',
     updated_at timestamptz not null default now()
@@ -72,6 +78,7 @@ create table if not exists vigia_streams (
     vod_url text,
     vod_attempts int not null default 0,
     uploads_done int not null default 0,
+    uploads_done_live int not null default 0,
     error_message text,
     dry_run boolean not null default false,
     updated_at timestamptz not null default now()
@@ -95,3 +102,13 @@ create table if not exists vigia_clip_index (
 );
 
 create index if not exists vigia_clip_index_stream_idx on vigia_clip_index (stream_id);
+
+-- 5) Migracao 13/07/2026 — post PRIVATE no modo live com teto proprio.
+--    Idempotente para instalacoes que rodaram o schema antes desta data.
+alter table vigia_config
+    add column if not exists post_live_enabled boolean not null default false;
+alter table vigia_config
+    add column if not exists max_posts_per_day_live int not null default 2
+        check (max_posts_per_day_live >= 0);
+alter table vigia_streams
+    add column if not exists uploads_done_live int not null default 0;

@@ -52,13 +52,31 @@ class TwitchAPIError(RuntimeError):
     """Erro de configuracao ou de resposta da Helix que o chamador deve tratar."""
 
 
+APP_CREDENTIALS_FILE = TOKENS_DIR / "app_credentials.json"
+
+
 def _credentials() -> tuple[str, str]:
+    """Envs primeiro; fallback no volume de tokens (sobrevive a Deploy do painel).
+
+    O EasyPanel guarda env em LMDB binario e um Deploy reaplica o spec salvo la;
+    creds so no docker service update somem nesse caso. O arquivo no volume
+    .tokens/twitch/app_credentials.json ({"client_id": ..., "client_secret": ...})
+    e o plano B que nao depende do painel.
+    """
     client_id = os.getenv("TWITCH_CLIENT_ID")
     client_secret = os.getenv("TWITCH_CLIENT_SECRET")
     if not client_id or not client_secret:
+        try:
+            dados = json.loads(APP_CREDENTIALS_FILE.read_text(encoding="utf-8"))
+            client_id = client_id or dados.get("client_id")
+            client_secret = client_secret or dados.get("client_secret")
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+    if not client_id or not client_secret:
         raise TwitchAPIError(
             "TWITCH_CLIENT_ID/TWITCH_CLIENT_SECRET ausentes. Cadastre o app em "
-            "dev.twitch.tv/console (client credentials) e defina as envs no .env/EasyPanel."
+            "dev.twitch.tv/console (client credentials) e defina as envs no "
+            f".env/EasyPanel ou grave {APP_CREDENTIALS_FILE}."
         )
     return client_id, client_secret
 

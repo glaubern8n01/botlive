@@ -8,7 +8,7 @@ import { VigiaConfig } from '../types';
 import { ShieldAlert } from 'lucide-react';
 
 // Toggles que ligam comportamento com efeito externo — pedem confirmação.
-const CRITICAL_TOGGLES: (keyof VigiaConfig)[] = ['enabled', 'post_youtube_enabled'];
+const CRITICAL_TOGGLES: (keyof VigiaConfig)[] = ['enabled', 'post_youtube_enabled', 'post_live_enabled'];
 
 function NumberField({
   label,
@@ -91,7 +91,12 @@ export function Configuracao() {
   const handleChange = (field: keyof VigiaConfig, value: unknown) => {
     if (!config) return;
     if (CRITICAL_TOGGLES.includes(field) && value === true) {
-      const nome = field === 'enabled' ? 'o VIGIA' : 'a POSTAGEM AUTOMÁTICA no YouTube';
+      const nome =
+        field === 'enabled'
+          ? 'o VIGIA'
+          : field === 'post_live_enabled'
+            ? 'a POSTAGEM dos cortes de LIVE (private/rascunho) no YouTube'
+            : 'a POSTAGEM AUTOMÁTICA no YouTube';
       if (!window.confirm(`ATENÇÃO: você está prestes a ligar ${nome}. Confirma?`)) return;
     }
     setConfig({ ...config, [field]: value });
@@ -282,17 +287,29 @@ export function Configuracao() {
           </CardHeader>
           <CardContent className="space-y-6">
             <ToggleRow
-              title="Postagem automática no YouTube"
-              description="Se ativo, posta os cortes. Se inativo, apenas gera e guarda no disco."
+              title="Postagem automática no YouTube (VOD)"
+              description="Se ativo, posta os cortes do fluxo VOD. Se inativo, apenas gera e guarda no disco."
               checked={config.post_youtube_enabled}
               onChange={(c) => handleChange('post_youtube_enabled', c)}
             />
+            <ToggleRow
+              title="Postagem dos cortes de LIVE (private)"
+              description="Cortes em tempo real sobem como PRIVATE (rascunho no Studio; você publica manualmente). Visibilidade fixa no código."
+              checked={config.post_live_enabled ?? false}
+              onChange={(c) => handleChange('post_live_enabled', c)}
+            />
             <div className="grid gap-4 md:grid-cols-2">
               <NumberField
-                label="Teto de uploads/dia"
+                label="Teto de uploads/dia (VOD)"
                 value={config.max_posts_per_day}
                 onChange={(v) => handleChange('max_posts_per_day', v)}
                 hint="Teto DURO. Hoje cada corte = 2 uploads (HD + vertical)."
+              />
+              <NumberField
+                label="Teto de uploads/dia (LIVE)"
+                value={config.max_posts_per_day_live ?? 2}
+                onChange={(v) => handleChange('max_posts_per_day_live', v)}
+                hint="Orçamento separado do VOD. Soma dos dois tetos ≤ 6 (quota do YouTube)."
               />
               <div className="space-y-1">
                 <label className="text-sm font-medium">Visibilidade</label>

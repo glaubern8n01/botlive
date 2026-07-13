@@ -458,6 +458,26 @@ def _renderizar_preview(
         concat_path.unlink(missing_ok=True)
 
 
+def _publicar_preview(preview_path: Path, publish_config: Optional[object]) -> None:
+    """Publicacao opt-in do preview recem-validado (vertical + publish.json +
+    auto-post, mesmo caminho do VOD). Nunca derruba a captura: qualquer erro
+    fica logado e o preview permanece intacto no disco, postavel depois."""
+    if publish_config is None or not getattr(publish_config, "enabled", False):
+        return
+    try:
+        from publisher import publicar_corte
+
+        publicar_corte(
+            preview_path,
+            nicho=getattr(publish_config, "nicho", None),
+            credito_streamer=getattr(publish_config, "credito_streamer", None),
+            credito_canal=getattr(publish_config, "credito_canal", None),
+            social_config=getattr(publish_config, "social", None),
+        )
+    except Exception as exc:
+        print(f"[near-live][publish][falha] {preview_path.name}: {exc}; captura segue.")
+
+
 def _tentar_renderizar_pendentes(
     source_url: str,
     session_id: str,
@@ -468,6 +488,7 @@ def _tentar_renderizar_pendentes(
     preview_paths: list[Path],
     allow_partial: bool = False,
     lookahead_seconds: int = 0,
+    publish_config: Optional[object] = None,
 ) -> list[PendingPreview]:
     remaining: list[PendingPreview] = []
     for item in pending:
@@ -486,6 +507,7 @@ def _tentar_renderizar_pendentes(
         )
         if preview_path is not None:
             preview_paths.append(preview_path)
+            _publicar_preview(preview_path, publish_config)
     return remaining
 
 
@@ -510,6 +532,7 @@ def monitorar_near_live(
     min_event_separation: int = 8,
     retention_seconds: int = 900,
     refine_peak: bool = True,
+    publish_config: Optional[object] = None,
 ) -> NearLiveResult:
     if block_seconds < 30 or block_seconds > 60:
         raise ValueError("--block-seconds deve ficar entre 30 e 60 segundos.")
@@ -726,6 +749,7 @@ def monitorar_near_live(
                 max_previews=max_cortes,
                 preview_paths=preview_paths,
                 lookahead_seconds=lookahead_seconds,
+                publish_config=publish_config,
             )
             blocks = _limpar_blocos_consumidos(blocks, pending, retention)
     finally:
@@ -751,6 +775,7 @@ def monitorar_near_live(
             max_previews=max_cortes,
             preview_paths=preview_paths,
             allow_partial=True,
+            publish_config=publish_config,
         )
 
     print(
