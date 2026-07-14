@@ -538,13 +538,26 @@ def processar_pos_live(
     max_clip_duration: int = 50,
     min_event_separation: int = 8,
     publish_config: Optional[object] = None,
+    excluir_timestamps: Optional[set[int]] = None,
 ) -> list[CorteResultado]:
     candidates: list[HighlightCandidate] = []
     moment_metadata_by_timestamp: dict[int, dict] = {}
     if usar_momentos_salvos:
         if session_id:
+            moments_carregados = carregar_momentos(source_url=source, session_id=session_id)
+            # V6 (dedup live x VOD): remove os timestamps que colidem com cortes
+            # ja feitos ANTES do render. Sem excluir_timestamps (todo fluxo atual),
+            # nada muda. Ver dedup.py / --dedup-stream-id.
+            if excluir_timestamps:
+                antes = len(moments_carregados)
+                moments_carregados = [
+                    m for m in moments_carregados if int(m.timestamp_seconds) not in excluir_timestamps
+                ]
+                pulados = antes - len(moments_carregados)
+                if pulados:
+                    print(f"[dedup] {pulados} timestamp(s) pulados no render: colidem com corte ja indexado.")
             moments = _dedupe_momentos(
-                carregar_momentos(source_url=source, session_id=session_id),
+                moments_carregados,
                 max_cortes=max_cortes,
                 min_gap_seconds=min_gap_seconds,
             )

@@ -13,10 +13,10 @@ Escopo implementado (V3 + V4 + V5):
   gravada no ledger para o dedup do V6; o job live NAO posta nada (previews);
 - TRAVA de posts: orcamento diario max_posts_per_day respeitado ANTES de todo job;
 - varredura de orfaos no boot e encerramento de captura zumbi pos-fim (grace);
+- V6 (dedup live x VOD): cortes do modo live sao indexados em vigia_clip_index
+  (convertidos p/ tempo de VOD pela ancora capture_start_utc); o job de VOD
+  recebe --dedup-stream-id e nao repete os momentos ja cortados ao vivo;
 - --vigia-dry-run: decide e loga tudo, nao dispara nada.
-
-Pendente (por decisao de plano): V6 (dedup live x VOD) — vigia_clip_index ainda
-nao e escrito; a ancora do V5 ja deixa o caminho pronto.
 """
 
 import json
@@ -106,6 +106,11 @@ class Vigia:
         self._last_config: Optional[VigiaConfig] = None
         self._miss_counts: dict[str, int] = {}
         self._orphan_sweep_done = False
+        # Uploads previstos de jobs JA despachados neste run e ainda nao colhidos
+        # (nao contam no ledger enquanto rodam). Chave = session_id;
+        # valor = (coluna de uploads, uploads previstos). Fecha a janela em que
+        # dois jobs do mesmo ciclo nao veem o orcamento previsto um do outro.
+        self._job_reserva: dict[str, tuple[str, int]] = {}
 
     # ------------------------------------------------------------- supabase
 
@@ -232,13 +237,20 @@ class Vigia:
         used = self._uploads_used_today(used_field)
         if used is None:
             return False
-        if used + uploads_expected > budget:
+        # Soma os uploads previstos dos jobs JA despachados neste ciclo/run e
+        # ainda em voo (nao contabilizados no ledger). Sem isso, dois jobs
+        # despachados no mesmo ciclo estouram o teto por nao verem um ao outro.
+        em_voo = sum(reserva for campo, reserva in self._job_reserva.values() if campo == used_field)
+        if used + em_voo + uploads_expected > budget:
             print(
-                f"[vigia][trava:{label}] orcamento diario esgotaria: usados={used} "
+                f"[vigia][trava:{label}] orcamento diario esgotaria: usados={used} em_voo={em_voo} "
                 f"+ previstos={uploads_expected} > teto={budget}. Job roda SEM post."
             )
             return False
-        print(f"[vigia][trava:{label}] post liberado: usados={used} previstos={uploads_expected} teto={budget}")
+        print(
+            f"[vigia][trava:{label}] post liberado: usados={used} em_voo={em_voo} "
+            f"previstos={uploads_expected} teto={budget}"
+        )
         return True
 
     # ------------------------------------------------------------- descoberta
@@ -465,9 +477,10 @@ class Vigia:
         ]
 
         uploads_expected = int(config.max_cortes_live) * 2  # HD + vertical por corte
-        if self._post_allowed(
+        post = self._post_allowed(
             config.post_live_enabled, config.max_posts_per_day_live, "uploads_done_live", uploads_expected, "live"
-        ):
+        )
+        if post:
             # Visibilidade FIXA em private por decisao de projeto: corte de live
             # e rascunho; quem publica e o Glauber, manualmente, pelo Studio.
             command += [
@@ -498,6 +511,8 @@ class Vigia:
         )
         log_file.close()
         self._running_live_jobs[stream_id] = (process, log_path, session_id)
+        if post:
+            self._job_reserva[session_id] = ("uploads_done_live", uploads_expected)
         self._ledger_update(
             stream_id, {"live_job_status": "running", "capture_start_utc": capture_start}
         )
@@ -576,6 +591,11 @@ class Vigia:
             "--target-height", str(config.target_height),
             "--output-layout", "original",
             "--publish-vertical",
+            # V6: dedup live x VOD. Com o stream_id, o vod-clips consulta o
+            # vigia_clip_index (nao repete o que o live ja cortou) e grava seus
+            # proprios cortes la. Indice vazio => processa tudo (sem regressao).
+            "--dedup-stream-id", stream_id,
+            "--dedup-window-seconds", str(config.dedup_window_seconds),
         ]
         if post:
             command += [
@@ -604,6 +624,8 @@ class Vigia:
         )
         log_file.close()  # Popen herdou o handle; o nosso pode fechar
         self._running_vod_jobs[stream_id] = (process, log_path, session_id)
+        if post:
+            self._job_reserva[session_id] = ("uploads_done", uploads_expected)
         self._ledger_update(stream_id, {"vod_job_status": "running", "vod_url": vod_url})
         print(f"[vigia] VOD job iniciado: {row['channel_login']} pid={process.pid} log={log_path}")
 
@@ -709,6 +731,9 @@ class Vigia:
             if process.poll() is None:
                 continue
             del running[stream_id]
+            # Job saiu de voo: libera a reserva de orcamento (o ledger passa a
+            # contar os uploads reais deste job logo abaixo).
+            self._job_reserva.pop(session_id, None)
             uploads = 0
             try:
                 uploads = log_path.read_text(encoding="utf-8", errors="replace").count(UPLOAD_MARKER)
@@ -722,6 +747,11 @@ class Vigia:
                     patch["error_message"] = "encerrado pelo vigia apos fim da live (grace)"
                 self._ledger_update(stream_id, patch)
                 print(f"[vigia] {label} job concluido: stream {stream_id} uploads={uploads} (sessao {session_id})")
+                if label == "LIVE":
+                    # V6: os cortes de VOD se auto-indexam no proprio subprocesso;
+                    # os do modo live sao indexados aqui (o vigia tem a ancora do
+                    # ledger para converter tempo de captura -> tempo de VOD).
+                    self._indexar_live_clips(stream_id, session_id)
             else:
                 self._ledger_update(
                     stream_id,
@@ -732,6 +762,55 @@ class Vigia:
                     },
                 )
                 print(f"[vigia] {label} job FALHOU (exit={process.returncode}): ver {log_path}")
+
+    def _indexar_live_clips(self, stream_id: str, session_id: str) -> None:
+        """V6: grava no vigia_clip_index os previews do modo live desta sessao.
+
+        Os previews vivem no fila_local.jsonl (evento near_live_preview,
+        status preview_ready) em tempo de CAPTURA; converte para tempo de VOD
+        com a ancora do ledger (capture_start_utc, started_at) e grava mode=live.
+        Falha aqui nunca derruba a colheita: o pior caso e o VOD repetir um
+        momento (o comportamento de hoje)."""
+        if self.dry_run:
+            return
+        try:
+            from dedup import offset_live_para_vod, registrar_clip
+            from moment_logger import _iter_jsonl
+
+            row = self._ledger_get(stream_id)
+            if row is None:
+                return
+            offset = offset_live_para_vod(row.get("capture_start_utc"), row.get("started_at"))
+            if offset is None:
+                print(f"[dedup] sem ancora (capture_start_utc/started_at) de {stream_id}; cortes live nao indexados.")
+                return
+            previews = [
+                r
+                for r in _iter_jsonl()
+                if r.get("event") == "near_live_preview"
+                and r.get("session_id") == session_id
+                and r.get("status") == "preview_ready"
+            ]
+            gravados = 0
+            for preview in previews:
+                metadata = preview.get("metadata") or {}
+                ts_live = int(preview.get("timestamp_seconds") or 0)
+                start_live = int(metadata.get("event_start_seconds", ts_live))
+                end_live = int(metadata.get("event_end_seconds", ts_live))
+                if registrar_clip(
+                    stream_id=stream_id,
+                    mode="live",
+                    ts_vod_estimated=ts_live + offset,
+                    clip_start_vod=max(0, start_live + offset),
+                    clip_end_vod=end_live + offset,
+                    session_id=session_id,
+                    corte_ref=str(preview.get("id") or ""),
+                ):
+                    gravados += 1
+            if gravados:
+                print(f"[dedup] {gravados} corte(s) live indexados (stream {stream_id}, offset={offset}s).")
+        except Exception as exc:
+            print(f"[dedup] falha ao indexar cortes live de {stream_id} ({exc}).")
 
     # ------------------------------------------------------------------- run
 
@@ -779,7 +858,7 @@ class Vigia:
 def run_vigia(dry_run: bool) -> None:
     modo = "DRY-RUN (nada e processado)" if dry_run else "REAL (dispara jobs live e de VOD)"
     print(
-        f"[vigia] iniciando em modo {modo}. V6 (dedup) pendente por plano; "
+        f"[vigia] iniciando em modo {modo}. V6 (dedup live x VOD) ATIVO; "
         "job live posta como PRIVATE quando post_live_enabled=true (teto proprio)."
     )
     try:

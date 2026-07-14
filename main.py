@@ -262,6 +262,72 @@ def _salvar_timestamps_arquivo_local(
     return saved
 
 
+def _calcular_dedup_exclusao(args: argparse.Namespace) -> Optional[set[int]]:
+    """V6: timestamps do scan que colidem com cortes ja indexados deste stream.
+
+    Sem --dedup-stream-id (todo fluxo manual/atual) retorna None e o render
+    processa tudo. Qualquer falha aqui e degradada para None (na duvida, NAO
+    filtra: pior caso e um corte duplicado, nunca um corte perdido)."""
+    if not args.dedup_stream_id:
+        return None
+    try:
+        from dedup import carregar_clips_indexados, timestamps_colidentes
+        from moment_logger import carregar_momentos
+
+        indexados = carregar_clips_indexados(args.dedup_stream_id)
+        if not indexados:
+            print(f"[dedup] indice vazio para stream {args.dedup_stream_id}; VOD processa todos os candidatos.")
+            return None
+        peaks = [int(m.timestamp_seconds) for m in carregar_momentos(source_url=args.source, session_id=args.session_id)]
+        colidem = timestamps_colidentes(peaks, indexados, args.clip_duration, args.dedup_window_seconds)
+        if colidem:
+            print(
+                f"[dedup] {len(colidem)} de {len(peaks)} candidato(s) colidem com {len(indexados)} corte(s) "
+                f"ja feito(s) do stream {args.dedup_stream_id} (janela {args.dedup_window_seconds}s); "
+                f"serao pulados: {sorted(colidem)}"
+            )
+        else:
+            print(
+                f"[dedup] nenhum dos {len(peaks)} candidato(s) colide com os {len(indexados)} corte(s) "
+                f"ja indexados do stream {args.dedup_stream_id}; VOD complementa o live."
+            )
+        return colidem or None
+    except Exception as exc:
+        print(f"[dedup] etapa de dedup falhou ({exc}); VOD processa todos os candidatos.")
+        return None
+
+
+def _indexar_cortes_vod(args: argparse.Namespace, resultados: list) -> None:
+    """V6: grava os cortes de VOD concluidos no vigia_clip_index (tempo de VOD)."""
+    if not args.dedup_stream_id or not resultados:
+        return
+    try:
+        from dedup import registrar_clip
+
+        clip = int(args.clip_duration)
+        antes = clip // 2
+        depois = clip - antes
+        gravados = 0
+        for r in resultados:
+            if getattr(r, "status", None) != "concluido":
+                continue
+            ts = int(r.timestamp_seconds)
+            if registrar_clip(
+                stream_id=args.dedup_stream_id,
+                mode="vod",
+                ts_vod_estimated=ts,
+                clip_start_vod=max(0, ts - antes),
+                clip_end_vod=ts + depois,
+                session_id=args.session_id,
+                corte_ref=getattr(r, "corte_id", None),
+            ):
+                gravados += 1
+        if gravados:
+            print(f"[dedup] {gravados} corte(s) de VOD indexados para dedup futuro (stream {args.dedup_stream_id}).")
+    except Exception as exc:
+        print(f"[dedup] falha ao indexar cortes de VOD ({exc}); dedup futuro pode repetir estes momentos.")
+
+
 def _processar_vod_clips(args: argparse.Namespace) -> None:
     if not args.session_id:
         raise SystemExit("--session-id e obrigatorio no modo vod-clips.")
@@ -303,8 +369,12 @@ def _processar_vod_clips(args: argparse.Namespace) -> None:
         print("[vod-clips] Nenhum timestamp salvo. Render final ignorado.")
         return
 
+    # V6 — dedup live x VOD (opt-in por --dedup-stream-id). ENTRE o scan e o
+    # render: candidato que colide com um corte ja indexado nao renderiza.
+    excluir_timestamps = _calcular_dedup_exclusao(args)
+
     print("[vod-clips] Etapa 2/2: render final HD a partir dos timestamps salvos.")
-    processar_pos_live(
+    resultados = processar_pos_live(
         source=args.source,
         max_cortes=args.max_cortes,
         usar_momentos_salvos=True,
@@ -326,7 +396,12 @@ def _processar_vod_clips(args: argparse.Namespace) -> None:
         max_clip_duration=args.max_clip_duration,
         min_event_separation=args.min_event_separation,
         publish_config=_publish_config_from_args(args),
+        excluir_timestamps=excluir_timestamps,
     )
+
+    # V6 — grava os cortes de VOD feitos no indice (ja em tempo de VOD), para
+    # servir de referencia aos proximos reprocessos deste stream.
+    _indexar_cortes_vod(args, resultados)
 
 
 def _ler_lista_links(caminho: str) -> list[str]:
@@ -454,6 +529,20 @@ def main() -> None:
     parser.add_argument("--keep-intermediate", action="store_true", help="Mantem arquivos intermediarios como corte sem overlay.")
     parser.add_argument("--usar-momentos-salvos", action="store_true")
     parser.add_argument("--session-id", default=None, help="Identificador da sessao live para salvar/filtrar timestamps.")
+    parser.add_argument(
+        "--dedup-stream-id",
+        default=None,
+        help="V6 (vod-clips): stream_id da Twitch para dedup live x VOD. Com a flag, o VOD consulta "
+        "vigia_clip_index e NAO renderiza candidatos que colidem com cortes ja feitos; os cortes "
+        "gerados aqui sao gravados no indice. Sem a flag, comportamento identico ao atual.",
+    )
+    parser.add_argument(
+        "--dedup-window-seconds",
+        type=int,
+        default=60,
+        help="Tolerancia (segundos) do dedup live x VOD: quanto expandir a janela de um corte ja "
+        "indexado ao checar colisao. So tem efeito com --dedup-stream-id.",
+    )
     parser.add_argument("--vod-offset-seconds", type=int, default=0)
     parser.add_argument("--score-threshold", type=float, default=0.62)
     parser.add_argument("--max-blocks", type=int, default=None, help="Opcional para limitar blocos nos modos live/scan-vod.")
