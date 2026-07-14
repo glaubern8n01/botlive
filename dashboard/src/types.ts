@@ -28,6 +28,7 @@ export type VigiaConfig = {
   max_posts_per_day: number;
   post_live_enabled: boolean;
   max_posts_per_day_live: number;
+  post_instagram_enabled: boolean;
   credito_streamer: string | null;
   credito_canal: string | null;
   updated_at: string;

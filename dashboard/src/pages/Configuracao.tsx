@@ -8,7 +8,12 @@ import { VigiaConfig } from '../types';
 import { ShieldAlert } from 'lucide-react';
 
 // Toggles que ligam comportamento com efeito externo — pedem confirmação.
-const CRITICAL_TOGGLES: (keyof VigiaConfig)[] = ['enabled', 'post_youtube_enabled', 'post_live_enabled'];
+const CRITICAL_TOGGLES: (keyof VigiaConfig)[] = [
+  'enabled',
+  'post_youtube_enabled',
+  'post_live_enabled',
+  'post_instagram_enabled',
+];
 
 function NumberField({
   label,
@@ -96,7 +101,9 @@ export function Configuracao() {
           ? 'o VIGIA'
           : field === 'post_live_enabled'
             ? 'a POSTAGEM dos cortes de LIVE (private/rascunho) no YouTube'
-            : 'a POSTAGEM AUTOMÁTICA no YouTube';
+            : field === 'post_instagram_enabled'
+              ? 'a POSTAGEM de Reels no INSTAGRAM — Reel é sempre PÚBLICO, sem rascunho'
+              : 'a POSTAGEM AUTOMÁTICA no YouTube';
       if (!window.confirm(`ATENÇÃO: você está prestes a ligar ${nome}. Confirma?`)) return;
     }
     setConfig({ ...config, [field]: value });
@@ -297,6 +304,12 @@ export function Configuracao() {
               description="Cortes em tempo real sobem como PRIVATE (rascunho no Studio; você publica manualmente). Visibilidade fixa no código."
               checked={config.post_live_enabled ?? false}
               onChange={(c) => handleChange('post_live_enabled', c)}
+            />
+            <ToggleRow
+              title="Reels no Instagram (gatilho: aprovação no YouTube)"
+              description="Quando você muda um corte postado para PÚBLICO no Studio, o vigia posta o vertical 9:16 como Reel no ciclo seguinte. Nenhum Reel sai sem essa aprovação manual."
+              checked={config.post_instagram_enabled ?? false}
+              onChange={(c) => handleChange('post_instagram_enabled', c)}
             />
             <div className="grid gap-4 md:grid-cols-2">
               <NumberField

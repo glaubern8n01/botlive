@@ -112,3 +112,9 @@ alter table vigia_config
         check (max_posts_per_day_live >= 0);
 alter table vigia_streams
     add column if not exists uploads_done_live int not null default 0;
+
+-- 6) Migracao 13/07/2026 (noite) — Reels no Instagram no fluxo VOD.
+--    Reel e SEMPRE publico (API sem rascunho); so posta quando a trava do
+--    post VOD do YouTube liberar o job.
+alter table vigia_config
+    add column if not exists post_instagram_enabled boolean not null default false;

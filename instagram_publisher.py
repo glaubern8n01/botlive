@@ -303,6 +303,91 @@ def _video_vertical(registro: dict) -> Optional[Path]:
     return path if path.is_file() else None
 
 
+# ------------------------------------------------------ upload real (sub-etapa D)
+
+RUPLOAD_BASE = "https://rupload.facebook.com/ig-api-upload"
+_PUBLISH_POLL_SECONDS = 10
+_PUBLISH_POLL_MAX = 60  # ate 10min de processamento do Reel
+
+
+def _post_form(url: str, params: dict) -> dict:
+    corpo = urllib.parse.urlencode(params).encode("utf-8")
+    request = urllib.request.Request(url, data=corpo, method="POST")
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        with urllib.request.urlopen(request, timeout=60, context=_ssl_context()) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        corpo_erro = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Graph API HTTP {exc.code}: {corpo_erro}") from exc
+
+
+def _upload_binario(container_id: str, video_path: Path, token: str) -> None:
+    dados = video_path.read_bytes()
+    request = urllib.request.Request(
+        f"{RUPLOAD_BASE}/{GRAPH_VERSION}/{container_id}", data=dados, method="POST"
+    )
+    request.add_header("Authorization", f"OAuth {token}")
+    request.add_header("offset", "0")
+    request.add_header("file_size", str(len(dados)))
+    request.add_header("Content-Type", "application/octet-stream")
+    try:
+        with urllib.request.urlopen(request, timeout=600, context=_ssl_context()) as response:
+            corpo = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        corpo_erro = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"rupload HTTP {exc.code}: {corpo_erro}") from exc
+    if not corpo.get("success", True):
+        raise RuntimeError(f"rupload sem sucesso: {corpo}")
+    print(f"[ig-upload] {video_path.name}: {len(dados) / 1e6:.1f}MB enviados.")
+
+
+def _publicar_reel(registro: dict, video_path: Path, conta: str) -> dict:
+    """Container resumable -> upload binario -> poll -> media_publish."""
+    dados = _credenciais(conta)
+    base = _base(dados)
+    token = dados["access_token"]
+    ig_user_id = dados["ig_user_id"]
+
+    payload = montar_post(registro)
+    container = _post_form(
+        f"{base}/{ig_user_id}/media", {**payload, "access_token": token}
+    )
+    container_id = str(container["id"])
+    print(f"[ig-upload] container {container_id} criado; subindo binario...")
+    _upload_binario(container_id, video_path, token)
+
+    for tentativa in range(_PUBLISH_POLL_MAX):
+        status = _get(
+            f"{base}/{container_id}", {"fields": "status_code,status", "access_token": token}
+        )
+        code = status.get("status_code")
+        if code == "FINISHED":
+            break
+        if code in {"ERROR", "EXPIRED"}:
+            raise RuntimeError(f"processamento do Reel falhou: {status}")
+        if tentativa % 6 == 0:
+            print(f"[ig-upload] processando ({code})...")
+        time.sleep(_PUBLISH_POLL_SECONDS)
+    else:
+        raise RuntimeError(f"Reel nao ficou pronto em {_PUBLISH_POLL_MAX * _PUBLISH_POLL_SECONDS}s")
+
+    publicado = _post_form(
+        f"{base}/{ig_user_id}/media_publish",
+        {"creation_id": container_id, "access_token": token},
+    )
+    media_id = str(publicado["id"])
+    permalink = None
+    try:
+        permalink = _get(
+            f"{base}/{media_id}", {"fields": "permalink", "access_token": token}
+        ).get("permalink")
+    except RuntimeError:
+        pass  # permalink e cosmetico; o post ja esta publicado
+    print(f"[ig-upload] Reel publicado: {permalink or media_id}")
+    return {"media_id": media_id, "permalink": permalink}
+
+
 def postar_corte_registro(registro: dict, config) -> dict:
     """Contrato do plugin (ver social_publisher): publica o VERTICAL como Reel.
 
@@ -327,15 +412,18 @@ def postar_corte_registro(registro: dict, config) -> dict:
         }
         return resultado
 
-    # Upload real: sub-etapa D do plano (container resumable -> upload binario
-    # -> poll de status -> media_publish). Erro claro ate la; o social_publisher
-    # registra no publish.json e o pipeline nunca cai por causa disto.
-    erro = (
-        "upload real do Reel ainda nao implementado (sub-etapa D do plano Instagram); "
-        "rode com --post-dry-run ou aguarde a proxima sub-etapa"
-    )
-    resultado["reel"] = {"erro": erro, "arquivo": str(video_path)}
-    resultado["erro"] = erro
+    try:
+        publicado = _publicar_reel(registro, video_path, config.conta)
+        resultado["reel"] = {
+            "simulado": False,
+            "media_id": publicado["media_id"],
+            "permalink": publicado["permalink"],
+            "arquivo": str(video_path),
+            "payload": payload,
+        }
+    except Exception as exc:
+        resultado["reel"] = {"erro": str(exc), "arquivo": str(video_path)}
+        resultado["erro"] = str(exc)
     return resultado
 
 

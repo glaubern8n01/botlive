@@ -78,6 +78,11 @@ class VigiaConfig:
     # Teto proprio para a soma live+VOD nunca estourar a quota do YouTube.
     post_live_enabled: bool = False
     max_posts_per_day_live: int = 2
+    # Instagram/Reels: o gatilho e a APROVACAO MANUAL no YouTube — quando o
+    # Glauber muda um corte postado de private/unlisted para PUBLIC no Studio,
+    # o vigia detecta no ciclo seguinte e posta o vertical como Reel. Nenhum
+    # Reel sai sem essa aprovacao explicita (Reel e sempre publico na API).
+    post_instagram_enabled: bool = False
     credito_streamer: Optional[str] = None
     credito_canal: Optional[str] = "@GTA6brasilcortesoficial"
 
@@ -602,6 +607,92 @@ class Vigia:
         self._ledger_update(stream_id, {"vod_job_status": "running", "vod_url": vod_url})
         print(f"[vigia] VOD job iniciado: {row['channel_login']} pid={process.pid} log={log_path}")
 
+    # -------------------------------------------- promotor Instagram (aprovacao)
+
+    # Onde os publish.json dos cortes moram (live preview + VOD final).
+    PROMOTE_DIRS = ("cortes/live_preview", "cortes/ready_hd")
+
+    def _yt_publicos(self, video_ids: list[str]) -> Optional[set[str]]:
+        """Quais destes videos estao PUBLIC no YouTube (1 unidade por lote de 50).
+
+        None = nao deu pra apurar (tenta no proximo ciclo, nunca posta na duvida).
+        """
+        try:
+            from yt_publisher import _service
+
+            service = _service("principal")
+            publicos: set[str] = set()
+            for i in range(0, len(video_ids), 50):
+                resposta = (
+                    service.videos()
+                    .list(part="status", id=",".join(video_ids[i : i + 50]))
+                    .execute()
+                )
+                for item in resposta.get("items", []):
+                    if (item.get("status") or {}).get("privacyStatus") == "public":
+                        publicos.add(item["id"])
+            return publicos
+        except Exception as exc:
+            print(f"[vigia][insta] falha ao checar status no YouTube ({exc}); tento no proximo ciclo.")
+            return None
+
+    def _promover_instagram(self, config: VigiaConfig) -> None:
+        """Aprovou no YouTube, sai no Instagram.
+
+        Varre os publish.json dos cortes ja postados no YouTube e ainda sem
+        Reel; quando o Glauber muda um deles para PUBLIC no Studio, o vertical
+        e postado como Reel no ciclo seguinte. Idempotente pelo bloco
+        postagens.instagram do proprio json (erro e re-tentado; sucesso nunca
+        repete). Em dry-run nada e postado.
+        """
+        if not config.post_instagram_enabled or self.dry_run:
+            return
+        root = get_output_root()
+        candidatos: list[tuple[Path, dict, set[str]]] = []
+        for rel in self.PROMOTE_DIRS:
+            for json_path in sorted((root / rel).glob("*_publish.json")):
+                try:
+                    registro = json.loads(json_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                postagens = registro.get("postagens") or {}
+                instagram = postagens.get("instagram")
+                if instagram and not instagram.get("erro") and not instagram.get("dry_run"):
+                    continue  # Reel ja publicado
+                if not registro.get("vertical"):
+                    continue  # sem vertical nao ha Reel
+                youtube = postagens.get("youtube") or {}
+                if youtube.get("dry_run"):
+                    continue
+                ids = {
+                    (youtube.get(destino) or {}).get("video_id")
+                    for destino in ("horizontal", "vertical")
+                }
+                ids.discard(None)
+                if ids:
+                    candidatos.append((json_path, registro, ids))
+        if not candidatos:
+            return
+
+        todos = sorted({vid for _, _, ids in candidatos for vid in ids})
+        publicos = self._yt_publicos(todos)
+        if not publicos:
+            return
+        for json_path, registro, ids in candidatos:
+            if not (ids & publicos):
+                continue
+            print(f"[vigia][insta] corte aprovado no YouTube (public): {json_path.name}; postando Reel...")
+            try:
+                from social_publisher import SocialConfig, postar_redes
+
+                postar_redes(
+                    registro,
+                    SocialConfig(redes=("instagram",), conta="principal"),
+                    json_path=json_path,
+                )
+            except Exception as exc:  # nunca derruba o ciclo
+                print(f"[vigia][insta][falha] {json_path.name}: {exc}")
+
     def _colher_jobs(self) -> None:
         self._colher_de(self._running_vod_jobs, "vod_job_status", "uploads_done", "VOD")
         self._colher_de(self._running_live_jobs, "live_job_status", "uploads_done_live", "LIVE")
@@ -678,6 +769,10 @@ class Vigia:
             self._processar_vods(config)
         except TwitchAPIError as exc:
             print(f"[vigia] Helix falhou na busca de VOD: {exc}")
+        try:
+            self._promover_instagram(config)
+        except Exception as exc:  # promotor nunca derruba o ciclo
+            print(f"[vigia][insta] promotor falhou neste ciclo: {exc}")
         return max(config.poll_interval_seconds, 30)
 
 

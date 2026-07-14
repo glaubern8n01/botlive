@@ -40,17 +40,22 @@ def _publish_config_from_args(args: argparse.Namespace):
     """Monta a config da publicacao vertical. Sem --publish-vertical -> None,
     e o pipeline roda exatamente como hoje (o publisher nem e importado)."""
     if not args.publish_vertical:
-        if args.post_youtube:
-            raise SystemExit("--post-youtube requer --publish-vertical (o post usa o publish.json gerado por ele).")
+        if args.post_youtube or args.post_instagram:
+            raise SystemExit("--post-youtube/--post-instagram requerem --publish-vertical (o post usa o publish.json gerado por ele).")
         return None
     from publisher import PublishConfig
 
-    social = None
+    redes = []
     if args.post_youtube:
+        redes.append("youtube")
+    if args.post_instagram:
+        redes.append("instagram")
+    social = None
+    if redes:
         from social_publisher import SocialConfig
 
         social = SocialConfig(
-            redes=("youtube",),
+            redes=tuple(redes),
             dry_run=args.post_dry_run,
             visibilidade=args.post_visibilidade,
             conta=args.post_conta,
@@ -483,6 +488,12 @@ def main() -> None:
         action="store_true",
         help="OPT-IN: apos cada corte concluido, gera versao vertical 9:16 legendada + publish.json. "
         "Sem essa flag, o pipeline roda exatamente como hoje.",
+    )
+    parser.add_argument(
+        "--post-instagram",
+        action="store_true",
+        help="OPT-IN: posta o vertical 9:16 como Reel no Instagram (SEMPRE publico — "
+        "a plataforma nao tem rascunho via API). Requer --publish-vertical.",
     )
     parser.add_argument(
         "--post-youtube",
