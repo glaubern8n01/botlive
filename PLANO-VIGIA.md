@@ -85,7 +85,22 @@ desejável (hoje evitamos loop parando o serviço; o vigia é idempotente via
 | `helix/videos?user_id=X&type=archive&first=5` | achar o VOD pós-live | payload traz `stream_id` → match exato com a live vigiada |
 
 Campos que importam do Get Streams: `id` (**stream_id**, único por transmissão),
-`user_id`, `user_login`, `started_at`, `viewer_count`, `title`, `game_id`.
+`user_id`, `user_login`, `started_at`, `viewer_count`, `title`, `game_id`, `tags`.
+
+### LIMITAÇÃO Brasil × Portugal na descoberta (14/07/2026)
+O foco do canal é público **brasileiro**, mas `language="pt"` na Helix junta
+Brasil e Portugal: a Twitch tem **um único** broadcast language ("Português") e
+**não expõe país/região** do canal (removido há anos por privacidade). Não há
+filtro 100% técnico possível. O único sinal disponível são as `tags` freeform,
+inconsistentes — a maioria das lives só traz `"Português"` (ambígua, e
+majoritariamente BR porque a cena BR é muito maior que a PT).
+Mitigação implementada (`watcher.parece_portugal`, só na **descoberta**; lista
+manual intocada): **denylist de alta confiança** enviesada para PRECISÃO —
+exclui só com sinal forte de Portugal (nome de servidor RP PT como `PortugáliaRP`
+/`AtlanticRP` no título ou tags, ou login terminando em `_pt`) e **nunca** quando
+há marcador BR explícito (`Brasil`/`Br`/`PTBR`). PT que escapar vira rascunho que
+o Glauber não aprova (a revisão manual é a rede de segurança final). Ajustar as
+listas `PT_SERVER_MARKERS`/`PT_REGION_TAGS`/`BR_TAGS` no topo do `watcher.py`.
 
 ### Rate limit
 800 pontos/min por client-id (1 request ≈ 1 ponto). Nosso uso: 2–4 requests por

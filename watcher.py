@@ -40,6 +40,49 @@ UPLOAD_MARKER = "publicado ("  # linha do yt_publisher: "... publicado (unlisted
 END_MISS_CYCLES = 3  # ciclos consecutivos ausente antes de declarar fim de live
 END_GRACE_SECONDS = 240  # apos o fim declarado, prazo para a captura live morrer sozinha
 
+# --- Filtro Brasil x Portugal na DESCOBERTA (limitacao conhecida da Helix) ---
+# A descoberta pede language="pt", mas a Twitch NAO separa Brasil de Portugal:
+# o broadcast language e um so ("Portugues") e a Helix nao expoe pais/regiao do
+# canal (removido ha anos). O unico sinal disponivel sao as TAGS freeform do
+# stream, que sao inconsistentes: a maioria das lives so tem "Portugues"
+# (ambigua, e majoritariamente BR porque a cena BR e muito maior). Por isso o
+# filtro e uma DENYLIST de ALTA confianca, enviesada para PRECISAO: so exclui
+# quando ha sinal forte de Portugal (nome de servidor RP PT no titulo/tags, ou
+# login terminando em _pt) e NUNCA quando ha marcador BR explicito. E melhor
+# deixar passar um PT ocasional — que a revisao manual do Glauber barra antes de
+# publicar (rede de seguranca final) — do que perder um canal BR legitimo.
+# So se aplica a DESCOBERTA; a lista manual (vigia_channels) e curada e intocada.
+PT_SERVER_MARKERS = ("portugalia", "atlanticrp", "atlantic rp", "lusitania", "roleplaypt", "portugal rp")
+PT_REGION_TAGS = ("portugal", "portuguesa", "pt-pt")
+BR_TAGS = ("brasil", "brasileiro", "brasileira", "br", "ptbr", "pt-br")
+
+
+def _sem_acento(texto: str) -> str:
+    import unicodedata
+
+    return "".join(c for c in unicodedata.normalize("NFKD", texto.lower()) if not unicodedata.combining(c))
+
+
+def parece_portugal(stream: dict[str, Any]) -> bool:
+    """Heuristica de denylist para excluir lives de Portugal da descoberta.
+
+    Nao e um filtro preciso (a Helix nao da pais/regiao); ver o bloco de
+    constantes acima. Retorna True so em sinal de ALTA confianca de Portugal."""
+    tags = [_sem_acento(str(t)) for t in (stream.get("tags") or [])]
+    if any(t in BR_TAGS for t in tags):
+        return False  # marcador BR explicito vence sempre
+    login = _sem_acento(str(stream.get("user_login") or ""))
+    if login.endswith("_pt"):
+        return True
+    # Nome de servidor RP de Portugal e seguro como substring (titulo ou tag);
+    # NAO fazemos substring de "portugal" no titulo para nao pegar falso-positivo
+    # de live BR comentando futebol/Copa ("jogo de Portugal").
+    blob = _sem_acento(str(stream.get("title") or "")) + " " + " ".join(tags)
+    if any(marcador in blob for marcador in PT_SERVER_MARKERS):
+        return True
+    # Marcadores de regiao so como TAG EXATA (mais seguro que substring).
+    return any(t in PT_REGION_TAGS for t in tags)
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -286,6 +329,13 @@ class Vigia:
                 stream_id = str(stream["id"])
                 if stream_id in live_now:
                     continue  # canal manual tem prioridade na origem
+                if parece_portugal(stream):
+                    # Nao consome vaga: segue para o proximo (mais BR abaixo).
+                    print(
+                        f"[vigia][descoberta] {stream.get('user_login')} ignorado (sinal de Portugal); "
+                        f"tags={stream.get('tags')}"
+                    )
+                    continue
                 stream["_origin"] = "discovery"
                 live_now[stream_id] = stream
                 picked += 1
