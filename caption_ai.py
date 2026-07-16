@@ -41,6 +41,14 @@ HASHTAGS_FALLBACK_POR_NICHO = {
 }
 HASHTAGS_FALLBACK_GENERICO = ("#live", "#cortes", "#streamer")
 
+# Hashtags SEMPRE presentes por nicho: entram em TODO corte, somadas as que a
+# IA gera dinamicamente (nao substituem). Vem primeiro de proposito — sao as
+# que nunca podem cair no corte do HASHTAGS_MAX. O canal e de GTA6, entao
+# #gta6 vai em todo corte para pegar a busca/hype do lancamento.
+HASHTAGS_FIXAS_POR_NICHO = {
+    "gta": ("#gta6",),
+}
+
 _PROMPT_SISTEMA = (
     "Voce cria legendas clickbait curtas para cortes de streamer em portugues do Brasil."
 )
@@ -135,15 +143,33 @@ def _legenda_fallback(nicho: Optional[str], streamer: Optional[str], config_fall
     return base
 
 
+def _hashtags_fixas(nicho: Optional[str]) -> tuple[str, ...]:
+    return HASHTAGS_FIXAS_POR_NICHO.get(nicho or "", ())
+
+
+def _juntar_hashtags(*grupos: tuple[str, ...]) -> tuple[str, ...]:
+    """Concatena grupos na ordem dada, sem duplicata, respeitando HASHTAGS_MAX."""
+    saida: list[str] = []
+    for grupo in grupos:
+        for tag in grupo:
+            if tag not in saida:
+                saida.append(tag)
+            if len(saida) >= HASHTAGS_MAX:
+                return tuple(saida)
+    return tuple(saida)
+
+
 def _hashtags_fallback(nicho: Optional[str]) -> tuple[str, ...]:
-    return HASHTAGS_FALLBACK_POR_NICHO.get(nicho or "", HASHTAGS_FALLBACK_GENERICO)
+    base = HASHTAGS_FALLBACK_POR_NICHO.get(nicho or "", HASHTAGS_FALLBACK_GENERICO)
+    return _juntar_hashtags(_hashtags_fixas(nicho), base)
 
 
 def _sanitizar_hashtags(raw: Any, nicho: Optional[str]) -> tuple[str, ...]:
     """Normaliza a lista vinda da IA: #minusculo, sem espaco, sem duplicata.
 
-    Lista vazia/invalida cai nas hashtags fixas do nicho, para o post nunca
-    sair sem hashtag nenhuma.
+    As hashtags fixas do nicho (HASHTAGS_FIXAS_POR_NICHO) entram sempre, na
+    frente das da IA. Lista vazia/invalida cai nas hashtags fixas do nicho,
+    para o post nunca sair sem hashtag nenhuma.
     """
     if not isinstance(raw, (list, tuple)):
         return _hashtags_fallback(nicho)
@@ -157,7 +183,9 @@ def _sanitizar_hashtags(raw: Any, nicho: Optional[str]) -> tuple[str, ...]:
             limpas.append(tag)
         if len(limpas) >= HASHTAGS_MAX:
             break
-    return tuple(limpas) if limpas else _hashtags_fallback(nicho)
+    if not limpas:
+        return _hashtags_fallback(nicho)
+    return _juntar_hashtags(_hashtags_fixas(nicho), tuple(limpas))
 
 
 def _sanitizar_legenda(text: str) -> str:
