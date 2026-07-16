@@ -20,6 +20,7 @@ Escopo implementado (V3 + V4 + V5):
 """
 
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -39,6 +40,9 @@ STREAMS_TABLE = "vigia_streams"
 UPLOAD_MARKER = "publicado ("  # linha do yt_publisher: "... publicado (unlisted): url"
 END_MISS_CYCLES = 3  # ciclos consecutivos ausente antes de declarar fim de live
 END_GRACE_SECONDS = 240  # apos o fim declarado, prazo para a captura live morrer sozinha
+# Guarda de idade da varredura de cache orfao: nunca apagar blocos de um job
+# que possa estar rodando em paralelo (ex.: vod-clips manual via docker exec).
+CACHE_ORPHAN_MIN_AGE_SECONDS = 1800  # 30 min
 
 # --- Filtro Brasil x Portugal na DESCOBERTA (limitacao conhecida da Helix) ---
 # A descoberta pede language="pt", mas a Twitch NAO separa Brasil de Portugal:
@@ -82,6 +86,21 @@ def parece_portugal(stream: dict[str, Any]) -> bool:
         return True
     # Marcadores de regiao so como TAG EXATA (mais seguro que substring).
     return any(t in PT_REGION_TAGS for t in tags)
+
+
+def _tamanho_mb(path: Path) -> float:
+    """Tamanho aproximado de uma pasta em MB (best-effort, nunca levanta)."""
+    total = 0
+    try:
+        for item in path.rglob("*"):
+            try:
+                if item.is_file():
+                    total += item.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        return 0.0
+    return total / (1024 * 1024)
 
 
 def _utc_now() -> datetime:
@@ -682,7 +701,11 @@ class Vigia:
     # -------------------------------------------- promotor Instagram (aprovacao)
 
     # Onde os publish.json dos cortes moram (live preview + VOD final).
-    PROMOTE_DIRS = ("cortes/live_preview", "cortes/ready_hd")
+    # needs_review entra aqui porque o corte que o filtro de nicho manda para
+    # revisao TAMBEM e postavel: se o Glauber publicar ele no Studio, tem que
+    # virar Reel como qualquer outro (sem isso o promotor ficava cego pra essa
+    # pasta e o corte nunca saia no Instagram).
+    PROMOTE_DIRS = ("cortes/live_preview", "cortes/ready_hd", "cortes/needs_review")
 
     def _yt_publicos(self, video_ids: list[str]) -> Optional[set[str]]:
         """Quais destes videos estao PUBLIC no YouTube (1 unidade por lote de 50).
@@ -812,6 +835,70 @@ class Vigia:
                     },
                 )
                 print(f"[vigia] {label} job FALHOU (exit={process.returncode}): ver {log_path}")
+            # Job terminou (ok OU falha): os blocos em cache dele viraram lixo.
+            # Sempre por ultimo — a indexacao acima le o fila_local, nunca o cache.
+            self._limpar_cache_sessao(session_id)
+
+    # -------------------------------------------------------------- cache
+
+    def _limpar_cache_sessao(self, session_id: str) -> None:
+        """Apaga os blocos em cache desta sessao (o job dela ja terminou).
+
+        O cache (cache/vod_blocks/<sessao>, cache/live_blocks/<sessao>) e dado
+        DERIVADO: quando o job termina, os cortes ja estao renderizados em
+        cortes/ e os blocos nao servem mais para nada. Sem esta limpeza o disco
+        enche — incidente de 15/07/2026: 170G de cache lotaram a VPS (193G) e
+        derrubaram TODOS os servicos, inclusive o EasyPanel.
+
+        CIRURGICO por sessao de proposito: NUNCA usar clipper.limpar_cache(),
+        que apaga o cache inteiro e destruiria os blocos de jobs concorrentes
+        (o vigia roda ate max_concurrent_captures capturas + 1 render juntos).
+        Falha aqui nunca derruba a colheita: no pior caso sobra lixo no disco,
+        que a varredura de orfaos do proximo boot recolhe.
+        """
+        try:
+            from runtime_paths import live_blocks_dir, vod_blocks_dir
+
+            for base in (vod_blocks_dir(), live_blocks_dir()):
+                alvo = base / session_id
+                if not alvo.is_dir():
+                    continue
+                liberado = _tamanho_mb(alvo)
+                shutil.rmtree(alvo, ignore_errors=True)
+                print(f"[vigia][cache] sessao {session_id}: {liberado:.0f} MB liberados ({base.name}).")
+        except Exception as exc:
+            print(f"[vigia][cache] falha ao limpar cache de {session_id} ({exc}); orfao sera recolhido no boot.")
+
+    def _varrer_cache_orfao(self) -> None:
+        """No boot: blocos de sessoes cujos jobs morreram com o processo anterior.
+
+        Restart do container mata todo subprocesso junto (a varredura de orfaos
+        do ledger ja assume isso), entao todo bloco em cache e orfao. A guarda
+        de idade (CACHE_ORPHAN_MIN_AGE_SECONDS) existe para nunca pisar no cache
+        de um job manual rodando em paralelo via docker exec.
+        """
+        try:
+            from runtime_paths import live_blocks_dir, vod_blocks_dir
+
+            agora = time.time()
+            total = 0.0
+            for base in (vod_blocks_dir(), live_blocks_dir()):
+                if not base.is_dir():
+                    continue
+                for alvo in base.iterdir():
+                    if not alvo.is_dir():
+                        continue
+                    try:
+                        if (agora - alvo.stat().st_mtime) < CACHE_ORPHAN_MIN_AGE_SECONDS:
+                            continue  # pode ser job ativo; nao toca
+                    except OSError:
+                        continue
+                    total += _tamanho_mb(alvo)
+                    shutil.rmtree(alvo, ignore_errors=True)
+            if total:
+                print(f"[vigia][cache] varredura de orfaos no boot: {total:.0f} MB liberados.")
+        except Exception as exc:
+            print(f"[vigia][cache] varredura de cache orfao falhou ({exc}); segue o ciclo.")
 
     def _indexar_live_clips(self, stream_id: str, session_id: str) -> None:
         """V6: grava no vigia_clip_index os previews do modo live desta sessao.
@@ -876,6 +963,7 @@ class Vigia:
 
         if not self._orphan_sweep_done:
             self._varrer_orfaos()
+            self._varrer_cache_orfao()
         self._colher_jobs()
         try:
             live_now, visao_completa = self._detectar_lives(config)
