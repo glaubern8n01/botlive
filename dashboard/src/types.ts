@@ -88,3 +88,63 @@ export type VigiaClipIndex = {
   corte_ref: string | null;
   created_at: string;
 };
+
+export type ProfileSource = {
+  id: string;
+  profile_id: string;
+  source_type: string;
+  source_ref: string;
+  enabled: boolean;
+  settings: Record<string, unknown>;
+};
+
+export type PlatformAccount = {
+  id: string;
+  platform: string;
+  account_key: string;
+  display_name: string | null;
+  status: 'not_configured' | 'pending' | 'connected' | 'disconnected' | 'error';
+};
+
+export type ProfileDestination = {
+  id: string;
+  profile_id: string;
+  platform: string;
+  account_id: string | null;
+  enabled: boolean;
+  publication_mode: 'disabled' | 'manual' | 'approval' | 'automatic';
+  max_posts_per_day: number | null;
+  schedule: Record<string, unknown>;
+  settings: Record<string, unknown>;
+  platform_accounts: PlatformAccount | null;
+};
+
+export type ProfileRenderSettings = {
+  profile_id: string;
+  aspect_ratio: 'original' | '9:16';
+  layout: 'original' | 'vertical-fit' | 'vertical-crop';
+  min_duration_seconds: number;
+  max_duration_seconds: number;
+  target_height: number | null;
+  captions_enabled: boolean;
+  headline_enabled: boolean;
+  brand: string | null;
+  cta: string | null;
+  settings: Record<string, unknown>;
+};
+
+export type Profile = {
+  profile_id: string;
+  name: string;
+  description: string | null;
+  niche: string | null;
+  editorial_strategy: string;
+  language: string;
+  enabled: boolean;
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  profile_sources: ProfileSource[];
+  profile_destinations: ProfileDestination[];
+  profile_render_settings: ProfileRenderSettings | null;
+};
