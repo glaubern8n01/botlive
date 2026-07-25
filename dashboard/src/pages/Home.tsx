@@ -10,6 +10,10 @@ type Stats = {
   livesToday: number;
   capturesRunning: number;
   uploadsToday: number;
+  activeProfiles: number;
+  queuePending: number;
+  publishedToday: number;
+  publicationErrors: number;
 };
 
 export function Home() {
@@ -21,6 +25,10 @@ export function Home() {
     livesToday: 0,
     capturesRunning: 0,
     uploadsToday: 0,
+    activeProfiles: 0,
+    queuePending: 0,
+    publishedToday: 0,
+    publicationErrors: 0,
   });
 
   useEffect(() => {
@@ -74,11 +82,24 @@ export function Home() {
           0,
         );
 
+        // O pipeline novo é aditivo. Se as migrations ainda não foram
+        // aplicadas, estes contadores ficam em zero e o painel legado segue.
+        const [profilesResult, pendingResult, publishedResult, failedResult] = await Promise.all([
+          supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('enabled', true),
+          supabase.from('publication_jobs').select('*', { count: 'exact', head: true }).in('status', ['pending', 'ready', 'retry_wait']),
+          supabase.from('publication_jobs').select('*', { count: 'exact', head: true }).eq('status', 'published').gte('published_at', todayIso),
+          supabase.from('publication_jobs').select('*', { count: 'exact', head: true }).eq('status', 'failed'),
+        ]);
+
         setStats({
           activeChannels: channelsCount || 0,
           livesToday: livesCount || 0,
           capturesRunning: runningCount || 0,
           uploadsToday,
+          activeProfiles: profilesResult.error ? 0 : profilesResult.count || 0,
+          queuePending: pendingResult.error ? 0 : pendingResult.count || 0,
+          publishedToday: publishedResult.error ? 0 : publishedResult.count || 0,
+          publicationErrors: failedResult.error ? 0 : failedResult.count || 0,
         });
       } catch (err) {
         console.error(err);
@@ -138,6 +159,22 @@ export function Home() {
       </Card>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-zinc-400">Perfis ativos</CardTitle></CardHeader>
+          <CardContent><div className="text-2xl font-bold">{stats.activeProfiles}</div><p className="text-xs text-zinc-500 mt-1">Configuração multi-perfil</p></CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-zinc-400">Fila pendente</CardTitle></CardHeader>
+          <CardContent><div className="text-2xl font-bold">{stats.queuePending}</div><p className="text-xs text-zinc-500 mt-1">Pending, ready e retry_wait</p></CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-zinc-400">Publicados hoje</CardTitle></CardHeader>
+          <CardContent><div className="text-2xl font-bold text-emerald-400">{stats.publishedToday}</div><p className="text-xs text-zinc-500 mt-1">Fila persistente</p></CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-zinc-400">Erros de publicação</CardTitle></CardHeader>
+          <CardContent><div className={`text-2xl font-bold ${stats.publicationErrors ? 'text-red-400' : ''}`}>{stats.publicationErrors}</div><p className="text-xs text-zinc-500 mt-1">Jobs em failed</p></CardContent>
+        </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-zinc-400">Postagem no YouTube</CardTitle>

@@ -7,6 +7,9 @@ import { Canais } from "./pages/Canais";
 import { Historico } from "./pages/Historico";
 import { Cortes } from "./pages/Cortes";
 import { Perfis } from "./pages/Perfis";
+import { Fila } from "./pages/Fila";
+import { Contas } from "./pages/Contas";
+import { Metricas } from "./pages/Metricas";
 
 export default function App() {
   return (
@@ -20,6 +23,9 @@ export default function App() {
             <Route path="historico" element={<Historico />} />
             <Route path="cortes" element={<Cortes />} />
             <Route path="perfis" element={<Perfis />} />
+            <Route path="fila" element={<Fila />} />
+            <Route path="contas" element={<Contas />} />
+            <Route path="metricas" element={<Metricas />} />
           </Route>
         </Routes>
       </AuthWrapper>

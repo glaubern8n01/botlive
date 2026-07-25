@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router';
-import { LayoutDashboard, Settings2, Users, History, Scissors, LogOut, Layers3 } from 'lucide-react';
+import { LayoutDashboard, Settings2, Users, History, Scissors, LogOut, Layers3, ListVideo, KeyRound, BarChart3 } from 'lucide-react';
 
 export function Layout() {
   const handleLogout = () => {
@@ -12,6 +12,9 @@ export function Layout() {
     { to: "/configuracao", icon: Settings2, label: "Configuração" },
     { to: "/canais", icon: Users, label: "Canais" },
     { to: "/perfis", icon: Layers3, label: "Perfis" },
+    { to: "/fila", icon: ListVideo, label: "Fila" },
+    { to: "/contas", icon: KeyRound, label: "Contas" },
+    { to: "/metricas", icon: BarChart3, label: "Métricas" },
     { to: "/historico", icon: History, label: "Histórico" },
     { to: "/cortes", icon: Scissors, label: "Índice de Cortes" },
   ];

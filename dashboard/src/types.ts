@@ -148,3 +148,74 @@ export type Profile = {
   profile_destinations: ProfileDestination[];
   profile_render_settings: ProfileRenderSettings | null;
 };
+
+export type SafePlatformAccount = PlatformAccount & {
+  secret_configured: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PublicationJobStatus =
+  | 'pending'
+  | 'validating'
+  | 'ready'
+  | 'uploading'
+  | 'processing'
+  | 'published'
+  | 'retry_wait'
+  | 'rejected'
+  | 'cancelled'
+  | 'failed';
+
+export type PublicationAttempt = {
+  attempt_id: number;
+  job_id: string;
+  attempt_number: number;
+  worker_id: string | null;
+  status: string;
+  error_type: string | null;
+  error_message: string | null;
+  external_id: string | null;
+  remote_status: string | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+};
+
+export type PublicationJob = {
+  job_id: string;
+  profile_id: string;
+  event_id: string | null;
+  variant_id: string | null;
+  asset_id: string;
+  destination_id: string;
+  platform: string;
+  account_id: string | null;
+  status: PublicationJobStatus;
+  publication_key: string;
+  title: string | null;
+  caption: string | null;
+  cover_path: string | null;
+  scheduled_at: string | null;
+  next_attempt_at: string | null;
+  attempts: number;
+  max_attempts: number;
+  worker_id: string | null;
+  external_id: string | null;
+  remote_status: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  published_at: string | null;
+  media_assets: {
+    path: string;
+    width: number;
+    height: number;
+    duration: number;
+    validation_status: string;
+  } | null;
+  platform_accounts: {
+    account_key: string;
+    display_name: string | null;
+  } | null;
+};
