@@ -80,6 +80,7 @@ class DestinationConfig:
     max_attempts: int = 3
     schedule: Mapping[str, Any] = field(default_factory=dict)
     settings: Mapping[str, Any] = field(default_factory=dict)
+    destination_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.platform.strip() or not self.account_key.strip():

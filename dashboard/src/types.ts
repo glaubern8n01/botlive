@@ -114,6 +114,12 @@ export type ProfileDestination = {
   enabled: boolean;
   publication_mode: 'disabled' | 'manual' | 'approval' | 'automatic';
   max_posts_per_day: number | null;
+  minimum_interval_seconds: number;
+  allowed_hours: number[];
+  timezone: string;
+  max_pending_jobs: number | null;
+  max_attempts: number;
+  publisher_options: Record<string, unknown>;
   schedule: Record<string, unknown>;
   settings: Record<string, unknown>;
   platform_accounts: PlatformAccount | null;

@@ -151,7 +151,7 @@ class PublicationPlanner:
                     "secret_ref": account.secret_ref,
                     "publish_mode": mode,
                     "publisher_options": dict(effective_account.options),
-                    "destination_id": destination.settings.get("destination_id"),
+                    "destination_id": destination.destination_id,
                 },
             )
             queued, was_created = self.queue.enqueue(

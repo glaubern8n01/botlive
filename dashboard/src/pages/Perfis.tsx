@@ -39,6 +39,11 @@ type ProfileForm = {
   destination_account_ids: string[];
   publication_mode: PublicationMode;
   max_posts_per_day: number;
+  minimum_interval_seconds: number;
+  allowed_hours: string;
+  timezone: string;
+  max_pending_jobs: number;
+  max_attempts: number;
 };
 
 const EMPTY_FORM: ProfileForm = {
@@ -63,6 +68,11 @@ const EMPTY_FORM: ProfileForm = {
   destination_account_ids: [],
   publication_mode: 'disabled',
   max_posts_per_day: 0,
+  minimum_interval_seconds: 0,
+  allowed_hours: '',
+  timezone: 'UTC',
+  max_pending_jobs: 0,
+  max_attempts: 3,
 };
 
 function relationOne<T>(value: T | T[] | null | undefined): T | null {
@@ -114,6 +124,11 @@ function profileToForm(profile: Profile): ProfileForm {
       .filter((id): id is string => Boolean(id)),
     publication_mode: representative?.publication_mode || 'disabled',
     max_posts_per_day: representative?.max_posts_per_day ?? 0,
+    minimum_interval_seconds: representative?.minimum_interval_seconds ?? 0,
+    allowed_hours: (representative?.allowed_hours || []).join(','),
+    timezone: representative?.timezone || 'UTC',
+    max_pending_jobs: representative?.max_pending_jobs ?? 0,
+    max_attempts: representative?.max_attempts ?? 3,
   };
 }
 
@@ -270,6 +285,14 @@ export function Perfis() {
             enabled: form.publication_mode !== 'disabled',
             publication_mode: form.publication_mode,
             max_posts_per_day: form.max_posts_per_day || null,
+            minimum_interval_seconds: form.minimum_interval_seconds,
+            allowed_hours: form.allowed_hours
+              .split(',')
+              .map((hour) => Number(hour.trim()))
+              .filter((hour) => Number.isInteger(hour) && hour >= 0 && hour <= 23),
+            timezone: form.timezone.trim() || 'UTC',
+            max_pending_jobs: form.max_pending_jobs || null,
+            max_attempts: form.max_attempts,
           })),
         );
         if (destinationResult.error) throw destinationResult.error;
@@ -462,6 +485,15 @@ export function Perfis() {
                     onChange={(value) => setForm({ ...form, publication_mode: value as PublicationMode })}
                   />
                   <NumberField label="Máximo por dia" value={form.max_posts_per_day} min={0} onChange={(value) => setForm({ ...form, max_posts_per_day: value })} />
+                  <NumberField label="Intervalo mínimo (s)" value={form.minimum_interval_seconds} min={0} onChange={(value) => setForm({ ...form, minimum_interval_seconds: value })} />
+                  <NumberField label="Máximo pendentes" value={form.max_pending_jobs} min={0} onChange={(value) => setForm({ ...form, max_pending_jobs: value })} />
+                  <NumberField label="Máximo tentativas" value={form.max_attempts} min={1} onChange={(value) => setForm({ ...form, max_attempts: value })} />
+                  <Field label="Horários permitidos (0–23)">
+                    <Input value={form.allowed_hours} onChange={(event) => setForm({ ...form, allowed_hours: event.target.value })} placeholder="Ex.: 9,12,18,21" />
+                  </Field>
+                  <Field label="Timezone">
+                    <Input value={form.timezone} onChange={(event) => setForm({ ...form, timezone: event.target.value })} placeholder="America/Sao_Paulo" />
+                  </Field>
                 </div>
               </section>
 
