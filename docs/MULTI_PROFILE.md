@@ -12,7 +12,8 @@ YouTube/Instagram continuam usando as flags e a conta do fluxo legado.
 - A migração não sobrescreve o perfil `default` caso ele já exista.
 - Com as tabelas novas ausentes, os fluxos CLI/Vigia atuais continuam iguais; só
   a página **Perfis** informa que a migração precisa ser aplicada.
-- Nesta fase não há publisher Kwai, fila de publicação, CUT ou Narrastars.
+- O fluxo legado continua independente. Fila, Kwai, CUT e Narrastars são
+  módulos posteriores opt-in e permanecem inertes com as feature flags desligadas.
 
 ## Modelos Python
 
@@ -65,6 +66,10 @@ A rota `/perfis` lê exclusivamente as tabelas novas e permite:
 
 O frontend seleciona apenas metadados públicos das contas. `secret_ref` não é
 consultado nem exibido.
+
+`PublicationPlanner` transforma uma variante/asset em um job por destino ativo.
+Limite diário, intervalo mínimo, horários, timezone, máximo de pendentes e
+tentativas pertencem ao destino, não a uma conta global.
 
 ## Rollback
 
