@@ -126,7 +126,9 @@ declare
 begin
     select job_id into claimed_id
     from public.publication_jobs
-    where status in ('pending', 'ready', 'retry_wait', 'processing')
+    where status in (
+        'pending', 'validating', 'ready', 'uploading', 'processing', 'retry_wait'
+    )
       and attempts < max_attempts
       and coalesce(scheduled_at, now()) <= now()
       and coalesce(next_attempt_at, now()) <= now()
@@ -144,7 +146,10 @@ begin
     set worker_id = p_worker_id,
         locked_at = now(),
         lock_expires_at = now() + make_interval(secs => greatest(30, p_lock_seconds)),
-        status = case when status = 'processing' then 'processing' else 'validating' end,
+        status = case
+            when status in ('uploading', 'processing') then 'processing'
+            else 'validating'
+        end,
         attempts = attempts + 1,
         updated_at = now()
     where job_id = claimed_id

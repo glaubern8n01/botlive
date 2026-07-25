@@ -10,7 +10,14 @@ from uuid import uuid4
 from publisher_contract import PublishJob
 
 
-ELIGIBLE_STATUSES = {"pending", "ready", "retry_wait", "processing"}
+ELIGIBLE_STATUSES = {
+    "pending",
+    "validating",
+    "ready",
+    "uploading",
+    "processing",
+    "retry_wait",
+}
 TERMINAL_STATUSES = {"published", "rejected", "cancelled", "failed"}
 
 
