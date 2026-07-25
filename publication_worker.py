@@ -85,8 +85,18 @@ class PublicationWorker:
                 if job.account.secret_ref
                 else {}
             )
-            self.queue.mark(job.job_id, "uploading")
-            result = publisher.publish(job, secret_values)
+            if item.status == "processing":
+                if not item.external_id:
+                    raise PermanentPublishError(
+                        "uncertain remote upload state without external_id; "
+                        "manual reconciliation required to avoid duplicate publication"
+                    )
+                result = publisher.get_status(
+                    item.external_id, job.account, secret_values
+                )
+            else:
+                self.queue.mark(job.job_id, "uploading")
+                result = publisher.publish(job, secret_values)
             status = (
                 "published"
                 if result.status == PublishStatus.PUBLISHED

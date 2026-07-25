@@ -104,15 +104,15 @@ class InMemoryPublicationQueue:
     def mark(self, job_id: str, status: str, **fields: Any) -> QueuedPublication:
         with self._lock:
             item = self._items[job_id]
-            updated = replace(
-                item,
-                status=status,
-                worker_id=None if status in TERMINAL_STATUSES | {"retry_wait"} else item.worker_id,
-                locked_at=None if status in TERMINAL_STATUSES | {"retry_wait"} else item.locked_at,
-                lock_expires_at=None if status in TERMINAL_STATUSES | {"retry_wait"} else item.lock_expires_at,
-                updated_at=self._clock(),
+            values = {
+                "status": status,
+                "worker_id": None if status in TERMINAL_STATUSES | {"retry_wait"} else item.worker_id,
+                "locked_at": None if status in TERMINAL_STATUSES | {"retry_wait"} else item.locked_at,
+                "lock_expires_at": None if status in TERMINAL_STATUSES | {"retry_wait"} else item.lock_expires_at,
+                "updated_at": self._clock(),
                 **fields,
-            )
+            }
+            updated = replace(item, **values)
             self._items[job_id] = updated
             return updated
 

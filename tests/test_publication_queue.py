@@ -79,7 +79,7 @@ class _FakePublisher:
         return PublishResult.published("external-1")
 
     def get_status(self, *_args):
-        raise NotImplementedError
+        return PublishResult.published("external-1")
 
 
 class _Secrets:
@@ -123,3 +123,36 @@ def test_cancelled_job_is_not_claimed() -> None:
     queue.enqueue(_item())
     queue.mark("job-key", "cancelled")
     assert queue.claim("worker") is None
+
+
+def test_worker_checks_remote_status_instead_of_reuploading_after_restart() -> None:
+    queue = InMemoryPublicationQueue(clock=lambda: NOW)
+    queue.enqueue(_item())
+    claimed = queue.claim("old-worker")
+    queue.mark(
+        claimed.job.job_id,
+        "processing",
+        external_id="external-1",
+        lock_expires_at=NOW - timedelta(seconds=1),
+    )
+    publisher = _FakePublisher()
+    publisher.publish = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("must not publish again")
+    )
+    _worker(queue, publisher).run_once()
+    assert queue.get("job-key").status == "published"
+
+
+def test_worker_never_reuploads_uncertain_remote_state() -> None:
+    queue = InMemoryPublicationQueue(clock=lambda: NOW)
+    queue.enqueue(_item())
+    claimed = queue.claim("old-worker")
+    queue.mark(
+        claimed.job.job_id,
+        "processing",
+        lock_expires_at=NOW - timedelta(seconds=1),
+    )
+    _worker(queue, _FakePublisher()).run_once()
+    job = queue.get("job-key")
+    assert job.status == "failed"
+    assert "manual reconciliation" in job.last_error
