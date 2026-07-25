@@ -31,6 +31,7 @@ from secret_provider import (
     EnvironmentSecretProvider,
     LocalTokenSecretProvider,
 )
+from kwai_publisher import KwaiPublisher
 
 
 LOGGER = logging.getLogger("botlive.publication_worker")
@@ -172,9 +173,12 @@ def main() -> None:
     if client is None:
         raise SystemExit("Supabase não configurado; worker requer fila persistente.")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    registry = legacy_registry()
+    if flags.kwai:
+        registry.register(KwaiPublisher(flags))
     worker = PublicationWorker(
         SupabasePublicationQueue(client),
-        legacy_registry(),
+        registry,
         CompositeSecretProvider(EnvironmentSecretProvider(), LocalTokenSecretProvider()),
         dry_run=args.dry_run,
     )
