@@ -73,6 +73,11 @@ class DestinationConfig:
     enabled: bool = False
     publication_mode: str = "disabled"
     max_posts_per_day: Optional[int] = None
+    minimum_interval_seconds: int = 0
+    allowed_hours: tuple[int, ...] = ()
+    timezone: str = "UTC"
+    max_pending_jobs: Optional[int] = None
+    max_attempts: int = 3
     schedule: Mapping[str, Any] = field(default_factory=dict)
     settings: Mapping[str, Any] = field(default_factory=dict)
 
@@ -83,6 +88,14 @@ class DestinationConfig:
             raise ValueError(f"unsupported publication mode: {self.publication_mode}")
         if self.max_posts_per_day is not None and self.max_posts_per_day < 0:
             raise ValueError("maximum posts per day must be non-negative")
+        if self.minimum_interval_seconds < 0:
+            raise ValueError("minimum publication interval must be non-negative")
+        if any(hour < 0 or hour > 23 for hour in self.allowed_hours):
+            raise ValueError("allowed publication hours must be between 0 and 23")
+        if self.max_pending_jobs is not None and self.max_pending_jobs < 0:
+            raise ValueError("maximum pending jobs must be non-negative")
+        if self.max_attempts <= 0:
+            raise ValueError("maximum attempts must be positive")
 
 
 @dataclass(frozen=True)
