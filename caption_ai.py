@@ -3,15 +3,18 @@ from __future__ import annotations
 import json
 import os
 import re
+import ssl
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Optional
 
 
 # Cliente generico de IA de texto para gerar a legenda clickbait a partir da
-# FALA transcrita do corte. Suporta dois formatos de API:
+# FALA transcrita do corte. Suporta tres formatos de API:
+#   - gemini: generateContent nativo do Google;
 #   - openai: endpoint OpenAI-compatible (OpenAI, DeepSeek, Groq, OpenRouter...);
 #   - anthropic: /v1/messages com headers x-api-key + anthropic-version.
 # Regras de ouro:
@@ -21,6 +24,8 @@ from typing import Any, Optional
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_TIMEOUT_SECONDS = 25
 LEGENDA_MAX_CHARS = 70
@@ -102,6 +107,15 @@ def _carregar_dotenv() -> None:
         pass
 
 
+def _ssl_context() -> ssl.SSLContext:
+    """Valida CA/hostname, tolerando CAs corporativas antigas no Python 3.14."""
+    context = ssl.create_default_context()
+    strict = getattr(ssl, "VERIFY_X509_STRICT", 0)
+    if strict:
+        context.verify_flags &= ~strict
+    return context
+
+
 def _detectar_provider(api_key: Optional[str], base_url: Optional[str]) -> str:
     explicit = (os.environ.get("PUBLISH_AI_PROVIDER") or "").strip().lower()
     if explicit in {"anthropic", "openai"}:
@@ -132,6 +146,40 @@ def _config() -> dict[str, Any]:
         "timeout": float(os.environ.get("PUBLISH_AI_TIMEOUT_SECONDS") or DEFAULT_TIMEOUT_SECONDS),
         "fallback": os.environ.get("PUBLISH_AI_FALLBACK_LEGENDA") or None,
     }
+
+
+def _configs() -> list[dict[str, Any]]:
+    """Monta a ordem de tentativa: todas as chaves Gemini, depois o legado.
+
+    GEMINI_API_KEYS aceita uma lista separada por virgula. PUBLISH_AI_* continua
+    sendo o fallback pago (normalmente Claude) e segue compativel com setups
+    antigos que ainda nao configuraram Gemini.
+    """
+    _carregar_dotenv()
+    timeout = float(os.environ.get("PUBLISH_AI_TIMEOUT_SECONDS") or DEFAULT_TIMEOUT_SECONDS)
+    fallback = os.environ.get("PUBLISH_AI_FALLBACK_LEGENDA") or None
+    gemini_keys = [
+        key.strip()
+        for key in (os.environ.get("GEMINI_API_KEYS") or "").split(",")
+        if key.strip()
+    ]
+    configs = [
+        {
+            "provider": "gemini",
+            "api_key": key,
+            "base_url": (
+                os.environ.get("GEMINI_BASE_URL") or DEFAULT_GEMINI_BASE_URL
+            ).rstrip("/"),
+            "model": os.environ.get("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL,
+            "timeout": timeout,
+            "fallback": fallback,
+        }
+        for key in gemini_keys
+    ]
+    legacy = _config()
+    if legacy["api_key"] and legacy["model"]:
+        configs.append(legacy)
+    return configs
 
 
 def _legenda_fallback(nicho: Optional[str], streamer: Optional[str], config_fallback: Optional[str]) -> str:
@@ -239,7 +287,9 @@ def _chamar_api_anthropic(transcricao: str, nicho: Optional[str], config: dict[s
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=config["timeout"]) as response:
+    with urllib.request.urlopen(
+        request, timeout=config["timeout"], context=_ssl_context()
+    ) as response:
         body = json.loads(response.read().decode("utf-8"))
     if body.get("stop_reason") == "refusal":
         raise RuntimeError("api recusou a solicitacao (stop_reason=refusal)")
@@ -248,6 +298,48 @@ def _chamar_api_anthropic(transcricao: str, nicho: Optional[str], config: dict[s
     )
     usage = body.get("usage") or {}
     return content, int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
+
+
+def _chamar_api_gemini(
+    transcricao: str, nicho: Optional[str], config: dict[str, Any]
+) -> tuple[str, int, int]:
+    """POST generateContent do Gemini. Retorna (texto, tokens entrada, saida)."""
+    payload = {
+        "system_instruction": {"parts": [{"text": _PROMPT_SISTEMA}]},
+        "contents": [
+            {"role": "user", "parts": [{"text": _prompt_usuario(transcricao, nicho)}]}
+        ],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 220,
+            "responseMimeType": "application/json",
+        },
+    }
+    model = urllib.parse.quote(config["model"], safe="")
+    request = urllib.request.Request(
+        f"{config['base_url']}/models/{model}:generateContent",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "X-goog-api-key": config["api_key"],
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(
+        request, timeout=config["timeout"], context=_ssl_context()
+    ) as response:
+        body = json.loads(response.read().decode("utf-8"))
+    candidates = body.get("candidates") or []
+    if not candidates:
+        raise RuntimeError("Gemini nao retornou candidatos")
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    content = "".join(str(part.get("text") or "") for part in parts)
+    usage = body.get("usageMetadata") or {}
+    return (
+        content,
+        int(usage.get("promptTokenCount") or 0),
+        int(usage.get("candidatesTokenCount") or 0),
+    )
 
 
 def _chamar_api(transcricao: str, nicho: Optional[str], config: dict[str, Any]) -> tuple[dict, dict]:
@@ -269,7 +361,9 @@ def _chamar_api(transcricao: str, nicho: Optional[str], config: dict[str, Any]) 
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=config["timeout"]) as response:
+    with urllib.request.urlopen(
+        request, timeout=config["timeout"], context=_ssl_context()
+    ) as response:
         body = json.loads(response.read().decode("utf-8"))
     usage = body.get("usage") or {}
     return body, usage
@@ -285,53 +379,74 @@ def gerar_legenda(
     Sem fala -> fallback sem gastar API. Sem chave ou erro de API -> fallback.
     weak=True sinaliza corte sem drama (fala fraca) para o publish.json.
     """
-    config = _config()
-    fallback = _legenda_fallback(nicho, streamer, config["fallback"])
+    configs = _configs()
+    config_fallback = configs[0]["fallback"] if configs else (
+        os.environ.get("PUBLISH_AI_FALLBACK_LEGENDA") or None
+    )
+    fallback = _legenda_fallback(nicho, streamer, config_fallback)
     hashtags_fallback = _hashtags_fallback(nicho)
 
     if not (transcricao or "").strip():
         return LegendaResultado(legenda=fallback, source="sem_fala", hashtags=hashtags_fallback)
 
-    if not config["api_key"] or not config["model"]:
-        missing = "PUBLISH_AI_API_KEY" if not config["api_key"] else "PUBLISH_AI_MODEL"
+    if not configs:
         return LegendaResultado(
-            legenda=fallback, source="fallback", hashtags=hashtags_fallback, error=f"{missing} ausente"
+            legenda=fallback,
+            source="fallback",
+            hashtags=hashtags_fallback,
+            error="GEMINI_API_KEYS e PUBLISH_AI_API_KEY/PUBLISH_AI_MODEL ausentes",
         )
 
-    try:
-        if config["provider"] == "anthropic":
-            content, prompt_tokens, completion_tokens = _chamar_api_anthropic(transcricao, nicho, config)
-        else:
-            body, usage = _chamar_api(transcricao, nicho, config)
-            content = body["choices"][0]["message"]["content"]
-            prompt_tokens = int(usage.get("prompt_tokens") or 0)
-            completion_tokens = int(usage.get("completion_tokens") or 0)
-        data = _extrair_json(content)
-        if data and data.get("legenda"):
-            legenda = _sanitizar_legenda(str(data["legenda"]))
-            weak = str(data.get("forca", "")).strip().lower() == "fraco"
-            hashtags = _sanitizar_hashtags(data.get("hashtags"), nicho)
-        else:
-            # JSON quebrado: usa o texto cru como legenda, melhor que fallback.
-            legenda = _sanitizar_legenda(content)
-            weak = False
-            hashtags = hashtags_fallback
-        if not legenda:
+    errors: list[str] = []
+    for config in configs:
+        try:
+            if config["provider"] == "gemini":
+                content, prompt_tokens, completion_tokens = _chamar_api_gemini(
+                    transcricao, nicho, config
+                )
+            elif config["provider"] == "anthropic":
+                content, prompt_tokens, completion_tokens = _chamar_api_anthropic(
+                    transcricao, nicho, config
+                )
+            else:
+                body, usage = _chamar_api(transcricao, nicho, config)
+                content = body["choices"][0]["message"]["content"]
+                prompt_tokens = int(usage.get("prompt_tokens") or 0)
+                completion_tokens = int(usage.get("completion_tokens") or 0)
+            data = _extrair_json(content)
+            if data and data.get("legenda"):
+                legenda = _sanitizar_legenda(str(data["legenda"]))
+                weak = str(data.get("forca", "")).strip().lower() == "fraco"
+                hashtags = _sanitizar_hashtags(data.get("hashtags"), nicho)
+            else:
+                # JSON quebrado: usa o texto cru como legenda, melhor que fallback.
+                legenda = _sanitizar_legenda(content)
+                weak = False
+                hashtags = hashtags_fallback
+            if not legenda:
+                raise RuntimeError("ia retornou legenda vazia")
             return LegendaResultado(
-                legenda=fallback, source="fallback", hashtags=hashtags_fallback, error="ia retornou legenda vazia"
+                legenda=legenda,
+                source="ia",
+                hashtags=hashtags,
+                weak=weak,
+                model=config["model"],
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
             )
-        return LegendaResultado(
-            legenda=legenda,
-            source="ia",
-            hashtags=hashtags,
-            weak=weak,
-            model=config["model"],
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
-    except Exception as exc:
-        reason = exc.read().decode("utf-8", "replace")[:300] if isinstance(exc, urllib.error.HTTPError) else str(exc)
-        return LegendaResultado(legenda=fallback, source="fallback", hashtags=hashtags_fallback, error=reason)
+        except Exception as exc:
+            reason = (
+                exc.read().decode("utf-8", "replace")[:300]
+                if isinstance(exc, urllib.error.HTTPError)
+                else str(exc)
+            )
+            errors.append(f"{config['provider']}:{config['model']}: {reason}")
+    return LegendaResultado(
+        legenda=fallback,
+        source="fallback",
+        hashtags=hashtags_fallback,
+        error=" | ".join(errors),
+    )
 
 
 if __name__ == "__main__":
