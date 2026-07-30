@@ -124,7 +124,7 @@ export function KwaiCut() {
     if (result.error) setError('Não foi possível cancelar o job.'); else await load();
     setBusy(false);
   };
-  const markPublished = async (jobId: string, externalId: string, publishedAt: string) => {
+  const markPublished = async (jobId: string, assetId: string, externalId: string, publishedAt: string) => {
     if (!supabase || busy) return false;
     setBusy(true); setError(null);
     const result = await supabase.rpc('mark_manual_publication', {
@@ -136,6 +136,10 @@ export function KwaiCut() {
       setError(result.error.message || 'Não foi possível registrar a publicação manual.');
       setBusy(false);
       return false;
+    }
+    const cleanup = await fetch(`/api/assets/${assetId}/cleanup`, { method: 'POST' });
+    if (!cleanup.ok) {
+      setError('Publicação registrada, mas não foi possível liberar os arquivos da VPS. Tente novamente mais tarde.');
     }
     await load();
     setBusy(false);
@@ -212,10 +216,10 @@ function AccountPanel({ account }: { account: Account | null }) {
 function ManualPublishing({ jobs, activity, markPublished, busy }: {
   jobs: JobRow[];
   activity: Activity;
-  markPublished: (jobId: string, externalId: string, publishedAt: string) => Promise<boolean>;
+  markPublished: (jobId: string, assetId: string, externalId: string, publishedAt: string) => Promise<boolean>;
   busy: boolean;
 }) {
-  const readyJobs = jobs.filter((job) => ['ready', 'published'].includes(job.status) && job.media_assets?.validation_status === 'valid');
+  const readyJobs = jobs.filter((job) => job.status === 'ready' && job.media_assets?.validation_status === 'valid');
   return <div className="space-y-5">
     <details className="rounded-xl border border-orange-800 bg-orange-950/20 p-4">
       <summary className="flex cursor-pointer items-center gap-2 font-semibold"><HelpCircle className="h-5 w-5" />Como publicar</summary>
@@ -235,7 +239,7 @@ function ManualPublishing({ jobs, activity, markPublished, busy }: {
 
 function ManualVideoCard({ job, index, activity, markPublished, busy }: {
   job: JobRow; index: number; activity: Activity;
-  markPublished: (jobId: string, externalId: string, publishedAt: string) => Promise<boolean>;
+  markPublished: (jobId: string, assetId: string, externalId: string, publishedAt: string) => Promise<boolean>;
   busy: boolean;
 }) {
   const [externalId, setExternalId] = useState(job.external_id || '');
@@ -282,7 +286,11 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
         <div className="space-y-2">
           <Input aria-label="URL ou ID da publicação" placeholder="URL ou ID da publicação" value={externalId} onChange={(event) => setExternalId(event.target.value)} disabled={published} />
           <Input aria-label="Horário da publicação" type="datetime-local" value={publishedAt} onChange={(event) => setPublishedAt(event.target.value)} disabled={published} />
-          <Button className="w-full" disabled={busy || published || !externalId.trim() || !publishedAt} onClick={() => markPublished(job.job_id, externalId, publishedAt)}>
+          <Button className="w-full" disabled={busy || published || !externalId.trim() || !publishedAt} onClick={() => {
+            if (window.confirm('Confirmar publicação? O MP4 e a capa serão removidos da VPS para liberar espaço. O registro permanecerá no histórico.')) {
+              void markPublished(job.job_id, job.asset_id, externalId, publishedAt);
+            }
+          }}>
             <CheckCircle2 className="mr-2 h-4 w-4" />{published ? 'Publicação registrada' : 'Marcar como publicado'}
           </Button>
         </div>

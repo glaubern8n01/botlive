@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { realpath, stat } from 'node:fs/promises';
+import { realpath, stat, unlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, isAbsolute, join, resolve, sep } from 'node:path';
 
@@ -106,10 +106,34 @@ async function mediaRoute(request, response, url) {
   return true;
 }
 
+async function cleanupRoute(request, response, url) {
+  const match = /^\/api\/assets\/([^/]+)\/cleanup$/.exec(url.pathname);
+  if (!match || request.method !== 'POST' || !uuidPattern.test(match[1])) return false;
+  const assetId = match[1];
+  const job = await querySupabase('publication_jobs', 'asset_id', assetId, 'status,cover_path');
+  if (job?.status !== 'published') {
+    return json(response, 409, { error: 'O vídeo precisa estar publicado antes da limpeza' }), true;
+  }
+  const asset = await querySupabase('media_assets', 'asset_id', assetId, 'path');
+  const rawPaths = [asset?.path, job.cover_path].filter(Boolean);
+  const removed = [];
+  for (const rawPath of rawPaths) {
+    try {
+      const path = await verifiedMediaPath(rawPath);
+      await unlink(path);
+      removed.push(path);
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+    }
+  }
+  return json(response, 200, { ok: true, removed: removed.length }), true;
+}
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
     if (url.pathname === '/health') return json(response, 200, { ok: true, mode: 'prepare_only' });
+    if (await cleanupRoute(request, response, url)) return;
     if (await mediaRoute(request, response, url)) return;
     const requested = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\/+/, '');
     let path = resolve(join(distRoot, requested));
