@@ -20,6 +20,10 @@ class FeatureFlags:
     kwai_api: bool = False
     cut: bool = False
     narrastars: bool = False
+    kwai_cut_dashboard: bool = False
+    kwai_cut_football: bool = False
+    football_source_discovery: bool = False
+    football_real_classifier: bool = False
 
     @classmethod
     def from_env(cls) -> "FeatureFlags":
@@ -31,4 +35,8 @@ class FeatureFlags:
             kwai_api=_enabled("KWAI_API_ENABLED"),
             cut=_enabled("CUT_ENABLED"),
             narrastars=_enabled("NARRASTARS_ENABLED"),
+            kwai_cut_dashboard=_enabled("KWAI_CUT_DASHBOARD_ENABLED"),
+            kwai_cut_football=_enabled("KWAI_CUT_FOOTBALL_ENABLED"),
+            football_source_discovery=_enabled("FOOTBALL_SOURCE_DISCOVERY_ENABLED"),
+            football_real_classifier=_enabled("FOOTBALL_REAL_CLASSIFIER_ENABLED"),
         )
