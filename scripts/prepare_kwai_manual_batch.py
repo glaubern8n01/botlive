@@ -186,13 +186,16 @@ def validation_frames(video: Path, source: dict[str, Any]) -> list[Path]:
 
 
 def visual_gate(frames: list[Path]) -> bool:
+    headline_ok = True
+    caption_frames = 0
     for frame in frames:
         image = Image.open(frame).convert("L")
         top = image.crop((80, 70, 1000, 400))
         bottom = image.crop((80, 1450, 1000, 1810))
-        if top.getextrema()[1] - top.getextrema()[0] < 45 or bottom.getextrema()[1] - bottom.getextrema()[0] < 35:
-            return False
-    return True
+        headline_ok = headline_ok and top.getextrema()[1] - top.getextrema()[0] >= 45
+        if bottom.getextrema()[1] - bottom.getextrema()[0] >= 35:
+            caption_frames += 1
+    return headline_ok and caption_frames >= 3
 
 
 def cover(video: Path, target: Path) -> None:
