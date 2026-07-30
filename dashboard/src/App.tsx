@@ -10,6 +10,7 @@ import { Perfis } from "./pages/Perfis";
 import { Fila } from "./pages/Fila";
 import { Contas } from "./pages/Contas";
 import { Metricas } from "./pages/Metricas";
+import { KwaiCut } from "./pages/KwaiCut";
 
 export default function App() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
             <Route path="fila" element={<Fila />} />
             <Route path="contas" element={<Contas />} />
             <Route path="metricas" element={<Metricas />} />
+            <Route path="kwai-cut" element={<KwaiCut />} />
           </Route>
         </Routes>
       </AuthWrapper>
