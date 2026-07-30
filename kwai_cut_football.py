@@ -29,18 +29,19 @@ def kwai_cut_profile() -> ProfileConfig:
     return ProfileConfig(
         profile_id=PROFILE_ID, name="Kwai CUT Futebol",
         description="Perfil aditivo para preparar cortes de futebol real para o Kwai.",
-        niche="football", enabled=False,
+        niche="football", enabled=True,
         editorial=EditorialPolicy(strategy="cut", settings={
             "daily_minimum": 30, "daily_target": 30, "daily_maximum": 100,
             "duration_rule_confirmed": False, "event_priorities": EVENT_PRIORITY,
             "negative_terms": DEFAULT_NEGATIVE_TERMS,
         }),
         render=RenderPolicy(aspect_ratio="9:16", layout="vertical-fit",
-                            min_duration_seconds=15, max_duration_seconds=60,
+                            min_duration_seconds=5, max_duration_seconds=60,
                             target_height=1920,
-                            settings={"width": 1080, "video_codec": "h264", "audio_codec": "aac"}),
+                            settings={"width": 1080, "video_codec": "h264", "audio_codec": "aac",
+                                      "duration_rule_confirmed": False}),
         destinations=(DestinationConfig(
-            platform="kwai", enabled=True, publication_mode="approval",
+            platform="kwai", enabled=True, publication_mode="prepare_only",
             max_posts_per_day=100, minimum_interval_seconds=600,
             timezone="America/Sao_Paulo", max_pending_jobs=100, max_attempts=3,
             settings={"mode": "prepare_only"},

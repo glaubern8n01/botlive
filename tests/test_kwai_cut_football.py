@@ -29,13 +29,15 @@ def event(kind="goal", key="event-1", duplicate=False):
 def test_profile_is_conservative_editable_prepare_only_preset():
     profile = kwai_cut_profile()
     assert profile.profile_id == PROFILE_ID
-    assert profile.enabled is False
+    assert profile.enabled is True
     assert profile.editorial.strategy == "cut"
     assert profile.render.aspect_ratio == "9:16"
     assert profile.render.target_height == 1920
+    assert profile.render.settings["duration_rule_confirmed"] is False
     assert profile.editorial.settings["daily_minimum"] == 30
     assert profile.editorial.settings["daily_maximum"] == 100
     assert profile.editorial.settings["duration_rule_confirmed"] is False
+    assert profile.destinations[0].publication_mode == "prepare_only"
     assert profile.destinations[0].settings["mode"] == "prepare_only"
 
 

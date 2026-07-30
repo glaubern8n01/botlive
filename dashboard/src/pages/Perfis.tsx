@@ -481,7 +481,7 @@ export function Perfis() {
                   <SelectField
                     label="Modo de publicação"
                     value={form.publication_mode}
-                    options={['disabled', 'manual', 'approval', 'automatic']}
+                    options={['disabled', 'manual', 'approval', 'prepare_only', 'automatic']}
                     onChange={(value) => setForm({ ...form, publication_mode: value as PublicationMode })}
                   />
                   <NumberField label="Máximo por dia" value={form.max_posts_per_day} min={0} onChange={(value) => setForm({ ...form, max_posts_per_day: value })} />
@@ -560,7 +560,11 @@ export function Perfis() {
                       <div key={destination.id} className="mb-1 text-sm">
                         <span className="capitalize">{destination.platform}</span>
                         <span className="text-zinc-500"> · {destination.platform_accounts?.display_name || destination.platform_accounts?.account_key || 'sem conta'}</span>
-                        <div className="text-xs text-zinc-500">{destination.publication_mode}</div>
+                        <div className="text-xs text-zinc-500">
+                          {destination.publication_mode === 'prepare_only'
+                            ? 'Prepare Only'
+                            : destination.publication_mode}
+                        </div>
                       </div>
                     ))}
                   </TableCell>

@@ -6,7 +6,13 @@ from typing import Any, Mapping, Optional
 
 SUPPORTED_ASPECT_RATIOS = {"original", "9:16"}
 SUPPORTED_LAYOUTS = {"original", "vertical-fit", "vertical-crop"}
-SUPPORTED_PUBLICATION_MODES = {"disabled", "manual", "approval", "automatic"}
+SUPPORTED_PUBLICATION_MODES = {
+    "disabled",
+    "manual",
+    "approval",
+    "prepare_only",
+    "automatic",
+}
 
 
 @dataclass(frozen=True)

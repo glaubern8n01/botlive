@@ -112,7 +112,7 @@ export type ProfileDestination = {
   platform: string;
   account_id: string | null;
   enabled: boolean;
-  publication_mode: 'disabled' | 'manual' | 'approval' | 'automatic';
+  publication_mode: 'disabled' | 'manual' | 'approval' | 'prepare_only' | 'automatic';
   max_posts_per_day: number | null;
   minimum_interval_seconds: number;
   allowed_hours: number[];

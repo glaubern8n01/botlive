@@ -62,11 +62,21 @@ create index if not exists football_sources_profile_idx
 create unique index if not exists kwai_cut_one_active_activity_idx
     on public.kwai_cut_activities(profile_id) where active;
 
+-- Extensão aditiva do contrato existente: prepare_only é um modo formal,
+-- distinto de aprovação e sem permissão para publicação externa.
+alter table public.profile_destinations
+    drop constraint if exists profile_destinations_publication_mode_check;
+alter table public.profile_destinations
+    add constraint profile_destinations_publication_mode_check
+    check (publication_mode in (
+        'disabled','manual','approval','prepare_only','automatic'
+    ));
+
 insert into public.profiles (
     profile_id,name,description,niche,editorial_strategy,language,enabled,settings
 ) values (
     'kwai_cut_futebol','Kwai CUT Futebol',
-    'Perfil aditivo prepare_only para futebol real','football','cut','pt-BR',false,
+    'Perfil aditivo prepare_only para futebol real','football','cut','pt-BR',true,
     '{"daily_minimum":30,"daily_target":30,"daily_maximum":100,"duration_rule_confirmed":false,"prepare_only":true,"classification_threshold":0.75,"negative_terms":["EA FC","FC 26","FIFA gameplay","eFootball","PES","Football Manager","Ultimate Team","modo carreira","gameplay","simulação","mobile game","videogame"]}'::jsonb
 ) on conflict(profile_id) do nothing;
 
@@ -78,14 +88,14 @@ insert into public.profile_render_settings (
     profile_id,aspect_ratio,layout,min_duration_seconds,max_duration_seconds,
     target_height,captions_enabled,headline_enabled,settings
 ) values (
-    'kwai_cut_futebol','9:16','vertical-fit',15,60,1920,true,true,
-    '{"width":1080,"video_codec":"h264","audio_codec":"aac","requires_confirmation":true}'::jsonb
+    'kwai_cut_futebol','9:16','vertical-fit',5,60,1920,true,true,
+    '{"width":1080,"video_codec":"h264","audio_codec":"aac","duration_rule_confirmed":false,"requires_confirmation":true}'::jsonb
 ) on conflict(profile_id) do nothing;
 
 insert into public.profile_destinations (
     profile_id,platform,account_id,enabled,publication_mode,max_posts_per_day,settings
 )
-select 'kwai_cut_futebol','kwai',id,true,'approval',100,'{"mode":"prepare_only"}'::jsonb
+select 'kwai_cut_futebol','kwai',id,true,'prepare_only',100,'{"mode":"prepare_only"}'::jsonb
 from public.platform_accounts where platform='kwai' and account_key='principal'
 on conflict(profile_id,platform,account_id) do nothing;
 
