@@ -90,9 +90,10 @@ def render(source_path: Path, target: Path, source: dict[str, Any]) -> None:
     )
     run(
         "ffmpeg", "-y", "-ss", str(source["start"]), "-i", str(source_path),
-        "-t", str(source["duration"]), "-filter_complex", filter_graph, "-map", "[out]", "-map", "0:a?",
+        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-t", str(source["duration"]), "-filter_complex", filter_graph, "-map", "[out]", "-map", "1:a:0",
         "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-r", "30",
-        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-movflags", "+faststart", str(target),
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-shortest", "-movflags", "+faststart", str(target),
     )
 
 
@@ -155,7 +156,7 @@ def main() -> None:
         filename = f"kwai-futebol-{source['event']}-{RUN_DATE}-{index:03d}.mp4"
         video = READY_ROOT / filename
         cover_path = READY_ROOT / filename.replace(".mp4", "-capa.jpg")
-        if not video.exists():
+        if not video.exists() or probe(video)["audio_codec"] != "aac":
             render(source_path, video, source)
         if not cover_path.exists():
             cover(video, cover_path, source["title"])
