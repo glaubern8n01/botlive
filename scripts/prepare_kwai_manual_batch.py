@@ -147,7 +147,7 @@ def one(rows: Any) -> dict[str, Any]:
 def main() -> None:
     if os.getenv("KWAI_API_ENABLED", "0") != "0":
         raise RuntimeError("KWAI_API_ENABLED deve permanecer 0")
-    client = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
+    client = create_client(os.environ["ROBO_SUPABASE_URL"], os.environ["ROBO_SUPABASE_KEY"])
     destination = one(client.table("profile_destinations").select("id,account_id").eq("profile_id", PROFILE).eq("platform", "kwai").execute().data)
 
     for index, source in enumerate(SOURCES, start=1):
@@ -216,4 +216,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
