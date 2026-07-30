@@ -254,6 +254,7 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
   const hashtags = activity.required_hashtags.join(' ');
   const caption = job.caption || '';
   const allText = [job.title, caption, hashtags].filter(Boolean).join('\n');
+  const gates = (job.metadata?.gates || {}) as Record<string, unknown>;
   const published = job.status === 'published';
   const variant = job.editorial_variants?.variant_signature || 'CUT vertical';
   const event = job.content_events?.event_type || 'Evento de futebol';
@@ -281,6 +282,24 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
         <CopyButton label="Copiar hashtags" value={hashtags} />
         <div className="sm:col-span-2"><CopyButton label="Copiar tudo" value={allText} wide /></div>
       </div>
+      {job.metadata?.version === 2 && <div className="rounded-lg border border-zinc-800 p-3 text-xs">
+        <p className="mb-2 font-semibold text-zinc-200">Gates pós-renderização</p>
+        <div className="grid grid-cols-2 gap-2 text-zinc-400">
+          <span>Áudio audível: <b className="text-zinc-200">{gates.audible_audio ? 'sim' : 'não'}</b></span>
+          <span>Volume médio: <b className="text-zinc-200">{String(gates.mean_volume_db ?? '—')} dB</b></span>
+          <span>Volume máximo: <b className="text-zinc-200">{String(gates.max_volume_db ?? '—')} dB</b></span>
+          <span>Headline: <b className="text-zinc-200">{gates.headline_rendered ? 'sim' : 'não'}</b></span>
+          <span>Legendas: <b className="text-zinc-200">{gates.captions_rendered ? 'sim' : 'não'}</b></span>
+          <span>Narração: <b className="text-zinc-200">{String(gates.narration ?? 'nenhuma')}</b></span>
+          <span>Música: <b className="text-zinc-200">{String(gates.music ?? 'nenhuma')}</b></span>
+          <span>Safe area: <b className="text-zinc-200">{String(gates.safe_area ?? '—')}</b></span>
+          <span>Validação visual: <b className="text-zinc-200">{String(gates.visual_validation ?? '—')}</b></span>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <a className="rounded-md border border-zinc-700 px-3 py-2 text-center" href={`/api/assets/${job.asset_id}/headline-frame`} target="_blank" rel="noreferrer">Ver frame da headline</a>
+          <a className="rounded-md border border-zinc-700 px-3 py-2 text-center" href={`/api/assets/${job.asset_id}/caption-frame`} target="_blank" rel="noreferrer">Ver frame da legenda</a>
+        </div>
+      </div>}
       <div className="rounded-lg border border-zinc-800 p-3">
         <p className="mb-3 text-sm font-semibold">Registrar publicação manual</p>
         <div className="space-y-2">

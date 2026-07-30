@@ -85,7 +85,7 @@ async function serveFile(request, response, path, options = {}) {
 }
 
 async function mediaRoute(request, response, url) {
-  const match = /^\/api\/assets\/([^/]+)\/(video|cover)$/.exec(url.pathname);
+  const match = /^\/api\/assets\/([^/]+)\/(video|cover|headline-frame|caption-frame)$/.exec(url.pathname);
   if (!match || !uuidPattern.test(match[1])) return false;
   const [, assetId, kind] = match;
   let rawPath;
@@ -96,10 +96,13 @@ async function mediaRoute(request, response, url) {
     rawPath = asset.path;
     filename = url.searchParams.get('name') || `kwai-futebol-${assetId.slice(0, 8)}.mp4`;
   } else {
-    const job = await querySupabase('publication_jobs', 'asset_id', assetId, 'cover_path');
+    const job = await querySupabase('publication_jobs', 'asset_id', assetId, 'cover_path,metadata');
     if (!job?.cover_path) return json(response, 404, { error: 'Capa não encontrada' }), true;
-    rawPath = job.cover_path;
-    filename = url.searchParams.get('name') || `kwai-futebol-capa-${assetId.slice(0, 8)}${extname(rawPath) || '.jpg'}`;
+    const gates = job.metadata?.gates || {};
+    rawPath = kind === 'headline-frame' ? gates.headline_frame
+      : kind === 'caption-frame' ? gates.caption_frame : job.cover_path;
+    if (!rawPath) return json(response, 404, { error: 'Frame de validação não encontrado' }), true;
+    filename = url.searchParams.get('name') || `kwai-futebol-${kind}-${assetId.slice(0, 8)}${extname(rawPath) || '.jpg'}`;
   }
   const path = await verifiedMediaPath(rawPath);
   await serveFile(request, response, path, { filename, download: url.searchParams.get('download') === '1' });
