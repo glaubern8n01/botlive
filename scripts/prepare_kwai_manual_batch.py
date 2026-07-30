@@ -214,7 +214,10 @@ def main() -> None:
         video = READY_ROOT / filename
         cover_path = READY_ROOT / filename.replace(".mp4", "-capa.jpg")
         voice, ass, tempo = create_tts_and_ass(source, video)
-        narration = render(source_path, video, source, voice, ass, tempo)
+        if video.exists():
+            narration = "original+TTS" if source_has_audible_audio(source_path) else "TTS"
+        else:
+            narration = render(source_path, video, source, voice, ass, tempo)
         cover(video, cover_path)
         frames = validation_frames(video, source)
         info = probe(video)
