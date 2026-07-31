@@ -5,7 +5,7 @@ import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 
-const PROFILE_IDS = ['gta6_cortes', 'gta6'];
+const PROFILE_IDS = ['gta6_cortes', 'gta6', 'default'];
 const TABS = ['Visão geral', 'Conta', 'Vídeos', 'Fila', 'API', 'Configuração', 'Métricas', 'Erros'] as const;
 type Tab = typeof TABS[number];
 
@@ -63,8 +63,8 @@ export function TikTok() {
   useEffect(() => { void load(); }, [load]);
 
   const prepared = jobs.filter((job) => ['pending', 'ready'].includes(job.status)).length;
-  const drafts = jobs.filter((job) => ['draft_available','sent_to_user_inbox'].includes(job.status)).length;
-  const published = jobs.filter((job) => ['published','published_manual'].includes(job.status)).length;
+  const drafts = jobs.filter(isInboxDraft).length;
+  const published = jobs.filter((job) => !isInboxDraft(job) && ['published','published_manual'].includes(job.status)).length;
   const failures = jobs.filter((job) => job.last_error || ['failed', 'rejected'].includes(job.status));
   const lastPublished = jobs.find((job) => job.published_at)?.published_at;
   const scoped = useMemo(() => new Set(connection?.granted_scopes || []), [connection]);
@@ -113,7 +113,7 @@ export function TikTok() {
           </div>
         </CardContent></Card>}
         {tab === 'Vídeos' && <Jobs jobs={jobs} empty="Nenhuma variante TikTok preparada." refresh={load} />}
-        {tab === 'Fila' && <Jobs jobs={jobs.filter((job) => !['published','published_manual'].includes(job.status))} empty="Fila vazia." refresh={load} />}
+        {tab === 'Fila' && <Jobs jobs={jobs.filter((job) => isInboxDraft(job) || !['published','published_manual'].includes(job.status))} empty="Fila vazia." refresh={load} />}
         {tab === 'Erros' && <Jobs jobs={failures} empty="Nenhum erro registrado." refresh={load} />}
         {tab === 'API' && <Card><CardHeader><CardTitle>Produtos e escopos</CardTitle></CardHeader><CardContent className="space-y-3">
           <Scope name="user.info.basic" available={scoped.has('user.info.basic')} />
@@ -141,6 +141,10 @@ export function TikTok() {
 function tokenValid(connection: Connection | null) {
   return Boolean(connection?.token_expires_at && new Date(connection.token_expires_at).getTime() > Date.now());
 }
+function isInboxDraft(job: Job) {
+  return ['draft_available','sent_to_user_inbox','PROCESSING_UPLOAD'].includes(job.status)
+    || ['draft_available','sent_to_user_inbox','PROCESSING_UPLOAD'].includes(job.remote_status || '');
+}
 function Metric({ title, value }: { title: string; value: string }) {
   return <Card><CardHeader><CardTitle className="text-sm text-zinc-400">{title}</CardTitle></CardHeader>
     <CardContent className="text-lg font-bold break-words">{value}</CardContent></Card>;
@@ -163,19 +167,28 @@ function TikTokJob({ job, refresh }: { job: Job; refresh: () => Promise<void> })
   const [hashtags, setHashtags] = useState(String(job.metadata?.hashtags || ''));
   const [credits, setCredits] = useState(String(job.metadata?.credits || ''));
   const [externalId, setExternalId] = useState('');
-  const editable = ['pending','ready','draft_available','sent_to_user_inbox'].includes(job.status);
+  const inboxDraft = isInboxDraft(job);
+  const editable = inboxDraft || ['pending','ready'].includes(job.status);
   const text = [description, credits, hashtags].filter(Boolean).join('\n\n');
   return <Card><CardContent className="space-y-3 pt-6">
-    <div className="flex items-start justify-between gap-3"><div><b>{job.title || job.job_id.slice(0, 8)}</b><p className="text-xs text-zinc-500">{text.length} caracteres</p></div><Badge>{job.remote_status || job.status}</Badge></div>
-    <textarea className="min-h-20 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={description} onChange={(e) => setDescription(e.target.value)} disabled={!editable} />
-    <textarea className="min-h-14 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={hashtags} onChange={(e) => setHashtags(e.target.value)} disabled={!editable} />
+    <div className="flex items-start justify-between gap-3"><div><b>{job.title || job.job_id.slice(0, 8)}</b><p className="text-xs text-zinc-500">{text.length} caracteres</p></div><Badge>{inboxDraft ? 'Entregue na caixa do TikTok' : (job.remote_status || job.status)}</Badge></div>
+    {inboxDraft && <div className="rounded-lg border border-cyan-900 bg-cyan-950/30 p-3 text-sm text-cyan-100">
+      Abra TikTok → Mensagens → Notificações do sistema → “Seu conteúdo do BotLive está pronto”.
+      O TikTok recebe o MP4 pelo <code>video.upload</code>, mas não aceita descrição ou hashtags nesse endpoint.
+      Use “Copiar descrição + hashtags” abaixo, cole no editor e escolha Rascunhos para guardar no celular.
+    </div>}
+    <textarea aria-label="Descrição TikTok" placeholder="Descrição preparada para o TikTok" className="min-h-20 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={description} onChange={(e) => setDescription(e.target.value)} disabled={!editable} />
+    <textarea aria-label="Hashtags TikTok" placeholder="#gta6 #gtabrasil" className="min-h-14 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={hashtags} onChange={(e) => setHashtags(e.target.value)} disabled={!editable} />
+    <textarea aria-label="Créditos TikTok" placeholder="Créditos do criador e da fonte" className="min-h-14 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={credits} onChange={(e) => setCredits(e.target.value)} disabled={!editable} />
     <div className="flex flex-wrap gap-2">
       <Button variant="outline" onClick={() => void navigator.clipboard.writeText(description)} disabled={!description}><Copy className="mr-2 h-4 w-4" />Copiar descrição</Button>
       <Button variant="outline" onClick={() => void navigator.clipboard.writeText(hashtags)} disabled={!hashtags}><Copy className="mr-2 h-4 w-4" />Copiar hashtags</Button>
+      <Button variant="outline" onClick={() => void navigator.clipboard.writeText([description, hashtags].filter(Boolean).join('\n\n'))} disabled={!description && !hashtags}><Copy className="mr-2 h-4 w-4" />Copiar descrição + hashtags</Button>
+      <Button variant="outline" onClick={() => void navigator.clipboard.writeText(credits)} disabled={!credits}><Copy className="mr-2 h-4 w-4" />Copiar créditos</Button>
       <Button variant="outline" onClick={() => void navigator.clipboard.writeText(text)} disabled={!text}><Copy className="mr-2 h-4 w-4" />Copiar tudo</Button>
       <Button variant="outline" disabled={!editable || !supabase} onClick={async () => { if (!supabase) return; await supabase.rpc('update_publication_text',{p_job_id:job.job_id,p_description:description,p_hashtags:hashtags,p_credits:credits,p_caption:text}); await refresh(); }}><Save className="mr-2 h-4 w-4" />Salvar texto</Button>
     </div>
-    {['draft_available','sent_to_user_inbox'].includes(job.status) && <div className="flex flex-col gap-2 sm:flex-row"><input className="h-9 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 text-sm" placeholder="URL ou ID opcional" value={externalId} onChange={(e) => setExternalId(e.target.value)} /><Button onClick={async () => { if (!supabase) return; await supabase.rpc('mark_manual_publication',{p_job_id:job.job_id,p_external_id:externalId,p_published_at:new Date().toISOString()}); await refresh(); }}><CheckCircle2 className="mr-2 h-4 w-4" />Marcar como publicado no TikTok</Button></div>}
+    {inboxDraft && <div className="flex flex-col gap-2 sm:flex-row"><input className="h-9 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 text-sm" placeholder="URL ou ID opcional" value={externalId} onChange={(e) => setExternalId(e.target.value)} /><Button onClick={async () => { if (!supabase) return; await supabase.rpc('mark_manual_publication',{p_job_id:job.job_id,p_external_id:externalId,p_published_at:new Date().toISOString()}); await refresh(); }}><CheckCircle2 className="mr-2 h-4 w-4" />Marcar como publicado no TikTok</Button></div>}
     {job.last_error && <p className="text-sm text-red-400">{job.last_error}</p>}
   </CardContent></Card>;
 }
