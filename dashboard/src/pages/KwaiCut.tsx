@@ -12,7 +12,7 @@ const TABS = ['Visão geral', 'Publicar pelo celular', 'Histórico', 'Fontes', '
 type Tab = typeof TABS[number];
 
 type Metrics = {
-  daily_minimum: number; daily_target: number; generated: number; approved: number;
+  daily_minimum: number; daily_target: number; daily_maximum: number; generated: number; approved: number;
   rejected: number; queued: number; ready: number; published: number;
 };
 type Source = {
@@ -45,7 +45,7 @@ type Account = {
   status: string;
 };
 
-const emptyMetrics: Metrics = { daily_minimum: 30, daily_target: 30, generated: 0, approved: 0, rejected: 0, queued: 0, ready: 0, published: 0 };
+const emptyMetrics: Metrics = { daily_minimum: 30, daily_target: 30, daily_maximum: 100, generated: 0, approved: 0, rejected: 0, queued: 0, ready: 0, published: 0 };
 const emptyActivity: Activity = { name: '', min_duration_seconds: null, max_duration_seconds: null, required_hashtags: [], required_terms: [], category: 'football', minimum_quantity: null, caption_required: true, cover_required: true, additional_rules: '', confirmation_status: 'unconfirmed', active: true };
 
 export function KwaiCut() {
@@ -151,6 +151,7 @@ export function KwaiCut() {
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
       <Metric title="Meta mínima" value={metrics.daily_minimum} />
       <Metric title="Meta desejada" value={metrics.daily_target} />
+      <Metric title="Máximo diário" value={metrics.daily_maximum} />
       <Metric title="Gerados hoje" value={metrics.generated} />
       <Metric title="Aprovados" value={metrics.approved} good />
       <Metric title="Na fila" value={metrics.queued} />
@@ -165,7 +166,7 @@ export function KwaiCut() {
     {loading ? <div className="py-16 text-center text-zinc-500">Carregando dados reais...</div> : <>
       {tab === 'Visão geral' && <Overview metrics={metrics} sources={sources} events={events} jobs={jobs} deficit={deficit} />}
       {tab === 'Publicar pelo celular' && <ManualPublishing jobs={jobs} activity={activity} markPublished={markPublished} busy={busy} />}
-      {tab === 'Histórico' && <Jobs jobs={jobs.filter((job) => ['published','rejected','cancelled'].includes(job.status))} cancel={cancelJob} busy={busy} videos />}
+      {tab === 'Histórico' && <Jobs jobs={jobs.filter((job) => ['published','published_manual','rejected','cancelled'].includes(job.status))} cancel={cancelJob} busy={busy} videos />}
       {tab === 'Fontes' && <Sources sources={sources} form={sourceForm} setForm={setSourceForm} add={addSource} toggle={toggleSource} busy={busy} />}
       {tab === 'Eventos' && <Events events={events} />}
       {tab === 'Vídeos' && <Jobs jobs={jobs} cancel={cancelJob} busy={busy} videos />}
@@ -241,6 +242,10 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
 }) {
   const [externalId, setExternalId] = useState(job.external_id || '');
   const [publishedAt, setPublishedAt] = useState(job.published_at ? toLocalInput(job.published_at) : toLocalInput(new Date().toISOString()));
+  const [description, setDescription] = useState(String(job.metadata?.description || job.caption || ''));
+  const [hashtags, setHashtags] = useState(String(job.metadata?.hashtags || activity.required_hashtags.join(' ')));
+  const [credits, setCredits] = useState(String(job.metadata?.credits || ''));
+  const [textSaved, setTextSaved] = useState(Boolean(job.metadata?.text_approved));
   const created = new Date(job.created_at);
   const date = `${created.getFullYear()}${String(created.getMonth() + 1).padStart(2, '0')}${String(created.getDate()).padStart(2, '0')}`;
   const slug = String(job.content_events?.event_type || 'lance').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'lance';
@@ -248,11 +253,9 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
   const coverName = filename.replace(/\.mp4$/, '-capa.jpg');
   const videoUrl = `/api/assets/${job.asset_id}/video?name=${encodeURIComponent(filename)}`;
   const coverUrl = `/api/assets/${job.asset_id}/cover?name=${encodeURIComponent(coverName)}`;
-  const hashtags = activity.required_hashtags.join(' ');
-  const caption = job.caption || '';
-  const allText = [job.title, caption, hashtags].filter(Boolean).join('\n');
+  const allText = [description, credits, hashtags].filter(Boolean).join('\n\n');
   const gates = (job.metadata?.gates || {}) as Record<string, unknown>;
-  const published = job.status === 'published';
+  const published = ['published', 'published_manual'].includes(job.status);
   const variant = job.editorial_variants?.variant_signature || 'CUT vertical';
   const event = job.content_events?.event_type || 'Evento de futebol';
 
@@ -275,9 +278,23 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
       <div className="grid gap-2 sm:grid-cols-2">
         <a className="inline-flex h-9 items-center justify-center rounded-md bg-zinc-50 px-3 text-sm font-medium text-zinc-900" href={`${videoUrl}&download=1`} download={filename}><Download className="mr-2 h-4 w-4" />Baixar vídeo</a>
         <a className={`inline-flex h-9 items-center justify-center rounded-md border border-zinc-700 px-3 text-sm ${job.cover_path ? '' : 'pointer-events-none opacity-40'}`} href={`${coverUrl}&download=1`} download={coverName}><Download className="mr-2 h-4 w-4" />Baixar capa</a>
-        <CopyButton label="Copiar legenda" value={caption} />
+        <CopyButton label="Copiar descrição" value={description} />
         <CopyButton label="Copiar hashtags" value={hashtags} />
+        <CopyButton label="Copiar créditos" value={credits} />
+        <CopyButton label="Copiar descrição + hashtags" value={[description, hashtags].filter(Boolean).join('\n\n')} />
         <div className="sm:col-span-2"><CopyButton label="Copiar tudo" value={allText} wide /></div>
+      </div>
+      <div className="space-y-2 rounded-lg border border-zinc-800 p-3">
+        <p className="text-sm font-semibold">Texto da publicação · {allText.length} caracteres</p>
+        <textarea aria-label="Descrição" className="min-h-20 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={description} onChange={(event) => { setDescription(event.target.value); setTextSaved(false); }} disabled={published} />
+        <textarea aria-label="Hashtags" className="min-h-16 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={hashtags} onChange={(event) => { setHashtags(event.target.value); setTextSaved(false); }} disabled={published} />
+        <textarea aria-label="Créditos" className="min-h-16 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={credits} onChange={(event) => { setCredits(event.target.value); setTextSaved(false); }} disabled={published} />
+        <Button type="button" variant="outline" disabled={published || textSaved || !supabase} onClick={async () => {
+          if (!supabase) return;
+          const finalCaption = [description, credits, hashtags].filter(Boolean).join('\n\n');
+          const result = await supabase.rpc('update_publication_text', { p_job_id: job.job_id, p_description: description, p_hashtags: hashtags, p_credits: credits, p_caption: finalCaption });
+          if (!result.error) setTextSaved(true);
+        }}><Save className="mr-2 h-4 w-4" />{textSaved ? 'Texto aprovado e salvo' : 'Salvar e aprovar texto'}</Button>
       </div>
       {job.metadata?.version === 2 && <div className="rounded-lg border border-zinc-800 p-3 text-xs">
         <p className="mb-2 font-semibold text-zinc-200">Gates pós-renderização</p>
@@ -302,7 +319,7 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
         <div className="space-y-2">
           <Input aria-label="URL ou ID da publicação" placeholder="URL ou ID da publicação" value={externalId} onChange={(event) => setExternalId(event.target.value)} disabled={published} />
           <Input aria-label="Horário da publicação" type="datetime-local" value={publishedAt} onChange={(event) => setPublishedAt(event.target.value)} disabled={published} />
-          <Button className="w-full" disabled={busy || published || !externalId.trim() || !publishedAt} onClick={() => {
+          <Button className="w-full" disabled={busy || published || !publishedAt} onClick={() => {
             if (window.confirm('Confirmar publicação? O vídeo sairá da lista de prontos e ficará no histórico. A mídia será preservada pelo período de retenção.')) {
               void markPublished(job.job_id, job.asset_id, externalId, publishedAt);
             }

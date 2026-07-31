@@ -105,6 +105,36 @@ SOURCES_V3: list[dict[str, Any]] = [
     },
 ]
 
+TOPICS = [
+    ("leitura-de-jogo", "LER O JOGO\nMUDA TUDO", "Como a leitura de jogo antecipa o próximo lance?"),
+    ("apoio-e-triangulacao", "APOIO CRIA\nNOVOS CAMINHOS", "Por que os apoios curtos abrem espaços?"),
+    ("ritmo-da-partida", "QUEM CONTROLA O RITMO\nCONTROLA O JOGO", "O detalhe que muda o ritmo de uma partida"),
+    ("ocupacao-de-espacos", "ESPAÇO TAMBÉM\nÉ JOGADA", "O valor de ocupar o espaço certo"),
+    ("decisao-rapida", "DECIDIR RÁPIDO\nFAZ DIFERENÇA", "Por que a decisão vem antes do toque?"),
+    ("futebol-de-outras-epocas", "O JOGO DE ONTEM\nEXPLICA O DE HOJE", "O que o futebol antigo ainda ensina?"),
+    ("comportamento-coletivo", "ONZE JOGADORES\nUMA SÓ IDEIA", "Como o comportamento coletivo organiza o time?"),
+    ("tecnica-e-contexto", "TÉCNICA SEM LEITURA\nNÃO BASTA", "Técnica e contexto precisam andar juntos"),
+    ("historia-das-regras", "AS REGRAS MUDARAM\nO JOGO TAMBÉM", "Como as regras ajudaram o futebol a evoluir?"),
+]
+
+
+def automatic_sources() -> list[dict[str, Any]]:
+    """Catálogo determinístico de trechos e roteiros materialmente distintos."""
+    result = list(SOURCES_V3)
+    for index, (event, headline, display) in enumerate(TOPICS):
+        base = SOURCES[index % len(SOURCES)]
+        start = 4 + (index // len(SOURCES)) * 18 + (index % len(SOURCES)) * 7
+        result.append({
+            **base, "start": start, "duration": 26 + (index % 4) * 2,
+            "event": event, "title": headline, "display_title": display,
+            "script": [
+                f"Neste trecho, o foco está em {display.lower().rstrip('?')}.",
+                "Observe como posição, tempo e escolha mudam o desenvolvimento da jogada.",
+                "O futebol fica mais claro quando entendemos o que acontece antes da bola chegar.",
+            ],
+        })
+    return result
+
 
 def run(*args: str) -> None:
     subprocess.run(args, check=True)
@@ -253,14 +283,22 @@ def cover(video: Path, target: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch", choices=("v2", "v3"), default="v2")
+    parser.add_argument("--auto", action="store_true")
+    parser.add_argument("--limit", type=int, default=0)
     args = parser.parse_args()
     if os.getenv("KWAI_API_ENABLED", "0") != "0":
         raise RuntimeError("KWAI_API_ENABLED deve permanecer 0")
     client = create_client(os.environ["ROBO_SUPABASE_URL"], os.environ["ROBO_SUPABASE_KEY"])
     destination = one(client.table("profile_destinations").select("id,account_id").eq("profile_id", PROFILE).eq("platform", "kwai").execute().data)
 
-    sources = SOURCES_V3 if args.batch == "v3" else SOURCES
-    version = 3 if args.batch == "v3" else 2
+    sources = automatic_sources() if args.auto else (SOURCES_V3 if args.batch == "v3" else SOURCES)
+    version = 4 if args.auto else (3 if args.batch == "v3" else 2)
+    if args.auto:
+        existing = client.table("publication_jobs").select("metadata").eq("profile_id", PROFILE).execute().data or []
+        produced = {str(row.get("metadata", {}).get("source_segment_key")) for row in existing}
+        sources = [s for s in sources if f"{s['key']}:{s['start']}:{s['event']}" not in produced]
+    if args.limit > 0:
+        sources = sources[:args.limit]
     for index, source in enumerate(sources, start=1):
         block = resource_block_reason()
         if block:
@@ -320,7 +358,16 @@ def main() -> None:
             "audio_codec": info["audio_codec"], "filesize": info["filesize"],
             "validation_status": "invalid" if errors else "valid", "validation_errors": errors,
         }, on_conflict="profile_id,variant_id,sha256").execute().data)
-        caption = f"{source['display_title']}\n\nFonte: {source['author']} · Wikimedia Commons · {source['license']}. Conteúdo adaptado."
+        hashtag_sets = [
+            "#futebol #leituradejogo #tática #kwai #futebolrespira",
+            "#futebol #jogocoletivo #futebolbrasileiro #kwai #bolanopé",
+            "#históriadofutebol #futebolraiz #futebolmundial #kwai #futebolrespira",
+        ]
+        description = f"{source['display_title']} Um detalhe para observar no próximo jogo."
+        credits = f"Fonte e créditos: {source['author']} · Wikimedia Commons · {source['license']}."
+        hashtags = hashtag_sets[(index - 1) % len(hashtag_sets)]
+        caption = f"{description}\n\n{credits}\n\n{hashtags}"
+        segment_key = f"{source['key']}:{source['start']}:{source['event']}"
         client.table("publication_jobs").upsert({
             "profile_id": PROFILE, "event_id": event["event_id"], "variant_id": variant["variant_id"],
             "asset_id": asset["asset_id"], "destination_id": destination["id"], "platform": "kwai",
@@ -329,7 +376,10 @@ def main() -> None:
             "cover_path": str(cover_path), "metadata": {
                 "publication_mode": "prepare_only", "publication_method": "manual_mobile",
                 "download_filename": filename, "license": source["license"], "source_url": source["page"],
-                "version": version, "gates": gates,
+                "source_author": source["author"], "source_segment_key": segment_key,
+                "description": description, "hashtags": hashtags, "credits": credits,
+                "cta": "Qual detalhe você percebeu?", "text_approved": False,
+                "text_edited_manually": False, "version": version, "gates": gates,
             },
         }, on_conflict="publication_key").execute()
         print(json.dumps({"file": str(video), "status": "ready" if not errors else "rejected",

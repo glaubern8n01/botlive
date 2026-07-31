@@ -4,6 +4,8 @@ import logging
 import os
 import signal
 import socket
+import subprocess
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +16,9 @@ PROFILE = "kwai_cut_futebol"
 LOGGER = logging.getLogger("botlive.kwai_cut_producer")
 ALLOWED = ("owned", "authorized", "licensed", "campaign_allowed")
 MEMORY_LIMIT_RATIO = float(os.getenv("KWAI_MEMORY_LIMIT_RATIO", "0.80"))
+DAILY_TARGET = min(100, max(1, int(os.getenv("KWAI_DAILY_TARGET", "30"))))
+DAILY_MAXIMUM = min(100, max(DAILY_TARGET, int(os.getenv("KWAI_DAILY_MAXIMUM", "100"))))
+RENDER_CONCURRENCY = 1
 
 
 def memory_usage_ratio() -> float:
@@ -77,7 +82,7 @@ class KwaiCutProducer:
         # A fonte é elegível pela licença registrada, não pelo domínio. Deduplicação
         # de trecho/roteiro/variante continua sendo responsabilidade do planner.
         current_sources = sources
-        target = min(100, max(1, int(metrics.get("daily_target") or 30)))
+        target = min(DAILY_MAXIMUM, max(1, int(metrics.get("daily_target") or DAILY_TARGET)))
         approved = int(metrics.get("approved") or 0)
         deficit = max(0, target - approved)
         resource_block = resource_block_reason() if deficit else None
@@ -98,10 +103,23 @@ class KwaiCutProducer:
         LOGGER.info("Kwai CUT daily state: %s", result)
         return result
 
+    def produce_next(self) -> bool:
+        """Renderiza no máximo um item; o ciclo seguinte retoma automaticamente."""
+        state = self.run_once()
+        if not state["deficit"] or state["status"] == "paused_resource_guard":
+            return False
+        env = os.environ.copy()
+        env["KWAI_API_ENABLED"] = "0"
+        completed = subprocess.run(
+            [sys.executable, "scripts/prepare_kwai_manual_batch.py", "--auto", "--limit", "1"],
+            env=env, check=False,
+        )
+        return completed.returncode == 0
+
     def loop(self, interval_seconds: int = 900) -> None:
         while not self.stop_requested:
             try:
-                self.run_once()
+                self.produce_next()
             except Exception as exc:
                 LOGGER.exception("Kwai CUT producer cycle failed: %s", type(exc).__name__)
             for _ in range(max(1, interval_seconds)):
