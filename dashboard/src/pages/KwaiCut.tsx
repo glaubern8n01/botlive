@@ -8,7 +8,7 @@ import { Input } from '../components/ui/Input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/Table';
 
 const PROFILE = 'kwai_cut_futebol';
-const TABS = ['Visão geral', 'Publicar pelo celular', 'Fontes', 'Eventos', 'Vídeos', 'Regras', 'Fila', 'Conta', 'Métricas', 'Erros'] as const;
+const TABS = ['Visão geral', 'Publicar pelo celular', 'Histórico', 'Fontes', 'Eventos', 'Vídeos', 'Regras', 'Fila', 'Conta', 'Métricas', 'Erros'] as const;
 type Tab = typeof TABS[number];
 
 type Metrics = {
@@ -124,7 +124,7 @@ export function KwaiCut() {
     if (result.error) setError('Não foi possível cancelar o job.'); else await load();
     setBusy(false);
   };
-  const markPublished = async (jobId: string, assetId: string, externalId: string, publishedAt: string) => {
+  const markPublished = async (jobId: string, _assetId: string, externalId: string, publishedAt: string) => {
     if (!supabase || busy) return false;
     setBusy(true); setError(null);
     const result = await supabase.rpc('mark_manual_publication', {
@@ -136,10 +136,6 @@ export function KwaiCut() {
       setError(result.error.message || 'Não foi possível registrar a publicação manual.');
       setBusy(false);
       return false;
-    }
-    const cleanup = await fetch(`/api/assets/${assetId}/cleanup`, { method: 'POST' });
-    if (!cleanup.ok) {
-      setError('Publicação registrada, mas não foi possível liberar os arquivos da VPS. Tente novamente mais tarde.');
     }
     await load();
     setBusy(false);
@@ -169,6 +165,7 @@ export function KwaiCut() {
     {loading ? <div className="py-16 text-center text-zinc-500">Carregando dados reais...</div> : <>
       {tab === 'Visão geral' && <Overview metrics={metrics} sources={sources} events={events} jobs={jobs} deficit={deficit} />}
       {tab === 'Publicar pelo celular' && <ManualPublishing jobs={jobs} activity={activity} markPublished={markPublished} busy={busy} />}
+      {tab === 'Histórico' && <Jobs jobs={jobs.filter((job) => ['published','rejected','cancelled'].includes(job.status))} cancel={cancelJob} busy={busy} videos />}
       {tab === 'Fontes' && <Sources sources={sources} form={sourceForm} setForm={setSourceForm} add={addSource} toggle={toggleSource} busy={busy} />}
       {tab === 'Eventos' && <Events events={events} />}
       {tab === 'Vídeos' && <Jobs jobs={jobs} cancel={cancelJob} busy={busy} videos />}
@@ -306,7 +303,7 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
           <Input aria-label="URL ou ID da publicação" placeholder="URL ou ID da publicação" value={externalId} onChange={(event) => setExternalId(event.target.value)} disabled={published} />
           <Input aria-label="Horário da publicação" type="datetime-local" value={publishedAt} onChange={(event) => setPublishedAt(event.target.value)} disabled={published} />
           <Button className="w-full" disabled={busy || published || !externalId.trim() || !publishedAt} onClick={() => {
-            if (window.confirm('Confirmar publicação? O MP4 e a capa serão removidos da VPS para liberar espaço. O registro permanecerá no histórico.')) {
+            if (window.confirm('Confirmar publicação? O vídeo sairá da lista de prontos e ficará no histórico. A mídia será preservada pelo período de retenção.')) {
               void markPublished(job.job_id, job.asset_id, externalId, publishedAt);
             }
           }}>
