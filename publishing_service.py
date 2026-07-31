@@ -119,11 +119,12 @@ class PublicationPlanner:
                 variant.variant_id,
                 fingerprint,
             )
-            mode = (
-                "api"
-                if destination.publication_mode == "automatic"
-                else "prepare_only"
-            )
+            mode = {
+                "automatic": "api",
+                "upload_draft": "upload_draft",
+                "direct_post": "direct_post",
+                "prepare_only": "prepare_only",
+            }.get(destination.publication_mode, "prepare_only")
             effective_account = PlatformAccount(
                 account.account_id,
                 account.platform,

@@ -11,6 +11,7 @@ import { Fila } from "./pages/Fila";
 import { Contas } from "./pages/Contas";
 import { Metricas } from "./pages/Metricas";
 import { KwaiCut } from "./pages/KwaiCut";
+import { TikTok } from "./pages/TikTok";
 
 export default function App() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
             <Route path="contas" element={<Contas />} />
             <Route path="metricas" element={<Metricas />} />
             <Route path="kwai-cut" element={<KwaiCut />} />
+            <Route path="tiktok" element={<TikTok />} />
           </Route>
         </Routes>
       </AuthWrapper>

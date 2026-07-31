@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router';
-import { LayoutDashboard, Settings2, Users, History, Scissors, LogOut, Layers3, ListVideo, KeyRound, BarChart3, Clapperboard } from 'lucide-react';
+import { LayoutDashboard, Settings2, Users, History, Scissors, LogOut, Layers3, ListVideo, KeyRound, BarChart3, Clapperboard, Music2 } from 'lucide-react';
 
 export function Layout() {
   const handleLogout = () => {
@@ -13,6 +13,7 @@ export function Layout() {
     { to: "/canais", icon: Users, label: "Canais" },
     { to: "/perfis", icon: Layers3, label: "Perfis" },
     { to: "/kwai-cut", icon: Clapperboard, label: "Kwai CUT" },
+    { to: "/tiktok", icon: Music2, label: "TikTok" },
     { to: "/fila", icon: ListVideo, label: "Fila" },
     { to: "/contas", icon: KeyRound, label: "Contas" },
     { to: "/metricas", icon: BarChart3, label: "Métricas" },
