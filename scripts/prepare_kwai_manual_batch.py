@@ -7,7 +7,6 @@ import json
 import os
 import subprocess
 import sys
-import textwrap
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -114,10 +113,12 @@ def create_tts_and_ass(source: dict[str, Any], stem: Path) -> tuple[Path, Path, 
     segment = target_voice_duration / len(source["script"])
     events = []
     for index, text in enumerate(source["script"]):
-        lines = textwrap.wrap(text, width=34, break_long_words=False)
-        if len(lines) > 2:
-            midpoint = max(1, len(lines) // 2)
-            lines = [" ".join(lines[:midpoint]), " ".join(lines[midpoint:])]
+        words = text.split()
+        split_at = min(
+            range(1, len(words)),
+            key=lambda point: abs(len(" ".join(words[:point])) - len(" ".join(words[point:]))),
+        )
+        lines = [" ".join(words[:split_at]), " ".join(words[split_at:])]
         caption = r"\N".join(lines)
         events.append(
             f"Dialogue: 1,{ass_time(index * segment)},{ass_time(min((index + 1) * segment, source['duration']))},Caption,,0,0,0,,{caption}"
@@ -131,7 +132,7 @@ def create_tts_and_ass(source: dict[str, Any], stem: Path) -> tuple[Path, Path, 
         "Alignment,MarginL,MarginR,MarginV,Encoding\n"
         "Style: Headline,DejaVu Sans,72,&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,"
         "-1,0,0,0,100,100,0,0,3,3,1,8,90,90,100,1\n"
-        "Style: Caption,DejaVu Sans,46,&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,"
+        "Style: Caption,DejaVu Sans,38,&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,"
         "-1,0,0,0,100,100,0,0,3,3,1,2,110,110,150,1\n"
         "\n[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n"
         f"Dialogue: 2,0:00:00.00,{ass_time(source['duration'])},Headline,,0,0,0,,{headline}\n"
@@ -222,7 +223,7 @@ def main() -> None:
 
     for index, source in enumerate(SOURCES, start=1):
         source_path = download(source)
-        filename = f"kwai-futebol-{source['event']}-{RUN_DATE}-{index:03d}-v2-final.mp4"
+        filename = f"kwai-futebol-{source['event']}-{RUN_DATE}-{index:03d}-v2-aprovado.mp4"
         video = READY_ROOT / filename
         cover_path = READY_ROOT / filename.replace(".mp4", "-capa.jpg")
         voice, ass, tempo = create_tts_and_ass(source, video)
@@ -260,13 +261,13 @@ def main() -> None:
             "last_error": None, "metrics": {"license": source["license"], "author": source["author"], "source": "Wikimedia Commons"},
         }, on_conflict="profile_id,source_type,source_ref").execute()
         event = one(client.table("content_events").upsert({
-            "profile_id": PROFILE, "source_event_key": f"manual-mobile-v2-final:{source['key']}:{RUN_DATE}",
+            "profile_id": PROFILE, "source_event_key": f"manual-mobile-v2-approved:{source['key']}:{RUN_DATE}",
             "source_ref": source["page"], "timestamp_seconds": float(source["start"]),
             "event_type": source["event"], "metadata": {"confidence": 1.0, "football_real": True, "version": 2},
         }, on_conflict="profile_id,source_event_key").execute().data)
         variant = one(client.table("editorial_variants").upsert({
             "event_id": event["event_id"], "profile_id": PROFILE, "strategy": "cut",
-            "variant_signature": f"manual-mobile-v2-final:{source['key']}",
+            "variant_signature": f"manual-mobile-v2-approved:{source['key']}",
             "editorial_metadata": {"format": "9:16", "headline": source["title"], "captions": source["script"], "version": 2},
         }, on_conflict="profile_id,event_id,variant_signature").execute().data)
         asset = one(client.table("media_assets").upsert({
@@ -281,7 +282,7 @@ def main() -> None:
             "profile_id": PROFILE, "event_id": event["event_id"], "variant_id": variant["variant_id"],
             "asset_id": asset["asset_id"], "destination_id": destination["id"], "platform": "kwai",
             "account_id": destination["account_id"], "status": "ready" if not errors else "rejected",
-            "publication_key": f"kwai-v2-final:{sha256}", "title": source["display_title"], "caption": caption,
+            "publication_key": f"kwai-v2-approved:{sha256}", "title": source["display_title"], "caption": caption,
             "cover_path": str(cover_path), "metadata": {
                 "publication_mode": "prepare_only", "publication_method": "manual_mobile",
                 "download_filename": filename, "license": source["license"], "source_url": source["page"],
