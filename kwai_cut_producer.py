@@ -31,8 +31,9 @@ class KwaiCutProducer:
         metrics = self.client.table("kwai_cut_daily_metrics").select("*").eq("profile_id", PROFILE).single().execute().data
         sources = (self.client.table("football_sources").select("source_ref,usage_status")
                    .eq("profile_id", PROFILE).eq("enabled", True).in_("usage_status", ALLOWED).execute().data or [])
-        # Historical Wikimedia fixtures remain available for regression tests, not daily production.
-        current_sources = [row for row in sources if "wikimedia.org" not in str(row.get("source_ref", "")).lower()]
+        # A fonte é elegível pela licença registrada, não pelo domínio. Deduplicação
+        # de trecho/roteiro/variante continua sendo responsabilidade do planner.
+        current_sources = sources
         target = min(100, max(1, int(metrics.get("daily_target") or 30)))
         approved = int(metrics.get("approved") or 0)
         deficit = max(0, target - approved)
@@ -45,7 +46,7 @@ class KwaiCutProducer:
             "next_run_at": (now + timedelta(minutes=15)).isoformat(),
             "target": target, "approved_today": approved, "deficit": deficit,
             "eligible_sources": len(current_sources), "status": status,
-            "last_error": None if current_sources or not deficit else "Nenhuma fonte atual com direitos comprovados; produção pausada sem duplicar.",
+            "last_error": None if current_sources or not deficit else "Nenhuma fonte com direitos comprovados; produção pausada sem duplicar.",
             "updated_at": now.isoformat(),
         }, on_conflict="profile_id").execute()
         result = {"target": target, "approved": approved, "deficit": deficit,
