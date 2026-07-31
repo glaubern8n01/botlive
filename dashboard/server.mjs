@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { readdir, realpath, stat, unlink } from 'node:fs/promises';
+import { realpath, stat, unlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, isAbsolute, join, resolve, sep } from 'node:path';
 
@@ -77,19 +77,14 @@ async function verifiedMediaPath(rawPath) {
   return candidate;
 }
 
-async function findMediaFile(filename, root = mediaRoot, depth = 0) {
-  if (!filename || depth > 6) return null;
+async function findMediaFile(filename) {
+  if (!filename) return null;
   const safe = safeFilename(filename, '');
   if (!safe || safe !== filename) return null;
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    const candidate = join(root, entry.name);
-    if (entry.isFile() && entry.name === safe) return candidate;
-    if (entry.isDirectory()) {
-      const found = await findMediaFile(safe, candidate, depth + 1);
-      if (found) return found;
-    }
-  }
-  return null;
+  const date = /-(\d{8})-/.exec(safe)?.[1];
+  if (!date) return null;
+  const candidate = join(mediaRoot, 'kwai_cut', 'ready', date, safe);
+  try { return (await stat(candidate)).isFile() ? candidate : null; } catch { return null; }
 }
 
 async function serveFile(request, response, path, options = {}) {
