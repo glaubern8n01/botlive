@@ -117,8 +117,10 @@ class InstagramPublisher:
 
 def legacy_registry():
     from publisher_contract import PublisherRegistry
+    from tiktok_standard_publisher import TikTokStandardPublisher
 
     registry = PublisherRegistry()
     registry.register(YouTubePublisher())
     registry.register(InstagramPublisher())
+    registry.register(TikTokStandardPublisher())
     return registry

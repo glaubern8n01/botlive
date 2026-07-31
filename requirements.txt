@@ -9,6 +9,7 @@ numpy==2.4.3
 imageio-ffmpeg==0.6.0
 supabase
 python-dotenv
+cryptography>=42,<47
 pytchat
 faster-whisper==1.2.1
 # auto-post no YouTube (--post-youtube); import lazy, opcional sem a flag
