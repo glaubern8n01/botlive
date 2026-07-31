@@ -47,3 +47,10 @@ def test_producer_pauses_when_another_heavy_job_is_running(monkeypatch):
     monkeypatch.setattr("kwai_cut_producer.resource_block_reason", lambda: "ffmpeg_already_running")
     result = KwaiCutProducer(Client(), "test-worker").run_once()
     assert result["status"] == "paused_resource_guard"
+
+
+def test_worker_volume_is_sequential():
+    import kwai_cut_producer
+    assert kwai_cut_producer.RENDER_CONCURRENCY == 1
+    assert kwai_cut_producer.DAILY_TARGET == 30
+    assert kwai_cut_producer.DAILY_MAXIMUM == 100
