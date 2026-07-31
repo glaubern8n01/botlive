@@ -43,6 +43,23 @@ async function querySupabase(table, column, value, select) {
   return rows[0] || null;
 }
 
+async function querySupabaseFlexibleId(table, value, select) {
+  try {
+    const direct = await querySupabase(table, 'asset_id', value, select);
+    if (direct) return direct;
+  } catch (error) {
+    if (String(value).length === 36) throw error;
+  }
+  if (!supabaseUrl || !supabaseKey) throw new Error('Supabase não configurado');
+  const url = new URL(`/rest/v1/${table}`, supabaseUrl);
+  url.searchParams.set('select', `asset_id,${select}`);
+  url.searchParams.set('limit', '1000');
+  const response = await fetch(url, { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } });
+  if (!response.ok) throw new Error(`Consulta compatível de mídia falhou (${response.status})`);
+  const rows = await response.json();
+  return rows.find((row) => String(row.asset_id) === String(value)) || null;
+}
+
 function safeFilename(value, fallback) {
   const normalized = String(value || fallback)
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -95,12 +112,12 @@ async function mediaRoute(request, response, url) {
   let rawPath;
   let filename;
   if (kind === 'video') {
-    const asset = await querySupabase('media_assets', 'asset_id', assetId, 'path');
+    const asset = await querySupabaseFlexibleId('media_assets', assetId, 'path');
     if (!asset?.path) return json(response, 404, { error: 'Vídeo não encontrado' }), true;
     rawPath = asset.path;
     filename = url.searchParams.get('name') || `kwai-futebol-${assetId.slice(0, 8)}.mp4`;
   } else {
-    const job = await querySupabase('publication_jobs', 'asset_id', assetId, 'cover_path,metadata');
+    const job = await querySupabaseFlexibleId('publication_jobs', assetId, 'cover_path,metadata');
     if (!job?.cover_path) return json(response, 404, { error: 'Capa não encontrada' }), true;
     const gates = job.metadata?.gates || {};
     rawPath = kind === 'headline-frame' ? gates.headline_frame
