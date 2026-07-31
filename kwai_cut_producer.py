@@ -6,12 +6,55 @@ import signal
 import socket
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from database import _get_client
 
 PROFILE = "kwai_cut_futebol"
 LOGGER = logging.getLogger("botlive.kwai_cut_producer")
 ALLOWED = ("owned", "authorized", "licensed", "campaign_allowed")
+MEMORY_LIMIT_RATIO = float(os.getenv("KWAI_MEMORY_LIMIT_RATIO", "0.80"))
+
+
+def memory_usage_ratio() -> float:
+    cgroup = Path("/sys/fs/cgroup")
+    try:
+        current = int((cgroup / "memory.current").read_text().strip())
+        maximum_text = (cgroup / "memory.max").read_text().strip()
+        if maximum_text != "max" and int(maximum_text) > 0:
+            return current / int(maximum_text)
+    except (OSError, ValueError):
+        pass
+    values: dict[str, int] = {}
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            key, value = line.split(":", 1)
+            values[key] = int(value.strip().split()[0])
+        return 1 - (values["MemAvailable"] / values["MemTotal"])
+    except (OSError, KeyError, ValueError, IndexError):
+        return 0.0
+
+
+def heavy_ffmpeg_running() -> bool:
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            command = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="ignore")
+            if "ffmpeg" in command:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def resource_block_reason() -> str | None:
+    ratio = memory_usage_ratio()
+    if ratio >= MEMORY_LIMIT_RATIO:
+        return f"memory_pressure:{ratio:.3f}"
+    if heavy_ffmpeg_running():
+        return "ffmpeg_already_running"
+    return None
 
 
 class KwaiCutProducer:
@@ -37,7 +80,8 @@ class KwaiCutProducer:
         target = min(100, max(1, int(metrics.get("daily_target") or 30)))
         approved = int(metrics.get("approved") or 0)
         deficit = max(0, target - approved)
-        status = "healthy" if deficit == 0 else "deficit"
+        resource_block = resource_block_reason() if deficit else None
+        status = "healthy" if deficit == 0 else ("paused_resource_guard" if resource_block else "deficit")
         now = datetime.now(timezone.utc)
         self.client.table("kwai_cut_producer_state").upsert({
             "profile_id": PROFILE, "worker_id": self.worker_id,

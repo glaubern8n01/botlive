@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ from supabase import create_client
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from kwai_media_validation import analyze_audio, required_text_gates
+from kwai_cut_producer import resource_block_reason
 
 PROFILE = "kwai_cut_futebol"
 OUTPUT_ROOT = Path(os.getenv("BOTLIVE_OUTPUT_ROOT", "/data/botlive/output"))
@@ -66,6 +68,39 @@ SOURCES: list[dict[str, Any]] = [
             "Estas imagens estão entre os primeiros registros filmados de uma partida de futebol.",
             "O jogo era mais direto, os uniformes eram pesados e as câmeras ainda davam seus primeiros passos.",
             "Mais de um século depois, a paixão pela bola continua reconhecível.",
+        ],
+    },
+]
+
+SOURCES_V3: list[dict[str, Any]] = [
+    {
+        **SOURCES[0], "start": 7, "duration": 28, "event": "movimentacao-sem-bola",
+        "title": "O JOGO MUDA\nANTES DO PASSE",
+        "display_title": "O detalhe que acontece antes do passe",
+        "script": [
+            "Antes da bola chegar, o jogador atento já observou o espaço ao redor.",
+            "A movimentação sem bola abre linhas de passe e muda toda a jogada.",
+            "No futebol coletivo, a decisão começa antes do primeiro toque.",
+        ],
+    },
+    {
+        **SOURCES[1], "start": 58, "duration": 32, "event": "controle-e-criatividade",
+        "title": "CONTROLE OU IMPROVISO?\nOS DOIS DECIDEM",
+        "display_title": "Quando controle e improviso se encontram",
+        "script": [
+            "O controle orientado permite receber a bola já preparando a próxima ação.",
+            "Mas o improviso aparece quando o espaço fecha e o plano precisa mudar.",
+            "Os grandes lances nascem do equilíbrio entre técnica, leitura e coragem.",
+        ],
+    },
+    {
+        **SOURCES[2], "start": 11, "duration": 28, "event": "evolucao-do-jogo",
+        "title": "O FUTEBOL MUDOU\nMAS A DISPUTA NÃO",
+        "display_title": "O que mudou no futebol em mais de um século",
+        "script": [
+            "As imagens antigas mostram um jogo direto, disputado e cercado pela torcida.",
+            "Equipamentos, regras e preparação evoluíram ao longo de mais de um século.",
+            "Mesmo assim, a vontade de ganhar cada bola continua exatamente reconhecível.",
         ],
     },
 ]
@@ -216,14 +251,22 @@ def cover(video: Path, target: Path) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--batch", choices=("v2", "v3"), default="v2")
+    args = parser.parse_args()
     if os.getenv("KWAI_API_ENABLED", "0") != "0":
         raise RuntimeError("KWAI_API_ENABLED deve permanecer 0")
     client = create_client(os.environ["ROBO_SUPABASE_URL"], os.environ["ROBO_SUPABASE_KEY"])
     destination = one(client.table("profile_destinations").select("id,account_id").eq("profile_id", PROFILE).eq("platform", "kwai").execute().data)
 
-    for index, source in enumerate(SOURCES, start=1):
+    sources = SOURCES_V3 if args.batch == "v3" else SOURCES
+    version = 3 if args.batch == "v3" else 2
+    for index, source in enumerate(sources, start=1):
+        block = resource_block_reason()
+        if block:
+            raise RuntimeError(f"Render paused by resource guard: {block}")
         source_path = download(source)
-        filename = f"kwai-futebol-{source['event']}-{RUN_DATE}-{index:03d}-v2-aprovado.mp4"
+        filename = f"kwai-futebol-{source['event']}-{RUN_DATE}-{index:03d}-v{version}-aprovado.mp4"
         video = READY_ROOT / filename
         cover_path = READY_ROOT / filename.replace(".mp4", "-capa.jpg")
         voice, ass, tempo = create_tts_and_ass(source, video)
@@ -261,14 +304,14 @@ def main() -> None:
             "last_error": None, "metrics": {"license": source["license"], "author": source["author"], "source": "Wikimedia Commons"},
         }, on_conflict="profile_id,source_type,source_ref").execute()
         event = one(client.table("content_events").upsert({
-            "profile_id": PROFILE, "source_event_key": f"manual-mobile-v2-approved:{source['key']}:{RUN_DATE}",
+            "profile_id": PROFILE, "source_event_key": f"manual-mobile-v{version}-approved:{source['key']}:{RUN_DATE}",
             "source_ref": source["page"], "timestamp_seconds": float(source["start"]),
-            "event_type": source["event"], "metadata": {"confidence": 1.0, "football_real": True, "version": 2},
+            "event_type": source["event"], "metadata": {"confidence": 1.0, "football_real": True, "version": version},
         }, on_conflict="profile_id,source_event_key").execute().data)
         variant = one(client.table("editorial_variants").upsert({
             "event_id": event["event_id"], "profile_id": PROFILE, "strategy": "cut",
-            "variant_signature": f"manual-mobile-v2-approved:{source['key']}",
-            "editorial_metadata": {"format": "9:16", "headline": source["title"], "captions": source["script"], "version": 2},
+            "variant_signature": f"manual-mobile-v{version}-approved:{source['key']}:{source['start']}",
+            "editorial_metadata": {"format": "9:16", "headline": source["title"], "captions": source["script"], "version": version},
         }, on_conflict="profile_id,event_id,variant_signature").execute().data)
         asset = one(client.table("media_assets").upsert({
             "profile_id": PROFILE, "event_id": event["event_id"], "variant_id": variant["variant_id"],
@@ -282,11 +325,11 @@ def main() -> None:
             "profile_id": PROFILE, "event_id": event["event_id"], "variant_id": variant["variant_id"],
             "asset_id": asset["asset_id"], "destination_id": destination["id"], "platform": "kwai",
             "account_id": destination["account_id"], "status": "ready" if not errors else "rejected",
-            "publication_key": f"kwai-v2-approved:{sha256}", "title": source["display_title"], "caption": caption,
+            "publication_key": f"kwai-v{version}-approved:{sha256}", "title": source["display_title"], "caption": caption,
             "cover_path": str(cover_path), "metadata": {
                 "publication_mode": "prepare_only", "publication_method": "manual_mobile",
                 "download_filename": filename, "license": source["license"], "source_url": source["page"],
-                "version": 2, "gates": gates,
+                "version": version, "gates": gates,
             },
         }, on_conflict="publication_key").execute()
         print(json.dumps({"file": str(video), "status": "ready" if not errors else "rejected",
