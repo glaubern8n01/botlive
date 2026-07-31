@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import textwrap
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,6 +60,7 @@ SOURCES: list[dict[str, Any]] = [
         "download": "https://commons.wikimedia.org/wiki/Special:Redirect/file/The_world%E2%80%99s_first_filmed_soccer_match_with_corrected_speed-_Glentoran....webm",
         "license": "Public Domain Mark 1.0", "author": "obra histórica de 1897",
         "start": 0, "duration": 30, "event": "historia-do-futebol",
+        "crop_top": 0.24,
         "title": "O PRIMEIRO JOGO DE\nFUTEBOL FILMADO",
         "display_title": "O futebol filmado há mais de um século",
         "script": [
@@ -110,10 +112,16 @@ def create_tts_and_ass(source: dict[str, Any], stem: Path) -> tuple[Path, Path, 
     target_voice_duration = max(5.0, float(source["duration"]) - 1.0)
     tempo = max(0.5, min(2.0, voice_duration / target_voice_duration))
     segment = target_voice_duration / len(source["script"])
-    events = [
-        f"Dialogue: 1,{ass_time(index * segment)},{ass_time(min((index + 1) * segment, source['duration']))},Caption,,0,0,0,,{text}"
-        for index, text in enumerate(source["script"])
-    ]
+    events = []
+    for index, text in enumerate(source["script"]):
+        lines = textwrap.wrap(text, width=34, break_long_words=False)
+        if len(lines) > 2:
+            midpoint = max(1, len(lines) // 2)
+            lines = [" ".join(lines[:midpoint]), " ".join(lines[midpoint:])]
+        caption = r"\N".join(lines)
+        events.append(
+            f"Dialogue: 1,{ass_time(index * segment)},{ass_time(min((index + 1) * segment, source['duration']))},Caption,,0,0,0,,{caption}"
+        )
     headline = source["title"].replace("\n", r"\N")
     ass.write_text(
         "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 2\n"
@@ -123,8 +131,8 @@ def create_tts_and_ass(source: dict[str, Any], stem: Path) -> tuple[Path, Path, 
         "Alignment,MarginL,MarginR,MarginV,Encoding\n"
         "Style: Headline,DejaVu Sans,72,&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,"
         "-1,0,0,0,100,100,0,0,3,3,1,8,90,90,100,1\n"
-        "Style: Caption,DejaVu Sans,55,&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,"
-        "-1,0,0,0,100,100,0,0,3,3,1,2,90,90,150,1\n"
+        "Style: Caption,DejaVu Sans,46,&H00FFFFFF,&H00FFFFFF,&H00000000,&H90000000,"
+        "-1,0,0,0,100,100,0,0,3,3,1,2,110,110,150,1\n"
         "\n[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n"
         f"Dialogue: 2,0:00:00.00,{ass_time(source['duration'])},Headline,,0,0,0,,{headline}\n"
         + "\n".join(events) + "\n",
@@ -139,11 +147,13 @@ def source_has_audible_audio(path: Path) -> bool:
 
 def render(source_path: Path, target: Path, source: dict[str, Any], voice: Path, ass: Path, tempo: float) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
+    crop_top = float(source.get("crop_top", 0))
+    crop = f"crop=iw:ih*{1-crop_top:.4f}:0:ih*{crop_top:.4f}," if crop_top else ""
     base_video = (
         "[0:v]split=2[bg][fg];"
         "[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"
         "boxblur=24:12,eq=brightness=-0.18[blur];"
-        "[fg]scale=1080:1120:force_original_aspect_ratio=decrease[front];"
+        f"[fg]{crop}scale=1080:1120:force_original_aspect_ratio=decrease[front];"
         "[blur][front]overlay=(W-w)/2:430+(1120-h)/2[base];"
         f"[base]subtitles='{str(ass).replace(chr(92), '/')}':fontsdir='/usr/share/fonts/truetype/dejavu'[out]"
     )
@@ -212,7 +222,7 @@ def main() -> None:
 
     for index, source in enumerate(SOURCES, start=1):
         source_path = download(source)
-        filename = f"kwai-futebol-{source['event']}-{RUN_DATE}-{index:03d}-v2.mp4"
+        filename = f"kwai-futebol-{source['event']}-{RUN_DATE}-{index:03d}-v2-final.mp4"
         video = READY_ROOT / filename
         cover_path = READY_ROOT / filename.replace(".mp4", "-capa.jpg")
         voice, ass, tempo = create_tts_and_ass(source, video)
@@ -250,13 +260,13 @@ def main() -> None:
             "last_error": None, "metrics": {"license": source["license"], "author": source["author"], "source": "Wikimedia Commons"},
         }, on_conflict="profile_id,source_type,source_ref").execute()
         event = one(client.table("content_events").upsert({
-            "profile_id": PROFILE, "source_event_key": f"manual-mobile-v2:{source['key']}:{RUN_DATE}",
+            "profile_id": PROFILE, "source_event_key": f"manual-mobile-v2-final:{source['key']}:{RUN_DATE}",
             "source_ref": source["page"], "timestamp_seconds": float(source["start"]),
             "event_type": source["event"], "metadata": {"confidence": 1.0, "football_real": True, "version": 2},
         }, on_conflict="profile_id,source_event_key").execute().data)
         variant = one(client.table("editorial_variants").upsert({
             "event_id": event["event_id"], "profile_id": PROFILE, "strategy": "cut",
-            "variant_signature": f"manual-mobile-v2:{source['key']}",
+            "variant_signature": f"manual-mobile-v2-final:{source['key']}",
             "editorial_metadata": {"format": "9:16", "headline": source["title"], "captions": source["script"], "version": 2},
         }, on_conflict="profile_id,event_id,variant_signature").execute().data)
         asset = one(client.table("media_assets").upsert({
@@ -271,7 +281,7 @@ def main() -> None:
             "profile_id": PROFILE, "event_id": event["event_id"], "variant_id": variant["variant_id"],
             "asset_id": asset["asset_id"], "destination_id": destination["id"], "platform": "kwai",
             "account_id": destination["account_id"], "status": "ready" if not errors else "rejected",
-            "publication_key": f"kwai-v2:{sha256}", "title": source["display_title"], "caption": caption,
+            "publication_key": f"kwai-v2-final:{sha256}", "title": source["display_title"], "caption": caption,
             "cover_path": str(cover_path), "metadata": {
                 "publication_mode": "prepare_only", "publication_method": "manual_mobile",
                 "download_filename": filename, "license": source["license"], "source_url": source["page"],
