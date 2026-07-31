@@ -18,6 +18,7 @@ def test_legacy_asset_identifier_remains_addressable() -> None:
     assert "[0-9a-f]{11,12}" in SERVER
     assert "querySupabaseFlexibleId" in SERVER
     assert "String(row.asset_id) === String(value)" in SERVER
+    assert "findMediaFile(job?.metadata?.download_filename)" in SERVER
 
 
 def test_producer_writes_only_under_configured_output_root() -> None:
