@@ -7,9 +7,11 @@ import logging
 import os
 import secrets
 import time
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib import error, request
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from tiktok_oauth import (
@@ -53,6 +55,65 @@ def oauth() -> TikTokOAuthClient:
 
 def token_store() -> EncryptedTokenStore:
     return EncryptedTokenStore(ROOT, os.environ["TIKTOK_STANDARD_TOKEN_ENCRYPTION_KEY"])
+
+
+def _iso_timestamp(value: object) -> str | None:
+    try:
+        seconds = int(value or 0)
+    except (TypeError, ValueError):
+        return None
+    if not seconds:
+        return None
+    return datetime.fromtimestamp(seconds, timezone.utc).isoformat()
+
+
+def _supabase_request(path: str, *, method: str = "GET", payload: object | None = None) -> object:
+    base_url = os.getenv("ROBO_SUPABASE_URL", "").rstrip("/")
+    api_key = os.getenv("ROBO_SUPABASE_KEY", "")
+    if not base_url or not api_key:
+        raise RuntimeError("Supabase metadata sync is not configured")
+    body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode()
+    req = request.Request(
+        f"{base_url}/rest/v1/{path}", data=body, method=method,
+        headers={
+            "apikey": api_key,
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal,resolution=merge-duplicates",
+        },
+    )
+    with request.urlopen(req, timeout=20) as response:
+        raw = response.read()
+    return json.loads(raw) if raw else None
+
+
+def sync_connection_metadata(tokens: dict[str, object]) -> None:
+    """Expose only non-secret OAuth state to the private dashboard."""
+    accounts = _supabase_request(
+        "platform_accounts?platform=eq.tiktok_standard&account_key="
+        f"eq.{TIKTOK_STANDARD_ACCOUNT_KEY}&select=id&limit=1"
+    )
+    if not isinstance(accounts, list) or not accounts:
+        raise RuntimeError("TikTok Standard account metadata was not found")
+    raw_scope = str(tokens.get("scope") or "")
+    scopes = sorted({item.strip() for item in raw_scope.replace(" ", ",").split(",") if item.strip()})
+    now = datetime.now(timezone.utc).isoformat()
+    _supabase_request(
+        "tiktok_standard_connections?on_conflict=account_id", method="POST",
+        payload={
+            "account_id": accounts[0]["id"],
+            "open_id": tokens.get("open_id"),
+            "secret_ref": f"tiktok-encrypted:{TIKTOK_STANDARD_ACCOUNT_KEY}",
+            "granted_scopes": scopes,
+            "token_expires_at": _iso_timestamp(tokens.get("expires_at")),
+            "refresh_expires_at": _iso_timestamp(tokens.get("refresh_expires_at")),
+            "review_status": "draft",
+            "connection_status": "connected",
+            "connected_at": now,
+            "disconnected_at": None,
+            "updated_at": now,
+        },
+    )
 
 
 def page(title: str, body: str) -> bytes:
@@ -173,6 +234,11 @@ habilitam nem integram o TikTok Shop.</p>""")
             except TikTokOAuthError:
                 logger.exception("OAuth callback failed without logging credentials")
                 return self.send_html(502, "Falha na conexão", "<p>Não foi possível concluir a autorização.</p>")
+            try:
+                sync_connection_metadata(tokens)
+            except (RuntimeError, OSError, error.URLError, json.JSONDecodeError):
+                # Authorization remains valid; metadata can be reconciled later.
+                logger.exception("OAuth succeeded but non-secret dashboard metadata sync is pending")
             session = self.issue_session()
             return self.redirect(
                 f"{DASHBOARD_URL}?tiktok=connected",
