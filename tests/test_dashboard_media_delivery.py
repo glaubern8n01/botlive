@@ -29,3 +29,6 @@ def test_producer_writes_only_under_configured_output_root() -> None:
     assert 'if video.exists()' in PRODUCER
     assert 'hashlib.sha256(work_video.read_bytes())' in PRODUCER
     assert 'work_video.replace(video)' in PRODUCER
+    assert 'result: list[dict[str, Any]] = []' in PRODUCER
+    assert '"headline": "top", "captions": "bottom", "watermark_added": False' in PRODUCER
+    assert "HOOK_STYLES" in PRODUCER
