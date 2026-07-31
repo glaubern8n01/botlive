@@ -25,6 +25,7 @@ class Client:
 
 def test_producer_reintegrates_wikimedia_when_license_is_registered(monkeypatch):
     monkeypatch.setenv("KWAI_API_ENABLED", "0")
+    monkeypatch.setattr("kwai_cut_producer.resource_block_reason", lambda: None)
     client = Client()
     result = KwaiCutProducer(client, "test-worker").run_once()
     assert result == {"target": 30, "approved": 3, "deficit": 27, "eligible_sources": 1, "status": "deficit"}
@@ -39,3 +40,10 @@ def test_producer_refuses_api_enabled(monkeypatch):
         assert "must remain 0" in str(exc)
     else:
         raise AssertionError("producer accepted external Kwai API")
+
+
+def test_producer_pauses_when_another_heavy_job_is_running(monkeypatch):
+    monkeypatch.setenv("KWAI_API_ENABLED", "0")
+    monkeypatch.setattr("kwai_cut_producer.resource_block_reason", lambda: "ffmpeg_already_running")
+    result = KwaiCutProducer(Client(), "test-worker").run_once()
+    assert result["status"] == "paused_resource_guard"
