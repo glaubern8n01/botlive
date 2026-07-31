@@ -12,6 +12,10 @@ ACTION_TERMS = (
     "falta", "expuls", "red card", "comemor", "virada", "highlights",
     "melhores momentos", "best moments", "chance", "decisiv", "replay",
 )
+FOOTBALL_TERMS = (
+    "futebol", "football", "soccer", "brasileirao", "libertadores",
+    "champions", "copa", "campeonato", "partida", "match", "fc ",
+)
 
 
 def normalized_url(value: str) -> str:
@@ -44,6 +48,29 @@ class DiscoveredVideo:
         text = f"{self.title} {self.metadata.get('description', '')}".casefold()
         return any(term in text for term in ACTION_TERMS)
 
+    @property
+    def has_football_signal(self) -> bool:
+        text = f"{self.title} {self.metadata.get('description', '')}".casefold()
+        return self.has_action_signal or any(term in text for term in FOOTBALL_TERMS)
+
+    @property
+    def content_mode(self) -> str:
+        live_status = str(self.metadata.get("live_status") or "").casefold()
+        if self.metadata.get("is_live") is True or live_status == "is_live":
+            return "live"
+        if live_status in {"was_live", "post_live"}:
+            return "vod"
+        if self.has_action_signal:
+            return "highlights"
+        return "vod"
+
+    def allowed_for(self, source: Any) -> bool:
+        if self.content_mode == "live":
+            return bool(source.allowed_live) and self.has_football_signal
+        if self.content_mode == "highlights":
+            return bool(source.allowed_highlights) and self.has_action_signal
+        return bool(source.allowed_vod) and self.has_action_signal
+
 
 @dataclass(frozen=True)
 class SourceCheck:
@@ -54,6 +81,7 @@ class SourceCheck:
     new: int
     duplicates: int
     discarded: int
+    live: int = 0
     error: str | None = None
     checked_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -84,7 +112,7 @@ class MultiChannelFootballDiscovery:
         for source in sources:
             if not source.auto_process_allowed:
                 continue
-            found = new = duplicates = discarded = 0
+            found = new = duplicates = discarded = live = 0
             try:
                 rows = list(self.discoverer(source))
                 found = len(rows)
@@ -97,7 +125,9 @@ class MultiChannelFootballDiscovery:
                         published_at=row.get("upload_date") or row.get("published_at"),
                         metadata=row,
                     )
-                    if not item.url or not item.title or not item.has_action_signal:
+                    if item.content_mode == "live":
+                        live += 1
+                    if not item.url or not item.title or not item.allowed_for(source):
                         discarded += 1
                         continue
                     if item.discovery_key in seen:
@@ -106,10 +136,10 @@ class MultiChannelFootballDiscovery:
                     seen.add(item.discovery_key)
                     candidates.append(item)
                     new += 1
-                checks.append(SourceCheck(source.source_id, source.name, "ok", found, new, duplicates, discarded))
+                checks.append(SourceCheck(source.source_id, source.name, "ok", found, new, duplicates, discarded, live))
             except Exception as exc:
                 checks.append(SourceCheck(source.source_id, source.name, "error", found, new, duplicates, discarded,
-                                          f"{type(exc).__name__}: {exc}"))
+                                          live, f"{type(exc).__name__}: {exc}"))
         return DiscoveryReport(tuple(checks), tuple(candidates))
 
 

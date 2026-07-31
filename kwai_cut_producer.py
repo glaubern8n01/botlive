@@ -111,7 +111,13 @@ class KwaiCutProducer:
             source_id=str(row["source_id"]), name=str(row["name"]),
             source_type=str(row["source_type"]), source_ref=str(row["source_ref"]),
             usage_status=str(row["usage_status"]), enabled=bool(row.get("enabled", True)),
-            priority=int(row.get("priority") or 50), settings=row.get("settings") or {},
+            priority=int(row.get("priority") or 50),
+            check_frequency_minutes=int(row.get("check_frequency_minutes") or 30),
+            allowed_live=bool(row.get("allowed_live", False)),
+            allowed_vod=bool(row.get("allowed_vod", True)),
+            allowed_highlights=bool(row.get("allowed_highlights", True)),
+            allowed_news=bool(row.get("allowed_news", False)),
+            max_cuts=int(row.get("max_cuts") or 10), settings=row.get("settings") or {},
         ) for row in rows)
         existing_rows = (self.client.table("football_discovered_videos")
                          .select("discovery_key").eq("profile_id", PROFILE).execute().data or [])
@@ -122,7 +128,7 @@ class KwaiCutProducer:
                 "profile_id": PROFILE, "source_id": check.source_id, "status": check.status,
                 "checked_at": check.checked_at, "found_count": check.found, "new_count": check.new,
                 "duplicate_count": check.duplicates, "discarded_count": check.discarded,
-                "error": check.error,
+                "live_count": check.live, "error": check.error,
             }).execute()
             self.client.table("football_sources").update({
                 "last_checked_at": check.checked_at, "status": check.status,
@@ -134,10 +140,11 @@ class KwaiCutProducer:
                 "discovery_key": item.discovery_key, "external_id": item.external_id or None,
                 "source_url": item.url, "source_name": item.source_name, "title": item.title,
                 "duration": item.duration, "source_published_at": item.published_at,
-                "status": "found", "metadata": dict(item.metadata),
+                "status": "found", "metadata": {**dict(item.metadata), "content_mode": item.content_mode},
             }, on_conflict="profile_id,discovery_key").execute()
         return {"channels_consulted": report.channels_consulted,
                 "candidates": len(report.candidates),
+                "live_found": sum(check.live for check in report.checks),
                 "channel_errors": sum(check.status == "error" for check in report.checks)}
 
     def produce_next(self) -> bool:
@@ -172,7 +179,7 @@ def main() -> None:
     worker = KwaiCutProducer(client)
     signal.signal(signal.SIGINT, worker.stop)
     signal.signal(signal.SIGTERM, worker.stop)
-    worker.loop(int(os.getenv("KWAI_CUT_PRODUCER_INTERVAL_SECONDS", "900")))
+    worker.loop(int(os.getenv("KWAI_CUT_PRODUCER_INTERVAL_SECONDS", "300")))
 
 
 if __name__ == "__main__":

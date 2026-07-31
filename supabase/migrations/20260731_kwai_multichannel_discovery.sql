@@ -8,6 +8,7 @@ create table if not exists public.football_source_checks (
   new_count integer not null default 0,
   duplicate_count integer not null default 0,
   discarded_count integer not null default 0,
+  live_count integer not null default 0,
   error text
 );
 
