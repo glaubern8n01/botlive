@@ -314,14 +314,15 @@ def main() -> None:
         video = READY_ROOT / filename
         cover_path = READY_ROOT / filename.replace(".mp4", "-capa.jpg")
         voice, ass, tempo = create_tts_and_ass(source, video)
+        work_video = video if video.exists() else video.with_suffix(".rendering.mp4")
         if video.exists():
             narration = "original+TTS" if source_has_audible_audio(source_path) else "TTS"
         else:
-            narration = render(source_path, video, source, voice, ass, tempo)
-        cover(video, cover_path)
-        frames = validation_frames(video, source)
-        info = probe(video)
-        audio = analyze_audio(video)
+            narration = render(source_path, work_video, source, voice, ass, tempo)
+        cover(work_video, cover_path)
+        frames = validation_frames(work_video, source)
+        info = probe(work_video)
+        audio = analyze_audio(work_video)
         errors = []
         if (info["width"], info["height"]) != (1080, 1920): errors.append("rejected_resolution")
         if info["codec"] != "h264" or info["audio_codec"] != "aac": errors.append("rejected_codec")
@@ -329,6 +330,9 @@ def main() -> None:
         errors += required_text_gates(source["title"], ass, frames)
         if not visual_gate(frames): errors.append("rejected_visual_text_gate")
         errors = sorted(set(errors))
+        if not errors and work_video != video:
+            work_video.replace(video)
+            work_video = video
         gates = {
             "audible_audio": audio.status == "valid", "mean_volume_db": audio.mean_db,
             "max_volume_db": audio.peak_db, "audio_duration": audio.audio_duration,
@@ -339,7 +343,7 @@ def main() -> None:
             "validation_frames": [str(frame) for frame in frames],
             "headline_frame": str(frames[0]), "caption_frame": str(frames[1]),
         }
-        sha256 = hashlib.sha256(video.read_bytes()).hexdigest()
+        sha256 = hashlib.sha256(work_video.read_bytes()).hexdigest()
 
         client.table("football_sources").upsert({
             "profile_id": PROFILE, "name": source["name"], "source_type": "authorized_feed",
@@ -359,7 +363,7 @@ def main() -> None:
         }, on_conflict="profile_id,event_id,variant_signature").execute().data)
         asset = one(client.table("media_assets").upsert({
             "profile_id": PROFILE, "event_id": event["event_id"], "variant_id": variant["variant_id"],
-            "path": str(video), "sha256": sha256, "duration": info["duration"], "width": info["width"],
+            "path": str(work_video), "sha256": sha256, "duration": info["duration"], "width": info["width"],
             "height": info["height"], "aspect_ratio": "9:16", "codec": info["codec"],
             "audio_codec": info["audio_codec"], "filesize": info["filesize"],
             "validation_status": "invalid" if errors else "valid", "validation_errors": errors,

@@ -8,7 +8,9 @@ const distRoot = resolve(process.env.DASHBOARD_DIST_ROOT || 'dist');
 const mediaRoot = resolve(process.env.BOTLIVE_OUTPUT_ROOT || '/data/botlive/output');
 const supabaseUrl = process.env.VITE_SUPABASE_URL;
 const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY;
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// Aceita também o identificador legado de 35 caracteres já persistido no banco.
+// A consulta continua limitada a hexadecimal/hífens e igualdade exata no Supabase.
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{11,12}$/i;
 
 const mimeTypes = {
   '.css': 'text/css; charset=utf-8',
@@ -78,9 +80,11 @@ async function serveFile(request, response, path, options = {}) {
     const end = match[2] ? Math.min(Number(match[2]), info.size - 1) : info.size - 1;
     if (start > end || start >= info.size) return json(response, 416, { error: 'Intervalo inválido' });
     response.writeHead(206, { ...headers, 'Content-Length': end - start + 1, 'Content-Range': `bytes ${start}-${end}/${info.size}` });
+    if (request.method === 'HEAD') return response.end();
     return createReadStream(path, { start, end }).pipe(response);
   }
   response.writeHead(200, { ...headers, 'Content-Length': info.size });
+  if (request.method === 'HEAD') return response.end();
   createReadStream(path).pipe(response);
 }
 

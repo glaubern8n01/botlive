@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CheckCircle2, ExternalLink, RefreshCw, ShieldCheck } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Copy, RefreshCw, Save, ShieldCheck } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -24,12 +24,14 @@ type Job = {
   external_id: string | null; remote_status: string | null; last_error: string | null;
   created_at: string; published_at: string | null; metadata: Record<string, unknown>;
 };
+type GtaMetrics = { generated: number; youtube_published: number; instagram_published: number; tiktok_drafts: number; tiktok_published_manual: number; failures: number; next_scheduled_at: string | null };
 
 export function TikTok() {
   const [tab, setTab] = useState<Tab>('Visão geral');
   const [account, setAccount] = useState<Account | null>(null);
   const [connection, setConnection] = useState<Connection | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [metrics, setMetrics] = useState<GtaMetrics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const authBase = import.meta.env.VITE_TIKTOK_AUTH_BASE_URL || '';
@@ -41,12 +43,13 @@ export function TikTok() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     if (!supabase) { setError('Supabase não configurado; nenhum dado foi inventado.'); setLoading(false); return; }
-    const [accountResult, connectionResult, jobsResult] = await Promise.all([
+    const [accountResult, connectionResult, jobsResult, metricsResult] = await Promise.all([
       supabase.from('platform_accounts_safe').select('display_name,account_key,status,secret_configured')
         .eq('platform', 'tiktok_standard').eq('account_key', 'gta6brasilcortes').maybeSingle(),
       supabase.from('tiktok_standard_connections_safe').select('*').maybeSingle(),
       supabase.from('publication_jobs').select('job_id,status,title,caption,external_id,remote_status,last_error,created_at,published_at,metadata')
         .eq('platform', 'tiktok_standard').in('profile_id', PROFILE_IDS).order('created_at', { ascending: false }).limit(100),
+      supabase.from('gta_daily_metrics').select('*').maybeSingle(),
     ]);
     if (accountResult.error || connectionResult.error || jobsResult.error) {
       setError('A migration TikTok Standard ainda não foi aplicada ou a leitura está indisponível.');
@@ -54,13 +57,14 @@ export function TikTok() {
     setAccount(accountResult.data as Account | null);
     setConnection(connectionResult.data as Connection | null);
     setJobs((jobsResult.data || []) as Job[]);
+    setMetrics(metricsResult.data as GtaMetrics | null);
     setLoading(false);
   }, []);
   useEffect(() => { void load(); }, [load]);
 
   const prepared = jobs.filter((job) => ['pending', 'ready'].includes(job.status)).length;
-  const drafts = jobs.filter((job) => job.metadata?.mode === 'upload_draft').length;
-  const published = jobs.filter((job) => job.status === 'published').length;
+  const drafts = jobs.filter((job) => ['draft_available','sent_to_user_inbox'].includes(job.status)).length;
+  const published = jobs.filter((job) => ['published','published_manual'].includes(job.status)).length;
   const failures = jobs.filter((job) => job.last_error || ['failed', 'rejected'].includes(job.status));
   const lastPublished = jobs.find((job) => job.published_at)?.published_at;
   const scoped = useMemo(() => new Set(connection?.granted_scopes || []), [connection]);
@@ -83,6 +87,7 @@ export function TikTok() {
       <Metric title="Rascunhos enviados" value={String(drafts)} />
       <Metric title="Publicados" value={String(published)} />
       <Metric title="Falhas" value={String(failures.length)} />
+      <Metric title="Meta GTA" value="8 / dia · máx. 12" />
       <Metric title="Última publicação" value={lastPublished ? new Date(lastPublished).toLocaleString() : 'nenhuma'} />
     </div>
     <div className="flex gap-1 overflow-x-auto border-b border-zinc-800">{TABS.map((item) =>
@@ -107,9 +112,9 @@ export function TikTok() {
             <Button variant="outline" disabled={!connection}>Testar conexão</Button>
           </div>
         </CardContent></Card>}
-        {tab === 'Vídeos' && <Jobs jobs={jobs} empty="Nenhuma variante TikTok preparada." />}
-        {tab === 'Fila' && <Jobs jobs={jobs.filter((job) => job.status !== 'published')} empty="Fila vazia." />}
-        {tab === 'Erros' && <Jobs jobs={failures} empty="Nenhum erro registrado." />}
+        {tab === 'Vídeos' && <Jobs jobs={jobs} empty="Nenhuma variante TikTok preparada." refresh={load} />}
+        {tab === 'Fila' && <Jobs jobs={jobs.filter((job) => !['published','published_manual'].includes(job.status))} empty="Fila vazia." refresh={load} />}
+        {tab === 'Erros' && <Jobs jobs={failures} empty="Nenhum erro registrado." refresh={load} />}
         {tab === 'API' && <Card><CardHeader><CardTitle>Produtos e escopos</CardTitle></CardHeader><CardContent className="space-y-3">
           <Scope name="user.info.basic" available={scoped.has('user.info.basic')} />
           <Scope name="video.upload" available={scoped.has('video.upload')} />
@@ -124,7 +129,10 @@ export function TikTok() {
           'TIKTOK_SHOP_ENABLED=0', 'TIKTOK_SHOP_API_ENABLED=0',
         ]} />}
         {tab === 'Métricas' && <Panel title="Métricas reais" lines={[
-          `${prepared} preparados`, `${drafts} rascunhos`, `${published} publicados`, `${failures.length} falhas`,
+          `${metrics?.generated ?? 0} gerados hoje`, `${metrics?.youtube_published ?? 0} YouTube publicados`,
+          `${metrics?.instagram_published ?? 0} Instagram publicados`, `${metrics?.tiktok_drafts ?? drafts} rascunhos TikTok`,
+          `${metrics?.tiktok_published_manual ?? 0} TikTok publicados manualmente`, `${metrics?.failures ?? failures.length} falhas`,
+          `Próximo horário: ${metrics?.next_scheduled_at ? new Date(metrics.next_scheduled_at).toLocaleString() : 'aguardando job'}`,
         ]} />}
       </section>}
   </div>;
@@ -145,12 +153,29 @@ function Scope({ name, available }: { name: string; available: boolean }) {
   return <div className="flex items-center justify-between rounded-lg border border-zinc-800 p-3"><code>{name}</code>
     <Badge variant={available ? 'success' : 'secondary'}>{available ? 'concedido' : 'não configurado'}</Badge></div>;
 }
-function Jobs({ jobs, empty }: { jobs: Job[]; empty: string }) {
+function Jobs({ jobs, empty, refresh }: { jobs: Job[]; empty: string; refresh: () => Promise<void> }) {
   if (!jobs.length) return <p className="py-12 text-center text-zinc-500">{empty}</p>;
-  return <div className="space-y-3">{jobs.map((job) => <Card key={job.job_id}><CardContent className="flex flex-col gap-3 pt-6 md:flex-row md:items-center">
-    <div className="flex-1"><b>{job.title || job.job_id.slice(0, 8)}</b><p className="text-sm text-zinc-400">{job.caption || 'Sem caption'}</p>
-      {job.last_error && <p className="text-sm text-red-400">{job.last_error}</p>}</div>
-    <Badge>{job.remote_status || job.status}</Badge>
-    <Button variant="outline" disabled><ExternalLink className="mr-2 h-4 w-4" />Abrir publicação</Button>
-  </CardContent></Card>)}</div>;
+  return <div className="space-y-3">{jobs.map((job) => <TikTokJob key={job.job_id} job={job} refresh={refresh} />)}</div>;
+}
+
+function TikTokJob({ job, refresh }: { job: Job; refresh: () => Promise<void> }) {
+  const [description, setDescription] = useState(String(job.metadata?.description || job.caption || ''));
+  const [hashtags, setHashtags] = useState(String(job.metadata?.hashtags || ''));
+  const [credits, setCredits] = useState(String(job.metadata?.credits || ''));
+  const [externalId, setExternalId] = useState('');
+  const editable = ['pending','ready','draft_available','sent_to_user_inbox'].includes(job.status);
+  const text = [description, credits, hashtags].filter(Boolean).join('\n\n');
+  return <Card><CardContent className="space-y-3 pt-6">
+    <div className="flex items-start justify-between gap-3"><div><b>{job.title || job.job_id.slice(0, 8)}</b><p className="text-xs text-zinc-500">{text.length} caracteres</p></div><Badge>{job.remote_status || job.status}</Badge></div>
+    <textarea className="min-h-20 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={description} onChange={(e) => setDescription(e.target.value)} disabled={!editable} />
+    <textarea className="min-h-14 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={hashtags} onChange={(e) => setHashtags(e.target.value)} disabled={!editable} />
+    <div className="flex flex-wrap gap-2">
+      <Button variant="outline" onClick={() => void navigator.clipboard.writeText(description)} disabled={!description}><Copy className="mr-2 h-4 w-4" />Copiar descrição</Button>
+      <Button variant="outline" onClick={() => void navigator.clipboard.writeText(hashtags)} disabled={!hashtags}><Copy className="mr-2 h-4 w-4" />Copiar hashtags</Button>
+      <Button variant="outline" onClick={() => void navigator.clipboard.writeText(text)} disabled={!text}><Copy className="mr-2 h-4 w-4" />Copiar tudo</Button>
+      <Button variant="outline" disabled={!editable || !supabase} onClick={async () => { if (!supabase) return; await supabase.rpc('update_publication_text',{p_job_id:job.job_id,p_description:description,p_hashtags:hashtags,p_credits:credits,p_caption:text}); await refresh(); }}><Save className="mr-2 h-4 w-4" />Salvar texto</Button>
+    </div>
+    {['draft_available','sent_to_user_inbox'].includes(job.status) && <div className="flex flex-col gap-2 sm:flex-row"><input className="h-9 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 text-sm" placeholder="URL ou ID opcional" value={externalId} onChange={(e) => setExternalId(e.target.value)} /><Button onClick={async () => { if (!supabase) return; await supabase.rpc('mark_manual_publication',{p_job_id:job.job_id,p_external_id:externalId,p_published_at:new Date().toISOString()}); await refresh(); }}><CheckCircle2 className="mr-2 h-4 w-4" />Marcar como publicado no TikTok</Button></div>}
+    {job.last_error && <p className="text-sm text-red-400">{job.last_error}</p>}
+  </CardContent></Card>;
 }
