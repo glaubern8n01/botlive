@@ -54,3 +54,13 @@ def test_worker_volume_is_sequential():
     assert kwai_cut_producer.RENDER_CONCURRENCY == 1
     assert kwai_cut_producer.DAILY_TARGET == 30
     assert kwai_cut_producer.DAILY_MAXIMUM == 100
+
+
+def test_producer_never_falls_back_to_legacy_static_catalog(monkeypatch):
+    monkeypatch.setenv("KWAI_API_ENABLED", "0")
+    monkeypatch.setattr("kwai_cut_producer.resource_block_reason", lambda: None)
+    worker = KwaiCutProducer(Client(), "test-worker")
+    monkeypatch.setattr(worker, "discover_all_sources", lambda: {
+        "channels_consulted": 3, "candidates": 2, "channel_errors": 0,
+    })
+    assert worker.produce_next() is False

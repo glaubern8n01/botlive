@@ -4,13 +4,13 @@ import logging
 import os
 import signal
 import socket
-import subprocess
-import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from database import _get_client
+from football_source_discovery import MultiChannelFootballDiscovery, ytdlp_discover
+from kwai_cut_football import FootballSource
 
 PROFILE = "kwai_cut_futebol"
 LOGGER = logging.getLogger("botlive.kwai_cut_producer")
@@ -103,18 +103,54 @@ class KwaiCutProducer:
         LOGGER.info("Kwai CUT daily state: %s", result)
         return result
 
+    def discover_all_sources(self) -> dict[str, int]:
+        rows = (self.client.table("football_sources").select("*")
+                .eq("profile_id", PROFILE).eq("enabled", True)
+                .in_("usage_status", ALLOWED).execute().data or [])
+        sources = tuple(FootballSource(
+            source_id=str(row["source_id"]), name=str(row["name"]),
+            source_type=str(row["source_type"]), source_ref=str(row["source_ref"]),
+            usage_status=str(row["usage_status"]), enabled=bool(row.get("enabled", True)),
+            priority=int(row.get("priority") or 50), settings=row.get("settings") or {},
+        ) for row in rows)
+        existing_rows = (self.client.table("football_discovered_videos")
+                         .select("discovery_key").eq("profile_id", PROFILE).execute().data or [])
+        report = MultiChannelFootballDiscovery(ytdlp_discover).scan_all(
+            sources, (row["discovery_key"] for row in existing_rows))
+        for check in report.checks:
+            self.client.table("football_source_checks").insert({
+                "profile_id": PROFILE, "source_id": check.source_id, "status": check.status,
+                "checked_at": check.checked_at, "found_count": check.found, "new_count": check.new,
+                "duplicate_count": check.duplicates, "discarded_count": check.discarded,
+                "error": check.error,
+            }).execute()
+            self.client.table("football_sources").update({
+                "last_checked_at": check.checked_at, "status": check.status,
+                "last_error": check.error,
+            }).eq("source_id", check.source_id).execute()
+        for item in report.candidates:
+            self.client.table("football_discovered_videos").upsert({
+                "profile_id": PROFILE, "source_id": item.source_id,
+                "discovery_key": item.discovery_key, "external_id": item.external_id or None,
+                "source_url": item.url, "source_name": item.source_name, "title": item.title,
+                "duration": item.duration, "source_published_at": item.published_at,
+                "status": "found", "metadata": dict(item.metadata),
+            }, on_conflict="profile_id,discovery_key").execute()
+        return {"channels_consulted": report.channels_consulted,
+                "candidates": len(report.candidates),
+                "channel_errors": sum(check.status == "error" for check in report.checks)}
+
     def produce_next(self) -> bool:
         """Renderiza no máximo um item; o ciclo seguinte retoma automaticamente."""
         state = self.run_once()
         if not state["deficit"] or state["status"] == "paused_resource_guard":
             return False
-        env = os.environ.copy()
-        env["KWAI_API_ENABLED"] = "0"
-        completed = subprocess.run(
-            [sys.executable, "scripts/prepare_kwai_manual_batch.py", "--auto", "--limit", "1"],
-            env=env, check=False,
-        )
-        return completed.returncode == 0
+        discovery = self.discover_all_sources()
+        LOGGER.info("Kwai CUT multichannel discovery: %s", discovery)
+        # O antigo --auto usa um catálogo histórico fixo e não recebe o candidato
+        # descoberto. Nunca o acione aqui: os vídeos reais ficam em `found` até o
+        # detector de lances consumi-los, em vez de aparentar produção com outro arquivo.
+        return False
 
     def loop(self, interval_seconds: int = 900) -> None:
         while not self.stop_requested:
