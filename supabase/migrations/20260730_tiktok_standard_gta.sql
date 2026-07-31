@@ -1,13 +1,10 @@
 -- TikTok Standard para GTA: aditiva, segura e separada do futuro TikTok Shop.
 -- Não armazena access_token, refresh_token ou client_secret.
 
-alter table public.profile_destinations
-    drop constraint if exists profile_destinations_publication_mode_check;
-alter table public.profile_destinations
-    add constraint profile_destinations_publication_mode_check
-    check (publication_mode in (
-        'disabled', 'prepare_only', 'manual', 'automatic', 'upload_draft', 'direct_post'
-    ));
+-- O modo inicial usa o valor existente `prepare_only`.
+-- `upload_draft` e `direct_post` permanecem nas configurações do destino até
+-- uma migration futura ampliar o constraint sem misturar essa reserva com a
+-- ativação inicial segura.
 
 create table if not exists public.tiktok_standard_connections (
     connection_id uuid primary key default gen_random_uuid(),
@@ -50,6 +47,18 @@ create table if not exists public.tiktok_standard_metrics (
     measured_at timestamptz not null default now()
 );
 
+alter table public.tiktok_standard_connections enable row level security;
+alter table public.tiktok_standard_audit enable row level security;
+alter table public.tiktok_standard_metrics enable row level security;
+
+create index if not exists tiktok_standard_audit_account_created_idx
+    on public.tiktok_standard_audit(account_id, created_at desc);
+create index if not exists tiktok_standard_metrics_account_measured_idx
+    on public.tiktok_standard_metrics(account_id, measured_at desc);
+create index if not exists tiktok_standard_metrics_publish_id_idx
+    on public.tiktok_standard_metrics(publish_id)
+    where publish_id is not null;
+
 comment on table public.tiktok_standard_connections is
     'Metadados não secretos; tokens ficam somente no armazenamento criptografado do backend.';
 
@@ -75,12 +84,18 @@ from public.profiles profile
 join public.platform_accounts account
   on account.platform='tiktok_standard' and account.account_key='gta6brasilcortes'
 where profile.profile_id in ('gta6_cortes', 'gta6')
-order by case when profile.profile_id='gta6_cortes' then 0 else 1 end
+   or profile.niche = 'gta'
+order by case
+    when profile.profile_id='gta6_cortes' then 0
+    when profile.profile_id='gta6' then 1
+    else 2
+end
 limit 1
 on conflict (profile_id, platform, account_id) do update
 set settings = public.profile_destinations.settings || excluded.settings;
 
-create or replace view public.tiktok_standard_connections_safe as
+create or replace view public.tiktok_standard_connections_safe
+with (security_invoker = true) as
 select
     connection_id, account_id, nickname, granted_scopes, token_expires_at,
     refresh_expires_at, review_status, connection_status, creator_info,
