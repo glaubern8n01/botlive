@@ -28,6 +28,7 @@ STATE_ROOT = ROOT / "states"
 SESSION_ROOT = ROOT / "sessions"
 DASHBOARD_URL = os.getenv("BOTLIVE_DASHBOARD_URL", "https://painel.vextriq.online/tiktok")
 CONTACT = os.getenv("BOTLIVE_PRIVACY_CONTACT", "Contato disponível no painel privado BotLive.")
+VERIFICATION_FILE = "tiktokQB4aDnyXfm23OX24SCdb2xCIevRlnjpE.txt"
 
 
 def configured() -> bool:
@@ -117,6 +118,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         url = urlparse(self.path)
+        if url.path == f"/{VERIFICATION_FILE}":
+            payload = Path(VERIFICATION_FILE).read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "public, max-age=300")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            return self.wfile.write(payload)
         if url.path == "/health":
             payload = json.dumps({"ok": True, "configured": configured(), "api_enabled": False}).encode()
             self.send_response(200)

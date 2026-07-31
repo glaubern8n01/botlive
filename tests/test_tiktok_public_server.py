@@ -13,3 +13,11 @@ def test_destructive_public_actions_require_oauth_session() -> None:
     source = Path("tiktok_public_server.py").read_text(encoding="utf-8")
     assert "if not self.authenticated_session()" in source
     assert "Conecte a conta pelo Login Kit" in source
+
+
+def test_official_url_verification_file_is_served_without_changes() -> None:
+    source = Path("tiktok_public_server.py").read_text(encoding="utf-8")
+    signature = Path("tiktokQB4aDnyXfm23OX24SCdb2xCIevRlnjpE.txt")
+    assert signature.is_file() and signature.stat().st_size > 0
+    assert signature.name in source
+    assert "read_bytes()" in source

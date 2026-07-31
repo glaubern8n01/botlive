@@ -9,6 +9,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir "cryptography>=42,<47"
 
 COPY tiktok_oauth.py tiktok_platform.py tiktok_public_server.py ./
+COPY tiktokQB4aDnyXfm23OX24SCdb2xCIevRlnjpE.txt ./
 
 RUN useradd --create-home --uid 10001 botlive \
     && mkdir -p /app/.tokens/tiktok-standard \
