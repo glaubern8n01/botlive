@@ -23,12 +23,12 @@ class Client:
     def table(self, name): return Query(self, name)
 
 
-def test_producer_records_deficit_without_reusing_historical_fixtures(monkeypatch):
+def test_producer_reintegrates_wikimedia_when_license_is_registered(monkeypatch):
     monkeypatch.setenv("KWAI_API_ENABLED", "0")
     client = Client()
     result = KwaiCutProducer(client, "test-worker").run_once()
-    assert result == {"target": 30, "approved": 3, "deficit": 27, "eligible_sources": 0, "status": "deficit"}
-    assert "Nenhuma fonte atual" in client.saved["last_error"]
+    assert result == {"target": 30, "approved": 3, "deficit": 27, "eligible_sources": 1, "status": "deficit"}
+    assert client.saved["last_error"] is None
 
 
 def test_producer_refuses_api_enabled(monkeypatch):
