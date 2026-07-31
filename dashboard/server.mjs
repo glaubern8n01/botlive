@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { realpath, stat, unlink } from 'node:fs/promises';
+import { readdir, realpath, stat, unlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, isAbsolute, join, resolve, sep } from 'node:path';
 
@@ -77,6 +77,21 @@ async function verifiedMediaPath(rawPath) {
   return candidate;
 }
 
+async function findMediaFile(filename, root = mediaRoot, depth = 0) {
+  if (!filename || depth > 6) return null;
+  const safe = safeFilename(filename, '');
+  if (!safe || safe !== filename) return null;
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const candidate = join(root, entry.name);
+    if (entry.isFile() && entry.name === safe) return candidate;
+    if (entry.isDirectory()) {
+      const found = await findMediaFile(safe, candidate, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 async function serveFile(request, response, path, options = {}) {
   const info = await stat(path);
   if (!info.isFile()) throw new Error('Arquivo não encontrado');
@@ -113,15 +128,19 @@ async function mediaRoute(request, response, url) {
   let filename;
   if (kind === 'video') {
     const asset = await querySupabaseFlexibleId('media_assets', assetId, 'path');
-    if (!asset?.path) return json(response, 404, { error: 'Vídeo não encontrado' }), true;
-    rawPath = asset.path;
+    rawPath = asset?.path;
+    if (!rawPath) {
+      const job = await querySupabaseFlexibleId('publication_jobs', assetId, 'metadata');
+      rawPath = await findMediaFile(job?.metadata?.download_filename);
+    }
+    if (!rawPath) return json(response, 404, { error: 'Vídeo não encontrado' }), true;
     filename = url.searchParams.get('name') || `kwai-futebol-${assetId.slice(0, 8)}.mp4`;
   } else {
     const job = await querySupabaseFlexibleId('publication_jobs', assetId, 'cover_path,metadata');
-    if (!job?.cover_path) return json(response, 404, { error: 'Capa não encontrada' }), true;
+    if (!job?.cover_path && !job?.metadata?.download_filename) return json(response, 404, { error: 'Capa não encontrada' }), true;
     const gates = job.metadata?.gates || {};
     rawPath = kind === 'headline-frame' ? gates.headline_frame
-      : kind === 'caption-frame' ? gates.caption_frame : job.cover_path;
+      : kind === 'caption-frame' ? gates.caption_frame : (job.cover_path || await findMediaFile(job.metadata.download_filename.replace(/\.mp4$/, '-capa.jpg')));
     if (!rawPath) return json(response, 404, { error: 'Frame de validação não encontrado' }), true;
     filename = url.searchParams.get('name') || `kwai-futebol-${kind}-${assetId.slice(0, 8)}${extname(rawPath) || '.jpg'}`;
   }
