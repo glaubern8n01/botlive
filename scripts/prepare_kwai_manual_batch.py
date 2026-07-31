@@ -11,6 +11,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw, ImageFont
 from supabase import create_client
@@ -20,7 +21,7 @@ from kwai_media_validation import analyze_audio, required_text_gates
 
 PROFILE = "kwai_cut_futebol"
 OUTPUT_ROOT = Path(os.getenv("BOTLIVE_OUTPUT_ROOT", "/data/botlive/output"))
-RUN_DATE = datetime.now(timezone.utc).strftime("%Y%m%d")
+RUN_DATE = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y%m%d")
 READY_ROOT = OUTPUT_ROOT / "kwai_cut" / "ready" / RUN_DATE
 SOURCE_ROOT = OUTPUT_ROOT / "kwai_cut" / "licensed_sources"
 FONT = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
@@ -97,6 +98,7 @@ def ass_time(seconds: float) -> str:
 
 
 def create_tts_and_ass(source: dict[str, Any], stem: Path) -> tuple[Path, Path, float]:
+    stem.parent.mkdir(parents=True, exist_ok=True)
     voice = stem.with_suffix(".tts.wav")
     ass = stem.with_suffix(".ass")
     narration = " ".join(source["script"])
