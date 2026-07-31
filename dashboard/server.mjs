@@ -133,6 +133,7 @@ async function mediaRoute(request, response, url) {
       const job = await querySupabaseFlexibleId('publication_jobs', assetId, 'metadata');
       rawPath = await findMediaFile(job?.metadata?.download_filename);
     }
+    if (!rawPath) rawPath = await findMediaFile(safeFilename(url.searchParams.get('name'), ''));
     if (!rawPath) return json(response, 404, { error: 'Vídeo não encontrado' }), true;
     filename = url.searchParams.get('name') || `kwai-futebol-${assetId.slice(0, 8)}.mp4`;
   } else {

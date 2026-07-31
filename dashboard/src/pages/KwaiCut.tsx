@@ -249,7 +249,7 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
   const created = new Date(job.created_at);
   const date = `${created.getFullYear()}${String(created.getMonth() + 1).padStart(2, '0')}${String(created.getDate()).padStart(2, '0')}`;
   const slug = String(job.content_events?.event_type || 'lance').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'lance';
-  const filename = `kwai-futebol-${slug}-${date}-${String(index + 1).padStart(3, '0')}.mp4`;
+  const filename = String(job.metadata?.download_filename || `kwai-futebol-${slug}-${date}-${String(index + 1).padStart(3, '0')}.mp4`);
   const coverName = filename.replace(/\.mp4$/, '-capa.jpg');
   const videoUrl = `/api/assets/${job.asset_id}/video?name=${encodeURIComponent(filename)}`;
   const coverUrl = `/api/assets/${job.asset_id}/cover?name=${encodeURIComponent(coverName)}`;
