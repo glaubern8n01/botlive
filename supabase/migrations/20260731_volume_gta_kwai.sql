@@ -7,6 +7,42 @@ update public.profiles set settings = settings ||
   '{"gta_daily_target":8,"gta_daily_maximum":12,"gta_render_concurrency":1,"schedule_hours":[8,10,12,14,16,18,20,22]}'::jsonb,
   updated_at=now() where profile_id in ('vigia','gta','gta_standard');
 
+update public.vigia_config set max_posts_per_day=8,max_cortes_vod=greatest(max_cortes_vod,8),
+  max_concurrent_renders=1,updated_at=now() where id=1;
+
+alter table public.profile_destinations drop constraint if exists profile_destinations_publication_mode_check;
+alter table public.profile_destinations add constraint profile_destinations_publication_mode_check check (
+  publication_mode in ('disabled','manual','approval','prepare_only','automatic','upload_draft')
+);
+
+update public.profile_destinations set max_posts_per_day=8,minimum_interval_seconds=7200,
+  allowed_hours='{8,10,12,14,16,18,20,22}',timezone='America/Sao_Paulo',
+  max_pending_jobs=12,settings=settings||'{"daily_target":8,"daily_maximum":12,"render_concurrency":1}'::jsonb
+where profile_id in ('gta6_cortes','gta6') and platform in ('youtube','instagram');
+
+update public.profile_destinations set enabled=true,publication_mode='upload_draft',max_posts_per_day=8,
+  minimum_interval_seconds=7200,allowed_hours='{8,10,12,14,16,18,20,22}',timezone='America/Sao_Paulo',
+  max_pending_jobs=12,settings=settings||'{"mode":"upload_draft","rights_status":"authorized","direct_post":false,"shop":false}'::jsonb
+where profile_id in ('gta6_cortes','gta6') and platform='tiktok_standard';
+
+-- O rascunho confirmado pelo operador vira terminal para envio, mas não publicado.
+update public.publication_jobs set status='draft_available',remote_status='SEND_TO_USER_INBOX',
+  metadata=metadata||jsonb_build_object('manual_draft_confirmation',true,'draft_confirmed_at',now())
+where platform='tiktok_standard' and external_id is not null
+  and coalesce(metadata->>'mode',metadata->>'publish_mode')='upload_draft'
+  and status in ('processing','ready','sent_to_user_inbox');
+
+create or replace view public.gta_daily_metrics as
+select current_date metric_date,
+ count(distinct asset_id) filter(where created_at>=current_date) generated,
+ count(*) filter(where platform='youtube' and status in ('published','published_manual') and created_at>=current_date) youtube_published,
+ count(*) filter(where platform='instagram' and status in ('published','published_manual') and created_at>=current_date) instagram_published,
+ count(*) filter(where platform='tiktok_standard' and status in ('draft_available','sent_to_user_inbox') and created_at>=current_date) tiktok_drafts,
+ count(*) filter(where status='published_manual' and platform='tiktok_standard' and created_at>=current_date) tiktok_published_manual,
+ count(*) filter(where status in ('failed','rejected') and created_at>=current_date) failures,
+ min(scheduled_at) filter(where scheduled_at>now() and status in ('pending','ready')) next_scheduled_at
+from public.publication_jobs where profile_id in ('gta6_cortes','gta6');
+
 do $$ declare c record; begin
   for c in select conname from pg_constraint where conrelid='public.publication_jobs'::regclass
     and contype='c' and pg_get_constraintdef(oid) ilike '%status%' loop
