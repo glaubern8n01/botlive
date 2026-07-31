@@ -117,16 +117,22 @@ TOPICS = [
     ("historia-das-regras", "AS REGRAS MUDARAM\nO JOGO TAMBÉM", "Como as regras ajudaram o futebol a evoluir?"),
 ]
 
+HOOK_STYLES = (
+    "curiosity_gap", "surprising_detail", "direct_question", "before_after", "myth_vs_reality"
+)
+
 
 def automatic_sources() -> list[dict[str, Any]]:
     """Catálogo determinístico de trechos e roteiros materialmente distintos."""
-    result = list(SOURCES_V3)
+    # SOURCES_V3 já foi produzido; o modo automático começa apenas em pautas novas.
+    result: list[dict[str, Any]] = []
     for index, (event, headline, display) in enumerate(TOPICS):
         base = SOURCES[index % len(SOURCES)]
         start = 4 + (index // len(SOURCES)) * 18 + (index % len(SOURCES)) * 7
         result.append({
             **base, "start": start, "duration": 26 + (index % 4) * 2,
             "event": event, "title": headline, "display_title": display,
+            "hook_style": HOOK_STYLES[index % len(HOOK_STYLES)],
             "script": [
                 f"Neste trecho, o foco está em {display.lower().rstrip('?')}.",
                 "Observe como posição, tempo e escolha mudam o desenvolvimento da jogada.",
@@ -377,6 +383,8 @@ def main() -> None:
                 "publication_mode": "prepare_only", "publication_method": "manual_mobile",
                 "download_filename": filename, "license": source["license"], "source_url": source["page"],
                 "source_author": source["author"], "source_segment_key": segment_key,
+                "hook_style": source.get("hook_style", "contextual_question"),
+                "layout": {"headline": "top", "captions": "bottom", "watermark_added": False},
                 "description": description, "hashtags": hashtags, "credits": credits,
                 "cta": "Qual detalhe você percebeu?", "text_approved": False,
                 "text_edited_manually": False, "version": version, "gates": gates,
