@@ -70,13 +70,34 @@ def _scp(local: Path, remote: str) -> bool:
     return r.returncode == 0
 
 
-def download(url: str, dest: Path) -> bool:
+def download(url: str, dest: Path) -> tuple[bool, str]:
+    """Multi-engine: yt-dlp (principal, 1080p) e pytubefix (fallback, engine
+    diferente). Apps como Seal/YTDLnis/Stacher/OVD usam yt-dlp por dentro — mesmo
+    erro, não contam como fallback separado. Retorna (ok, engine que funcionou)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    # Prefere H.264/AAC para render rápido; --no-check-certificates cobre o MITM local (AVG).
+    # A. yt-dlp — --no-check-certificates cobre o MITM local (AVG).
     cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates",
            "-f", "bv*[height<=1080][vcodec^=avc1]+ba[acodec^=mp4a]/b[height<=1080]/best",
            "--merge-output-format", "mp4", "-o", str(dest), url]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=3600).returncode == 0 and dest.exists()
+    if subprocess.run(cmd, capture_output=True, text=True, timeout=3600).returncode == 0 and dest.exists():
+        return True, "yt-dlp"
+    # B. pytubefix — engine independente (não usa yt-dlp). ssl-off = mesma postura
+    # do nocheckcertificate; rede de casa confiável, vídeo público.
+    try:
+        import ssl
+        ssl._create_default_https_context = ssl._create_unverified_context  # noqa: S323
+        from pytubefix import YouTube
+
+        yt = YouTube(url)
+        st = (yt.streams.filter(progressive=True, file_extension="mp4").order_by("resolution").desc().first()
+              or yt.streams.get_highest_resolution())
+        if st:
+            st.download(output_path=str(dest.parent), filename=dest.name)
+            if dest.exists() and dest.stat().st_size > 200_000:
+                return True, "pytubefix"
+    except Exception:  # noqa: BLE001 — pytubefix é opcional
+        pass
+    return False, "none"
 
 
 def validate(path: Path) -> bool:
@@ -122,8 +143,10 @@ def process_one(url: str, key: str, cand: dict) -> str:
     name = f"relay_{uuid.uuid4().hex[:10]}.mp4"
     local = WORK / name
     print(f"  baixando: {title[:48]} ...", flush=True)
-    if not download(vid_url, local):
+    ok, engine = download(vid_url, local)
+    if not ok:
         return "download_falhou"
+    print(f"  engine: {engine}", flush=True)
     if not validate(local):
         local.unlink(missing_ok=True); return "invalido"
     remote_host = f"{VPS_VOLUME}/relay/{name}"
@@ -144,6 +167,7 @@ def process_one(url: str, key: str, cand: dict) -> str:
         "profile_id": PROFILE, "source_id": source_id, "discovery_key": f"relay-{name}",
         "source_url": container_file, "source_name": "Relay residencial", "title": title,
         "duration": 0, "status": "found",
+        "metadata": {"downloader": engine, "origin": "relay", "original_url": vid_url},
     })
     # marca o candidato como permitido (registro/auditoria) e dispara o corte na VPS
     _rest(url, key, f"football_source_prospects?prospect_id=eq.{cand['prospect_id']}", "PATCH",

@@ -60,6 +60,22 @@ Setup: instale Termux + Termux:Boot (F-Droid), `git clone` o repo em `~/botlive`
 crie `~/botlive/.env` (Supabase) e `~/.ssh/id_ed25519` (SSH da VPS, fora do Git),
 e rode `bash scripts/relay_termux_setup.sh`. O Windows continua como alternativa.
 
+## Matriz de downloaders (testada de verdade, mesmo vídeo `CpSV4O-DwP8`)
+Máquina residencial Windows (IP não-bloqueado):
+
+| Downloader | Engine | Funcionou | Resolução | Áudio | Login/cookies | Nota |
+|---|---|---|---|---|---|---|
+| **yt-dlp** | yt-dlp | ✅ | 1080p | sim | não | principal; `--no-check-certificates` (MITM do AVG) |
+| **pytubefix** | pytube (independente) | ✅ | 360–720p | sim | não | fallback REAL; `ssl` não-verificado (AVG) |
+| Seal / YTDLnis / Stacher / OVD / Media Downloader | yt-dlp interno | = yt-dlp | = | = | = | **mesmo engine** → não conta como fallback separado |
+| NewPipe | extractor próprio | app Android | — | — | não | engine independente (só Android) |
+| Cobalt | API cobalt.tools | opcional | — | — | **sem cookies** | fallback via API; não depender da instância pública |
+| YouTube Studio | oficial | só vídeos do próprio canal | — | — | login do canal | melhor p/ conteúdo próprio |
+
+`relay_run.py` já usa **yt-dlp → pytubefix** em cascata e registra em
+`football_discovered_videos.metadata.downloader` qual funcionou. Os apps que
+embrulham yt-dlp não são integrados como fallback separado (mesmo erro).
+
 ## Fallbacks de download (`robust_downloader.py`)
 Ordem: 1) MP4/HLS direto (ffmpeg) · 2) yt-dlp multi-client · 3) yt-dlp
 cookies+PO token (`BOTLIVE_COOKIES_FILE`) · 4) relay (`DOWNLOAD_RELAY_URL`).
