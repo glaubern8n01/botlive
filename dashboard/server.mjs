@@ -250,10 +250,47 @@ async function kwaiReviewRoute(request, response, url) {
   return json(response, 404, { error: 'Ação desconhecida' }), true;
 }
 
+// Confirmação em lote pelo responsável: marca fontes como "Permitida para uso"
+// (campaign_allowed) ou bloqueia várias de uma vez. O responsável confirma no
+// painel que tem permissão; registramos usuário/data/URL sem formulário por vídeo.
+async function kwaiBulkRoute(request, response, url) {
+  if (url.pathname !== '/api/kwai/prospects/bulk') return false;
+  if (request.method !== 'POST') return json(response, 405, { error: 'Método não permitido' }), true;
+  if (!adminKey) return json(response, 503, { error: 'Backend administrativo não configurado' }), true;
+  const body = await readJsonBody(request);
+  const action = String(body.action || '');
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (!['permit', 'block'].includes(action)) return json(response, 400, { error: 'ação inválida' }), true;
+  if (!body.confirmed && action === 'permit') return json(response, 400, { error: 'confirmação obrigatória' }), true;
+  if (!items.length) return json(response, 400, { error: 'nenhuma fonte selecionada' }), true;
+  if (items.length > 500) return json(response, 400, { error: 'lote muito grande' }), true;
+  let done = 0; let failed = 0;
+  for (const item of items) {
+    const prospectId = String(item?.prospect_id || '');
+    if (!uuidPattern.test(prospectId)) { failed += 1; continue; }
+    const params = action === 'block'
+      ? { p_prospect_id: prospectId, p_status: 'blocked', p_owner_name: '', p_authorization_reason: '',
+          p_license_or_cut_task: '', p_evidence_url: '', p_reviewed_by: 'dashboard',
+          p_blocked_reason: String(body.blocked_reason || 'triagem em lote') }
+      : { p_prospect_id: prospectId, p_status: 'campaign_allowed',
+          p_owner_name: 'Responsável pelo canal',
+          p_authorization_reason: 'Permissão confirmada pelo responsável no painel',
+          p_license_or_cut_task: 'Uso permitido',
+          p_evidence_url: String(item?.source_url || 'confirmado-no-painel'),
+          p_reviewed_by: 'dashboard' };
+    try {
+      const rpc = await callAdminRpc('review_football_source_prospect', params);
+      if (rpc.ok) done += 1; else failed += 1;
+    } catch { failed += 1; }
+  }
+  return json(response, 200, { ok: true, action, done, failed }), true;
+}
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
     if (url.pathname === '/health') return json(response, 200, { ok: true, mode: 'prepare_only' });
+    if (await kwaiBulkRoute(request, response, url)) return;
     if (await kwaiReviewRoute(request, response, url)) return;
     if (await cleanupRoute(request, response, url)) return;
     if (await mediaRoute(request, response, url)) return;

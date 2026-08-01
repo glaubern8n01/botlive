@@ -145,6 +145,19 @@ def test_backend_proxies_review_with_serverside_credential() -> None:
     assert "reevaluate_football_source_prospect" in SERVER
 
 
+def test_bulk_permit_flow_is_simple_and_confirmed() -> None:
+    # Confirmação única em lote (sem formulário por vídeo), rótulo simplificado.
+    assert "/api/kwai/prospects/bulk" in PAGE
+    assert "Marcar como permitidas" in PAGE
+    assert "Confirmo que tenho permissão" in PAGE
+    assert "Permitida para uso" in PAGE
+    # Backend: rota de lote exige confirmação e usa campaign_allowed via service_role.
+    assert "kwaiBulkRoute" in SERVER
+    assert "confirmação obrigatória" in SERVER
+    assert "campaign_allowed" in SERVER
+    assert "/api/kwai/prospects/bulk" in SERVER
+
+
 def test_service_key_never_bundled_into_frontend() -> None:
     # A service key não pode ter prefixo VITE_ (senão iria para o bundle do browser).
     assert "VITE_SUPABASE_SERVICE_ROLE_KEY" not in PAGE
