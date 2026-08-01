@@ -10,7 +10,12 @@ def test_all_new_migrations_are_additive() -> None:
     for migration in (ROOT / "supabase" / "migrations").glob("*.sql"):
         text = migration.read_text(encoding="utf-8").lower()
         assert "drop table" not in text, migration.name
-        assert "truncate " not in text, migration.name
+        # Um TRUNCATE destrutivo é um comando que começa com "truncate"; a palavra
+        # também aparece ao REVOGAR o privilégio truncate (linha começa com "revoke"),
+        # o que é o oposto de destrutivo.
+        assert not any(
+            line.strip().startswith("truncate ") for line in text.splitlines()
+        ), migration.name
 
 
 def test_safe_accounts_view_never_selects_secret_value() -> None:
