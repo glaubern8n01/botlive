@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, Copy, RefreshCw, Save, ShieldCheck } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Badge } from '../components/ui/Badge';
@@ -159,7 +159,7 @@ function Scope({ name, available }: { name: string; available: boolean }) {
 }
 function Jobs({ jobs, empty, refresh }: { jobs: Job[]; empty: string; refresh: () => Promise<void> }) {
   if (!jobs.length) return <p className="py-12 text-center text-zinc-500">{empty}</p>;
-  return <div className="space-y-3">{jobs.map((job) => <TikTokJob key={job.job_id} job={job} refresh={refresh} />)}</div>;
+  return <div className="space-y-3">{jobs.map((job) => <Fragment key={job.job_id}><TikTokJob job={job} refresh={refresh} /></Fragment>)}</div>;
 }
 
 function TikTokJob({ job, refresh }: { job: Job; refresh: () => Promise<void> }) {
