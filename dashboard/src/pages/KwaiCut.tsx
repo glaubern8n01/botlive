@@ -8,7 +8,7 @@ import { Input } from '../components/ui/Input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/Table';
 
 const PROFILE = 'kwai_cut_futebol';
-const TABS = ['Visão geral', 'Publicar pelo celular', 'Histórico', 'Fontes', 'Eventos', 'Vídeos', 'Regras', 'Fila', 'Conta', 'Métricas', 'Erros'] as const;
+const TABS = ['Visão geral', 'Publicar pelo celular', 'Histórico', 'Fontes', 'Diagnóstico', 'Eventos', 'Vídeos', 'Regras', 'Fila', 'Conta', 'Métricas', 'Erros'] as const;
 type Tab = typeof TABS[number];
 
 type Metrics = {
@@ -29,6 +29,8 @@ type Activity = {
   confirmed_at?: string | null; notes?: string | null;
 };
 type EventRow = { event_id: string; event_type: string; source_ref: string; timestamp_seconds: number; metadata: Record<string, unknown>; created_at: string };
+type SourceCheck = { check_id: string; source_id: string; status: string; checked_at: string; found_count: number; new_count: number; duplicate_count: number; discarded_count: number; live_count: number; discard_reasons: Record<string, number>; error: string | null };
+type Discovered = { discovered_id: string; source_name: string; source_url: string; title: string; duration: number | null; source_published_at: string | null; status: string; discard_reason: string | null; created_at: string };
 type JobRow = {
   job_id: string; asset_id: string; status: string; title: string | null; caption: string | null;
   cover_path: string | null; external_id: string | null; published_at: string | null;
@@ -54,6 +56,8 @@ export function KwaiCut() {
   const [sources, setSources] = useState<Source[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [jobs, setJobs] = useState<JobRow[]>([]);
+  const [checks, setChecks] = useState<SourceCheck[]>([]);
+  const [discovered, setDiscovered] = useState<Discovered[]>([]);
   const [activity, setActivity] = useState<Activity>(emptyActivity);
   const [account, setAccount] = useState<Account | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,15 +68,17 @@ export function KwaiCut() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     if (!supabase) { setError('Supabase não configurado. A página não inventa métricas.'); setLoading(false); return; }
-    const [metricResult, sourceResult, eventResult, jobResult, activityResult, accountResult] = await Promise.all([
+    const [metricResult, sourceResult, eventResult, jobResult, activityResult, accountResult, checkResult, discoveredResult] = await Promise.all([
       supabase.from('kwai_cut_daily_metrics').select('*').eq('profile_id', PROFILE).maybeSingle(),
       supabase.from('football_sources').select('*').eq('profile_id', PROFILE).order('priority', { ascending: false }),
       supabase.from('content_events').select('*').eq('profile_id', PROFILE).order('created_at', { ascending: false }).limit(100),
       supabase.from('publication_jobs').select('job_id,asset_id,status,title,caption,cover_path,external_id,published_at,last_error,created_at,scheduled_at,metadata,media_assets(asset_id,path,duration,width,height,validation_status),content_events(event_type,metadata),editorial_variants(variant_signature,editorial_metadata)').eq('profile_id', PROFILE).order('created_at', { ascending: false }).limit(100),
       supabase.from('kwai_cut_activities').select('*').eq('profile_id', PROFILE).eq('active', true).maybeSingle(),
       supabase.from('platform_accounts_safe').select('display_name,public_username,public_profile_url,creator_status,agency,contracted_at,contract_month,confirmed_niche,publication_mode,status').eq('platform', 'kwai').eq('account_key', 'principal').maybeSingle(),
+      supabase.from('football_source_checks').select('*').eq('profile_id', PROFILE).order('checked_at', { ascending: false }).limit(100),
+      supabase.from('football_discovered_videos').select('discovered_id,source_name,source_url,title,duration,source_published_at,status,discard_reason,created_at').eq('profile_id', PROFILE).order('created_at', { ascending: false }).limit(100),
     ]);
-    const firstError = [metricResult.error, sourceResult.error, eventResult.error, jobResult.error, activityResult.error, accountResult.error].find(Boolean);
+    const firstError = [metricResult.error, sourceResult.error, eventResult.error, jobResult.error, activityResult.error, accountResult.error, checkResult.error, discoveredResult.error].find(Boolean);
     if (firstError) setError('Migration do Kwai CUT ainda não aplicada ou leitura indisponível.');
     if (metricResult.data) setMetrics(metricResult.data as Metrics);
     setSources((sourceResult.data || []) as Source[]);
@@ -85,6 +91,8 @@ export function KwaiCut() {
     })) as JobRow[]);
     if (activityResult.data) setActivity(activityResult.data as Activity);
     if (accountResult.data) setAccount(accountResult.data as Account);
+    setChecks((checkResult.data || []) as SourceCheck[]);
+    setDiscovered((discoveredResult.data || []) as Discovered[]);
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -168,6 +176,7 @@ export function KwaiCut() {
       {tab === 'Publicar pelo celular' && <ManualPublishing jobs={jobs} activity={activity} markPublished={markPublished} busy={busy} />}
       {tab === 'Histórico' && <Jobs jobs={jobs.filter((job) => ['published','published_manual','rejected','cancelled'].includes(job.status))} cancel={cancelJob} busy={busy} videos />}
       {tab === 'Fontes' && <Sources sources={sources} form={sourceForm} setForm={setSourceForm} add={addSource} toggle={toggleSource} busy={busy} />}
+      {tab === 'Diagnóstico' && <Diagnostics checks={checks} discovered={discovered} sources={sources} />}
       {tab === 'Eventos' && <Events events={events} />}
       {tab === 'Vídeos' && <Jobs jobs={jobs} cancel={cancelJob} busy={busy} videos />}
       {tab === 'Regras' && <Rules activity={activity} setActivity={setActivity} save={saveActivity} busy={busy} />}
@@ -188,6 +197,13 @@ function Overview({ metrics, sources, events, jobs, deficit }: { metrics: Metric
 function Summary({ title, lines }: { title: string; lines: string[] }) { return <Card><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent>{lines.map((line) => <div key={line} className="mb-2 flex items-center gap-2 text-sm text-zinc-300"><CheckCircle2 className="h-4 w-4 text-emerald-500" />{line}</div>)}</CardContent></Card>; }
 function Sources({ sources, form, setForm, add, toggle, busy }: { sources: Source[]; form: { name: string; source_type: string; source_ref: string; usage_status: string; priority: number }; setForm: (value: typeof form) => void; add: (event: FormEvent) => void; toggle: (source: Source) => void; busy: boolean }) {
   return <div className="space-y-4"><form onSubmit={add} className="grid gap-3 rounded-xl border border-zinc-800 p-4 md:grid-cols-5"><Input placeholder="Nome" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /><Input placeholder="URL ou referência" value={form.source_ref} onChange={(e) => setForm({ ...form, source_ref: e.target.value })} /><Select value={form.source_type} set={(source_type) => setForm({ ...form, source_type })} options={['youtube_channel','youtube_playlist','youtube_search','youtube_live','direct_video','local_file','watched_folder','authorized_feed']} /><Select value={form.usage_status} set={(usage_status) => setForm({ ...form, usage_status })} options={['review_required','authorized','licensed','campaign_allowed','owned','blocked']} /><Button disabled={busy}><Plus className="mr-2 h-4 w-4" />Adicionar</Button></form><Table><TableHeader><TableRow><TableHead>Fonte</TableHead><TableHead>Tipo</TableHead><TableHead>Direitos</TableHead><TableHead>Status</TableHead><TableHead>Última verificação</TableHead><TableHead>Ação</TableHead></TableRow></TableHeader><TableBody>{sources.length ? sources.map((source) => <TableRow key={source.source_id}><TableCell><b>{source.name}</b><div className="max-w-64 truncate text-xs text-zinc-500">{source.source_ref}</div></TableCell><TableCell>{source.source_type}</TableCell><TableCell><Badge variant={['authorized','licensed','campaign_allowed','owned'].includes(source.usage_status) ? 'success' : 'secondary'}>{source.usage_status}</Badge></TableCell><TableCell>{source.status}</TableCell><TableCell>{source.last_checked_at ? new Date(source.last_checked_at).toLocaleString() : 'Nunca'}</TableCell><TableCell><Button variant="outline" disabled={busy} onClick={() => toggle(source)}>{source.enabled ? 'Desativar' : 'Ativar'}</Button></TableCell></TableRow>) : <TableRow><TableCell colSpan={6} className="py-10 text-center text-zinc-500">Nenhuma fonte cadastrada.</TableCell></TableRow>}</TableBody></Table></div>;
+}
+function Diagnostics({ checks, discovered, sources }: { checks: SourceCheck[]; discovered: Discovered[]; sources: Source[] }) {
+  const names = new Map(sources.map((source) => [source.source_id, source.name]));
+  return <div className="space-y-5">
+    <Card><CardHeader><CardTitle>Consultas por canal</CardTitle></CardHeader><CardContent><Table><TableHeader><TableRow><TableHead>Canal</TableHead><TableHead>Status</TableHead><TableHead>Última consulta</TableHead><TableHead>Encontrados / novos</TableHead><TableHead>Duplicados / descartados</TableHead><TableHead>Erro ou motivo</TableHead></TableRow></TableHeader><TableBody>{checks.length ? checks.map((check) => <TableRow key={check.check_id}><TableCell>{names.get(check.source_id) || check.source_id}</TableCell><TableCell><Badge>{check.status}</Badge></TableCell><TableCell>{new Date(check.checked_at).toLocaleString()}</TableCell><TableCell>{check.found_count} / {check.new_count}</TableCell><TableCell>{check.duplicate_count} / {check.discarded_count}</TableCell><TableCell className="max-w-72 text-xs">{check.error || Object.entries(check.discard_reasons || {}).map(([reason, count]) => `${reason}: ${count}`).join(' · ') || '—'}</TableCell></TableRow>) : <TableRow><TableCell colSpan={6}>Nenhuma consulta registrada.</TableCell></TableRow>}</TableBody></Table></CardContent></Card>
+    <Card><CardHeader><CardTitle>Todos os conteúdos encontrados</CardTitle></CardHeader><CardContent><Table><TableHeader><TableRow><TableHead>Título e origem</TableHead><TableHead>Status</TableHead><TableHead>Duração</TableHead><TableHead>Data da origem</TableHead><TableHead>Motivo</TableHead></TableRow></TableHeader><TableBody>{discovered.length ? discovered.map((item) => <TableRow key={item.discovered_id}><TableCell><a className="text-orange-300 underline" href={item.source_url} target="_blank" rel="noreferrer">{item.title}</a><div className="text-xs text-zinc-500">{item.source_name}</div></TableCell><TableCell><Badge>{item.status}</Badge></TableCell><TableCell>{item.duration ? `${item.duration.toFixed(1)}s` : '—'}</TableCell><TableCell>{item.source_published_at || '—'}</TableCell><TableCell className="text-xs text-red-300">{item.discard_reason || '—'}</TableCell></TableRow>) : <TableRow><TableCell colSpan={5}>Nenhum conteúdo descoberto.</TableCell></TableRow>}</TableBody></Table></CardContent></Card>
+  </div>;
 }
 function Events({ events }: { events: EventRow[] }) { return <Table><TableHeader><TableRow><TableHead>Evento</TableHead><TableHead>Fonte</TableHead><TableHead>Timestamp</TableHead><TableHead>Confiança</TableHead><TableHead>Prioridade / Viral</TableHead></TableRow></TableHeader><TableBody>{events.length ? events.map((event) => <TableRow key={event.event_id}><TableCell>{event.event_type}</TableCell><TableCell className="max-w-64 truncate">{event.source_ref}</TableCell><TableCell>{event.timestamp_seconds.toFixed(1)}s</TableCell><TableCell>{String(event.metadata.confidence ?? '—')}</TableCell><TableCell>{String(event.metadata.viral_score ?? event.metadata.priority_score ?? '—')}</TableCell></TableRow>) : <TableRow><TableCell colSpan={5} className="py-10 text-center text-zinc-500">Nenhum evento encontrado.</TableCell></TableRow>}</TableBody></Table>; }
 function Jobs({ jobs, cancel, busy, videos }: { jobs: JobRow[]; cancel: (id: string) => void; busy: boolean; videos?: boolean }) { return <Table><TableHeader><TableRow><TableHead>{videos ? 'Vídeo' : 'Job'}</TableHead><TableHead>Status</TableHead><TableHead>Asset</TableHead><TableHead>Validação</TableHead><TableHead>Erro</TableHead><TableHead>Ação</TableHead></TableRow></TableHeader><TableBody>{jobs.length ? jobs.map((job) => <TableRow key={job.job_id}><TableCell>{job.title || job.job_id.slice(0,8)}<div className="text-xs text-zinc-500">{job.caption || 'Sem caption'}</div></TableCell><TableCell><Badge>{job.status}</Badge></TableCell><TableCell className="max-w-72 truncate">{job.media_assets?.path || '—'}<div className="text-xs text-zinc-500">{job.media_assets ? `${job.media_assets.width}×${job.media_assets.height} · ${job.media_assets.duration}s` : ''}</div></TableCell><TableCell>{job.media_assets?.validation_status || '—'}</TableCell><TableCell className="max-w-48 truncate text-red-400">{job.last_error || '—'}</TableCell><TableCell>{['pending','ready','retry_wait'].includes(job.status) && <Button variant="outline" disabled={busy} onClick={() => cancel(job.job_id)}>Cancelar</Button>}</TableCell></TableRow>) : <TableRow><TableCell colSpan={6} className="py-10 text-center text-zinc-500">Nenhum registro real.</TableCell></TableRow>}</TableBody></Table>; }

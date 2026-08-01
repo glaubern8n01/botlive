@@ -81,6 +81,7 @@ class SourceCheck:
     new: int
     duplicates: int
     discarded: int
+    discard_reasons: Mapping[str, int] = field(default_factory=dict)
     live: int = 0
     error: str | None = None
     checked_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -111,8 +112,14 @@ class MultiChannelFootballDiscovery:
         candidates: list[DiscoveredVideo] = []
         for source in sources:
             if not source.auto_process_allowed:
+                checks.append(SourceCheck(
+                    source.source_id, source.name, "skipped", 0, 0, 0, 0,
+                    {"source_not_authorized_or_disabled": 1}, 0,
+                    "source_not_authorized_or_disabled",
+                ))
                 continue
             found = new = duplicates = discarded = live = 0
+            discard_reasons: dict[str, int] = {}
             try:
                 rows = list(self.discoverer(source))
                 found = len(rows)
@@ -129,17 +136,21 @@ class MultiChannelFootballDiscovery:
                         live += 1
                     if not item.url or not item.title or not item.allowed_for(source):
                         discarded += 1
+                        reason = "missing_url_or_title" if not item.url or not item.title else "not_real_action_or_mode_not_allowed"
+                        discard_reasons[reason] = discard_reasons.get(reason, 0) + 1
                         continue
                     if item.discovery_key in seen:
                         duplicates += 1
+                        discard_reasons["duplicate_discovery_key"] = discard_reasons.get("duplicate_discovery_key", 0) + 1
                         continue
                     seen.add(item.discovery_key)
                     candidates.append(item)
                     new += 1
-                checks.append(SourceCheck(source.source_id, source.name, "ok", found, new, duplicates, discarded, live))
+                checks.append(SourceCheck(source.source_id, source.name, "ok", found, new, duplicates, discarded,
+                                          discard_reasons, live))
             except Exception as exc:
                 checks.append(SourceCheck(source.source_id, source.name, "error", found, new, duplicates, discarded,
-                                          live, f"{type(exc).__name__}: {exc}"))
+                                          discard_reasons, live, f"{type(exc).__name__}: {exc}"))
         return DiscoveryReport(tuple(checks), tuple(candidates))
 
 

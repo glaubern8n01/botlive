@@ -63,4 +63,8 @@ def test_producer_never_falls_back_to_legacy_static_catalog(monkeypatch):
     monkeypatch.setattr(worker, "discover_all_sources", lambda: {
         "channels_consulted": 3, "candidates": 2, "live_found": 1, "channel_errors": 0,
     })
+    class Pipeline:
+        def __init__(self, _client): pass
+        def process_next(self): return None
+    monkeypatch.setattr("kwai_cut_producer.KwaiRealPipeline", Pipeline)
     assert worker.produce_next() is False

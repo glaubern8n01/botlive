@@ -11,6 +11,7 @@ from pathlib import Path
 from database import _get_client
 from football_source_discovery import MultiChannelFootballDiscovery, ytdlp_discover
 from kwai_cut_football import FootballSource
+from kwai_real_pipeline import KwaiRealPipeline
 
 PROFILE = "kwai_cut_futebol"
 LOGGER = logging.getLogger("botlive.kwai_cut_producer")
@@ -129,6 +130,7 @@ class KwaiCutProducer:
                 "checked_at": check.checked_at, "found_count": check.found, "new_count": check.new,
                 "duplicate_count": check.duplicates, "discarded_count": check.discarded,
                 "live_count": check.live, "error": check.error,
+                "discard_reasons": dict(check.discard_reasons),
             }).execute()
             self.client.table("football_sources").update({
                 "last_checked_at": check.checked_at, "status": check.status,
@@ -157,7 +159,12 @@ class KwaiCutProducer:
         # O antigo --auto usa um catálogo histórico fixo e não recebe o candidato
         # descoberto. Nunca o acione aqui: os vídeos reais ficam em `found` até o
         # detector de lances consumi-los, em vez de aparentar produção com outro arquivo.
-        return False
+        result = KwaiRealPipeline(self.client).process_next()
+        if result is None:
+            LOGGER.info("Kwai CUT: nenhum candidato real aguardando processamento")
+            return False
+        LOGGER.info("Kwai CUT real pipeline: %s", result)
+        return result.status == "ready_review"
 
     def loop(self, interval_seconds: int = 900) -> None:
         while not self.stop_requested:
