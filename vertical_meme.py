@@ -33,6 +33,57 @@ CREDITO_CANAL_POR_NICHO = {
 }
 
 
+import random as _random
+
+# Legendas de topo variadas por tipo de lance (nunca repetir sempre a mesma).
+LEGENDAS_POR_LANCE = {
+    "defesa": ["QUE DEFESA ABSURDA!", "O GOLEIRO SALVOU TUDO", "VOCÊ VIU ESSA DEFESA?!",
+               "PEGOU O IMPOSSÍVEL", "MURALHA NO GOL", "DEFESA DE OUTRO MUNDO"],
+    "gol": ["QUE GOLAÇO!", "ISSO FOI PINTURA", "GOL DE PLACA", "NÃO ACREDITO NESSE GOL",
+            "GOL ABSURDO DEMAIS", "TINHA QUE SER ASSIM"],
+    "penalti": ["PÊNALTI DECISIVO!", "NA HORA DA PRESSÃO", "BATEU E MARCOU", "COBRANÇA PERFEITA"],
+    "drible": ["QUE DRIBLE FOI ESSE?!", "DEIXOU O MARCADOR NO CHÃO", "MAGIA PURA", "DRIBLE DESCONCERTANTE"],
+    "var": ["O VAR ENTROU EM AÇÃO", "POLÊMICA NO LANCE", "REVISÃO MUDOU TUDO"],
+    "expulsao": ["CARTÃO VERMELHO!", "EXPULSÃO POLÊMICA", "ACABOU O JOGO PRA ELE"],
+    "reacao": ["A REAÇÃO FOI ÉPICA", "OLHA ESSA COMEMORAÇÃO", "EMOÇÃO PURA"],
+}
+LEGENDAS_GENERICAS = ["ISSO É FUTEBOL DE VERDADE", "MELHOR MOMENTO DA RODADA", "LANCE PRA REVER MIL VEZES",
+                      "FUTEBOL QUE ARREPIA", "MOMENTO INESQUECÍVEL", "PRA QUEM AMA FUTEBOL"]
+
+
+def legenda_aleatoria(highlight: Optional[str] = None, seed: Optional[int] = None) -> str:
+    """Legenda de topo variada e coerente com o lance (não usa o título cru)."""
+    rng = _random.Random(seed)
+    key = (highlight or "").lower()
+    pool = next((v for k, v in LEGENDAS_POR_LANCE.items() if k in key), None) or LEGENDAS_GENERICAS
+    return rng.choice(pool + LEGENDAS_GENERICAS)
+
+
+# Subtexto (linha menor de baixo): fala do vídeo/torcida, nunca @ nem nome de canal.
+SUBTEXTOS_POR_LANCE = {
+    "defesa": ["O goleiro fez o impossível", "Salvou o time no último segundo", "A torcida foi à loucura",
+               "Reflexo de outro nível", "Ninguém esperava essa defesa"],
+    "gol": ["A torcida explodiu", "Gol que ficou na história", "O estádio veio abaixo",
+            "Comemoração emocionante", "Craque decidiu a partida"],
+    "penalti": ["Nervos de aço na cobrança", "Decidiu tudo na marca da cal", "Frieza total sob pressão"],
+    "drible": ["Humilhou o marcador", "Jogada digna de vídeo game", "Talento puro em campo"],
+    "var": ["Lance que gerou discussão", "Revisão que mudou o jogo"],
+    "expulsao": ["Clima esquentou em campo", "Time ficou com um a menos"],
+    "reacao": ["Emoção do início ao fim", "Reação que viralizou"],
+}
+SUBTEXTOS_GENERICOS = ["Você precisa ver até o final", "Salva esse pra rever depois",
+                       "Momento que arrepia qualquer torcedor", "Futebol em estado puro",
+                       "Marca aquele amigo que ama futebol", "Comenta o que achou"]
+
+
+def subtexto_aleatorio(highlight: Optional[str] = None, seed: Optional[int] = None) -> str:
+    """Linha menor de baixo: fala do vídeo, variada, sem @ nem nome de canal."""
+    rng = _random.Random(None if seed is None else seed + 991)
+    key = (highlight or "").lower()
+    pool = next((v for k, v in SUBTEXTOS_POR_LANCE.items() if k in key), None) or SUBTEXTOS_GENERICOS
+    return rng.choice(pool + SUBTEXTOS_GENERICOS)
+
+
 def credito_canal_para_nicho(nicho: Optional[str], override: Optional[str] = None) -> Optional[str]:
     """Resolve o credito do canal: override explicito ganha do default do nicho."""
     if override:
@@ -52,12 +103,13 @@ class MemeTextConfig:
     """
 
     legenda: Optional[str] = None
+    subtexto: Optional[str] = None        # linha menor de baixo: fala do vídeo, sem @/canal
     credito_streamer: Optional[str] = None
     canal_proprio: Optional[str] = None
 
     @property
     def enabled(self) -> bool:
-        return any([self.legenda, self.credito_streamer, self.canal_proprio])
+        return any([self.legenda, self.subtexto, self.credito_streamer, self.canal_proprio])
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont:
@@ -185,62 +237,110 @@ def _dimensoes_fit(source_w: int, source_h: int) -> tuple[int, int]:
     return fit_w, fit_h
 
 
+def _desenhar_banner(draw, lines, font, line_height, center_y) -> None:
+    """Banner branco arredondado com texto preto centralizado (estilo Futebol
+    Respira). O banner acompanha a largura do maior texto."""
+    widths = [draw.textlength(line, font=font) for line in lines]
+    text_w = max(widths) if widths else 0
+    text_h = line_height * len(lines)
+    pad_x, pad_y = 34, 22
+    box_w = min(CANVAS_WIDTH - 40, text_w + 2 * pad_x)
+    box_h = text_h + 2 * pad_y
+    x0 = (CANVAS_WIDTH - box_w) / 2
+    y0 = center_y - box_h / 2
+    radius = min(38, box_h / 2)
+    draw.rounded_rectangle([x0, y0, x0 + box_w, y0 + box_h], radius=radius, fill=(255, 255, 255, 245))
+    y = y0 + pad_y
+    for line, w in zip(lines, widths):
+        draw.text(((CANVAS_WIDTH - w) / 2, y), line, font=font, fill=(15, 15, 15, 255))
+        y += line_height
+
+
+def gerar_texto_overlay(video_top: int, video_bottom: int, texts: MemeTextConfig) -> Image.Image:
+    """Overlay 1080x1920 TRANSPARENTE no estilo Futebol Respira: banner branco com
+    texto preto — hook viral no topo e subtexto do vídeo no rodapé. Ambos nas
+    faixas livres acima/abaixo do vídeo (nunca sobre bola/placar). Sem @ nem canal."""
+    image = Image.new("RGBA", (CANVAS_WIDTH, CANVAS_HEIGHT), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    max_text_width = CANVAS_WIDTH - 2 * MARGIN_X - 68
+
+    if texts.legenda and video_top > 120:
+        caption = texts.legenda.strip().upper()
+        if len(caption) > CAPTION_MAX_CHARS:
+            caption = caption[:CAPTION_MAX_CHARS].rstrip() + "..."
+        band = max(120, video_top - 60)
+        font, lines, line_height = _ajustar_legenda(draw, caption, max_text_width, band)
+        _desenhar_banner(draw, lines, font, line_height, max(110, video_top // 2))
+
+    bottom_top = video_bottom
+    # Rodapé: subtexto sobre o vídeo (relevante), NUNCA @ ou nome de canal.
+    if texts.subtexto and CANVAS_HEIGHT - bottom_top > 120:
+        sub = texts.subtexto.strip().upper()
+        band = CANVAS_HEIGHT - bottom_top
+        font, lines, line_height = _ajustar_legenda(draw, sub, max_text_width, min(band - 30, 240))
+        _desenhar_banner(draw, lines, font, line_height, int(bottom_top + band / 2))
+
+    return image
+
+
 def renderizar_vertical_meme(
     input_path: str | Path,
     output_path: str | Path,
     texts: MemeTextConfig,
     preset: str = "medium",
 ) -> Path:
-    """Renderiza a versao 9:16 estilo meme: video inteiro no centro, tarjas com texto.
-
-    O video NUNCA e cortado (facecam e HUD preservados). Fundo com texto e uma
-    imagem estatica, entao o custo e um unico encode do corte (30-40s).
+    """Render 9:16 (1080x1920): FUNDO = cópia ampliada/desfocada/escurecida do
+    próprio vídeo (nunca tarja preta chapada); vídeo nítido por cima ocupando a
+    largura útil (16:9 -> ~1080x608, sem distorção, preservando placar/bola/logos);
+    título curto no topo e créditos no rodapé em área segura. Um único encode ffmpeg.
     """
+    import subprocess
+
+    import imageio_ffmpeg
+
     input_path = Path(input_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     source = VideoFileClip(str(input_path))
-    resized = None
-    background = None
-    composed = None
     try:
-        fit_w, fit_h = _dimensoes_fit(*source.size)
-        video_top = (CANVAS_HEIGHT - fit_h) // 2
-        video_bottom = video_top + fit_h
-
-        frame = np.asarray(gerar_moldura(video_top, video_bottom, texts))
-        background = ImageClip(frame).set_duration(source.duration)
-        resized = source.resize((fit_w, fit_h))
-        composed = CompositeVideoClip(
-            [background, resized.set_position("center")],
-            size=(CANVAS_WIDTH, CANVAS_HEIGHT),
-        )
-        if source.audio is not None:
-            composed = composed.set_audio(source.audio)
-
-        kwargs: dict[str, Any] = {
-            "codec": "libx264",
-            "fps": min(float(getattr(source, "fps", 30) or 30), 60),
-            "preset": preset,
-            "verbose": False,
-            "logger": None,
-        }
-        if source.audio is not None:
-            kwargs["audio_codec"] = "aac"
-            kwargs["temp_audiofile"] = str(output_path.with_name(f"{output_path.stem}_temp_audio.m4a"))
-            kwargs["remove_temp"] = True
-        else:
-            kwargs["audio"] = False
-        composed.write_videofile(str(output_path), **kwargs)
+        src_w, src_h = source.size
+        has_audio = source.audio is not None
+        fps = int(min(float(getattr(source, "fps", 30) or 30), 60)) or 30
     finally:
-        for clip in (composed, resized, background):
-            if clip is not None and clip is not source:
-                try:
-                    clip.close()
-                except Exception:
-                    pass
         source.close()
+
+    fit_w, fit_h = _dimensoes_fit(src_w, src_h)
+    video_top = (CANVAS_HEIGHT - fit_h) // 2
+    overlay_png = output_path.with_name(output_path.stem + "_overlay.png")
+    gerar_texto_overlay(video_top, video_top + fit_h, texts).save(overlay_png)
+
+    # Best-effort para tirar marca d'água/logo do canal original: apara uma borda
+    # pequena do vídeo principal (marcas costumam ficar nos cantos). Configurável.
+    import os as _os
+    b = max(0.0, min(0.12, float(_os.getenv("KWAI_LOGO_CROP", "0.045"))))
+    crop_mn = f"crop=iw*{1-2*b:.3f}:ih*{1-2*b:.3f}:iw*{b:.3f}:ih*{b:.3f}," if b > 0 else ""
+    filtro = (
+        "[0:v]split=2[bg][mn];"
+        # fundo: preenche o canvas (zoom) + desfoque + escurece
+        "[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"
+        "boxblur=20:2,eq=brightness=-0.12:saturation=0.9,setsar=1[blur];"
+        # video principal: apara borda (logo) + cabe na tela sem distorcer (16:9 -> ~1080x608)
+        f"[mn]{crop_mn}scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1[mns];"
+        "[blur][mns]overlay=(W-w)/2:(H-h)/2[bv];"
+        "[bv][1:v]overlay=0:0[vout]"
+    )
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [ffmpeg, "-y", "-i", str(input_path), "-i", str(overlay_png),
+           "-filter_complex", filtro, "-map", "[vout]"]
+    if has_audio:
+        cmd += ["-map", "0:a", "-c:a", "aac", "-b:a", "128k"]
+    cmd += ["-c:v", "libx264", "-preset", preset, "-crf", "20", "-pix_fmt", "yuv420p",
+            "-r", str(fps), "-movflags", "+faststart", str(output_path)]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    finally:
+        overlay_png.unlink(missing_ok=True)
     return output_path
 
 
