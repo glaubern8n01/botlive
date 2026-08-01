@@ -86,6 +86,27 @@ def validate(path: Path) -> bool:
     return "video" in kinds and "audio" in kinds and path.stat().st_size > 200_000
 
 
+def _guard_ok() -> tuple[bool, str]:
+    """Guardas para rodar em celular/PC: armazenamento e (no Android) bateria/temp."""
+    import shutil
+    free_gb = shutil.disk_usage(WORK.anchor or "/").free / 1e9
+    min_free = float(os.getenv("RELAY_MIN_FREE_GB", "2"))
+    if free_gb < min_free:
+        return False, f"armazenamento baixo ({free_gb:.1f}GB < {min_free}GB)"
+    # Android/Termux: pausa com bateria baixa ou aparelho quente.
+    try:
+        out = subprocess.run(["termux-battery-status"], capture_output=True, text=True, timeout=10)
+        if out.returncode == 0 and out.stdout.strip():
+            bat = json.loads(out.stdout)
+            if bat.get("percentage", 100) < int(os.getenv("RELAY_MIN_BATTERY", "30")) and not bat.get("plugged"):
+                return False, f"bateria baixa ({bat.get('percentage')}%)"
+            if (bat.get("temperature", 0) or 0) > float(os.getenv("RELAY_MAX_TEMP_C", "45")):
+                return False, f"temperatura alta ({bat.get('temperature')}C)"
+    except Exception:  # noqa: BLE001 — sem termux-api (ex.: no PC) ignora a guarda de bateria
+        pass
+    return True, "ok"
+
+
 def ready_count(url: str, key: str) -> int:
     rows = _rest(url, key, f"publication_jobs?select=job_id&profile_id=eq.{PROFILE}&status=in.(ready,published_manual)")
     return len(rows)
@@ -144,6 +165,12 @@ def main() -> None:
     url, key = _env(); WORK.mkdir(parents=True, exist_ok=True)
     done = 0
     while True:
+        ok, why = _guard_ok()
+        if not ok:
+            print(f"[relay] pausado: {why}")
+            if not args.loop:
+                break
+            time.sleep(300); continue
         have = ready_count(url, key)
         print(f"[relay] prontos na VPS: {have} | meta: {args.target}")
         if have >= args.target and args.loop:

@@ -48,6 +48,18 @@ $trigger = New-ScheduledTaskTrigger -AtLogOn
 Register-ScheduledTask -TaskName "BotLiveRelay" -Action $action -Trigger $trigger -Description "Relay Kwai CUT (download residencial)"
 ```
 
+## Android (celular antigo sempre-ligado no Wi-Fi) — sem depender do PC
+O mesmo `relay_run.py` roda no **Termux** (Python + yt-dlp + ffmpeg). Um celular
+antigo no Wi-Fi de casa vira o relay 24/7, sem app e sem porta no roteador:
+- tela apagada: `termux-wake-lock`;
+- reinício após reboot: **Termux:Boot** (`~/.termux/boot/`);
+- guardas: pausa com bateria `< RELAY_MIN_BATTERY` (desligado da tomada),
+  temperatura `> RELAY_MAX_TEMP_C` ou disco livre `< RELAY_MIN_FREE_GB`.
+
+Setup: instale Termux + Termux:Boot (F-Droid), `git clone` o repo em `~/botlive`,
+crie `~/botlive/.env` (Supabase) e `~/.ssh/id_ed25519` (SSH da VPS, fora do Git),
+e rode `bash scripts/relay_termux_setup.sh`. O Windows continua como alternativa.
+
 ## Fallbacks de download (`robust_downloader.py`)
 Ordem: 1) MP4/HLS direto (ffmpeg) · 2) yt-dlp multi-client · 3) yt-dlp
 cookies+PO token (`BOTLIVE_COOKIES_FILE`) · 4) relay (`DOWNLOAD_RELAY_URL`).
