@@ -18,7 +18,7 @@ from highlight_detector import detectar_melhores_momentos
 from media_domain import inspect_media_asset
 from runtime_paths import get_output_root
 from source_downloader import resolver_fonte_video
-from vertical_meme import MemeTextConfig, renderizar_vertical_meme
+from vertical_meme import MemeTextConfig, legenda_aleatoria, renderizar_vertical_meme, subtexto_aleatorio
 
 
 PROFILE = "kwai_cut_futebol"
@@ -145,7 +145,11 @@ class KwaiRealPipeline:
         title, description, hashtags = action_metadata(str(row.get("title") or ""))
         final = run_dir / f"kwai-real-{token}-aprovado.mp4"
         credits = f"Fonte: {row.get('source_name') or 'canal cadastrado'} · {row.get('source_url')}"
-        renderizar_vertical_meme(raw, final, MemeTextConfig(legenda=title, credito_streamer=str(row.get("source_name") or "Fonte original")))
+        seed = abs(hash((str(row.get("title") or ""), candidate.timestamp_seconds))) % (2 ** 31)
+        renderizar_vertical_meme(raw, final, MemeTextConfig(
+            legenda=legenda_aleatoria(title, seed=seed),        # hook viral no topo
+            subtexto=subtexto_aleatorio(title, seed=seed),      # subtexto do vídeo no rodapé (sem canal)
+        ))
         validation = validar_video_final(final, require_audio=True, min_duration_seconds=10, min_size_bytes=100_000)
         if not validation.valid:
             return self._reject(row, f"invalid_render:{validation.reason}")

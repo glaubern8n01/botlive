@@ -273,12 +273,18 @@ def gerar_texto_overlay(video_top: int, video_bottom: int, texts: MemeTextConfig
         _desenhar_banner(draw, lines, font, line_height, max(110, video_top // 2))
 
     bottom_top = video_bottom
-    # Rodapé: subtexto sobre o vídeo (relevante), NUNCA @ ou nome de canal.
-    if texts.subtexto and CANVAS_HEIGHT - bottom_top > 120:
-        sub = texts.subtexto.strip().upper()
-        band = CANVAS_HEIGHT - bottom_top
-        font, lines, line_height = _ajustar_legenda(draw, sub, max_text_width, min(band - 30, 240))
-        _desenhar_banner(draw, lines, font, line_height, int(bottom_top + band / 2))
+    band = CANVAS_HEIGHT - bottom_top
+    if band > 120:
+        if texts.subtexto:
+            # Kwai: subtexto sobre o vídeo (relevante), NUNCA @ ou nome de canal.
+            sub = texts.subtexto.strip().upper()
+            font, lines, line_height = _ajustar_legenda(draw, sub, max_text_width, min(band - 30, 240))
+            _desenhar_banner(draw, lines, font, line_height, int(bottom_top + band / 2))
+        elif texts.credito_streamer or texts.canal_proprio:
+            # Compatibilidade (fluxo GTA): créditos do canal em banner.
+            credito = " · ".join(t.strip() for t in (texts.credito_streamer, texts.canal_proprio) if t)
+            font, lines, line_height = _ajustar_legenda(draw, credito, max_text_width, min(band - 30, 200))
+            _desenhar_banner(draw, lines, font, line_height, int(bottom_top + band / 2))
 
     return image
 
