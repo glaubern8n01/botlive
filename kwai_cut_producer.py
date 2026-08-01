@@ -10,6 +10,7 @@ from pathlib import Path
 
 from database import _get_client
 from football_source_discovery import MultiChannelFootballDiscovery, ytdlp_discover
+from football_source_prospecting import discover_prospects
 from kwai_cut_football import FootballSource
 from kwai_real_pipeline import KwaiRealPipeline
 
@@ -156,6 +157,19 @@ class KwaiCutProducer:
             return False
         discovery = self.discover_all_sources()
         LOGGER.info("Kwai CUT multichannel discovery: %s", discovery)
+        try:
+            prospects = discover_prospects()
+            for item in prospects:
+                self.client.table("football_source_prospects").upsert({
+                    "profile_id": PROFILE, "prospect_key": item.prospect_key,
+                    "source_url": item.url, "title": item.title,
+                    "source_type": item.source_type, "discovered_by": "automatic_search",
+                    "search_query": item.query, "review_status": "pending_review",
+                    "metadata": dict(item.metadata or {}),
+                }, on_conflict="profile_id,prospect_key").execute()
+            LOGGER.info("Kwai CUT source prospecting: %s candidates", len(prospects))
+        except Exception as exc:
+            LOGGER.warning("Kwai CUT source prospecting failed without stopping production: %s", exc)
         # O antigo --auto usa um catálogo histórico fixo e não recebe o candidato
         # descoberto. Nunca o acione aqui: os vídeos reais ficam em `found` até o
         # detector de lances consumi-los, em vez de aparentar produção com outro arquivo.

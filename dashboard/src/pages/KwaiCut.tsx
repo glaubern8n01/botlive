@@ -31,6 +31,7 @@ type Activity = {
 type EventRow = { event_id: string; event_type: string; source_ref: string; timestamp_seconds: number; metadata: Record<string, unknown>; created_at: string };
 type SourceCheck = { check_id: string; source_id: string; status: string; checked_at: string; found_count: number; new_count: number; duplicate_count: number; discarded_count: number; live_count: number; discard_reasons: Record<string, number>; error: string | null };
 type Discovered = { discovered_id: string; source_name: string; source_url: string; title: string; duration: number | null; source_published_at: string | null; status: string; discard_reason: string | null; created_at: string };
+type Prospect = { prospect_id: string; source_url: string; title: string; source_type: string; discovered_by: string; search_query: string | null; review_status: string; created_at: string };
 type JobRow = {
   job_id: string; asset_id: string; status: string; title: string | null; caption: string | null;
   cover_path: string | null; external_id: string | null; published_at: string | null;
@@ -58,6 +59,8 @@ export function KwaiCut() {
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [checks, setChecks] = useState<SourceCheck[]>([]);
   const [discovered, setDiscovered] = useState<Discovered[]>([]);
+  const [prospects, setProspects] = useState<Prospect[]>([]);
+  const [bulkLinks, setBulkLinks] = useState('');
   const [activity, setActivity] = useState<Activity>(emptyActivity);
   const [account, setAccount] = useState<Account | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -68,7 +71,7 @@ export function KwaiCut() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     if (!supabase) { setError('Supabase não configurado. A página não inventa métricas.'); setLoading(false); return; }
-    const [metricResult, sourceResult, eventResult, jobResult, activityResult, accountResult, checkResult, discoveredResult] = await Promise.all([
+    const [metricResult, sourceResult, eventResult, jobResult, activityResult, accountResult, checkResult, discoveredResult, prospectResult] = await Promise.all([
       supabase.from('kwai_cut_daily_metrics').select('*').eq('profile_id', PROFILE).maybeSingle(),
       supabase.from('football_sources').select('*').eq('profile_id', PROFILE).order('priority', { ascending: false }),
       supabase.from('content_events').select('*').eq('profile_id', PROFILE).order('created_at', { ascending: false }).limit(100),
@@ -77,8 +80,9 @@ export function KwaiCut() {
       supabase.from('platform_accounts_safe').select('display_name,public_username,public_profile_url,creator_status,agency,contracted_at,contract_month,confirmed_niche,publication_mode,status').eq('platform', 'kwai').eq('account_key', 'principal').maybeSingle(),
       supabase.from('football_source_checks').select('*').eq('profile_id', PROFILE).order('checked_at', { ascending: false }).limit(100),
       supabase.from('football_discovered_videos').select('discovered_id,source_name,source_url,title,duration,source_published_at,status,discard_reason,created_at').eq('profile_id', PROFILE).order('created_at', { ascending: false }).limit(100),
+      supabase.from('football_source_prospects').select('*').eq('profile_id', PROFILE).order('created_at', { ascending: false }).limit(100),
     ]);
-    const firstError = [metricResult.error, sourceResult.error, eventResult.error, jobResult.error, activityResult.error, accountResult.error, checkResult.error, discoveredResult.error].find(Boolean);
+    const firstError = [metricResult.error, sourceResult.error, eventResult.error, jobResult.error, activityResult.error, accountResult.error, checkResult.error, discoveredResult.error, prospectResult.error].find(Boolean);
     if (firstError) setError('Migration do Kwai CUT ainda não aplicada ou leitura indisponível.');
     if (metricResult.data) setMetrics(metricResult.data as Metrics);
     setSources((sourceResult.data || []) as Source[]);
@@ -93,6 +97,7 @@ export function KwaiCut() {
     if (accountResult.data) setAccount(accountResult.data as Account);
     setChecks((checkResult.data || []) as SourceCheck[]);
     setDiscovered((discoveredResult.data || []) as Discovered[]);
+    setProspects((prospectResult.data || []) as Prospect[]);
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -115,6 +120,18 @@ export function KwaiCut() {
     if (!supabase || busy) return; setBusy(true);
     const result = await supabase.from('football_sources').update({ enabled: !source.enabled }).eq('source_id', source.source_id);
     if (result.error) setError('Não foi possível atualizar a fonte.'); else await load();
+    setBusy(false);
+  };
+  const addBulkLinks = async () => {
+    if (!supabase || busy) return;
+    const links = Array.from(new Set(bulkLinks.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)));
+    if (!links.length) return;
+    setBusy(true);
+    const rows = links.map((source_url) => ({ profile_id: PROFILE, prospect_key: source_url, source_url,
+      title: source_url, source_type: 'manual_link', discovered_by: 'dashboard', review_status: 'pending_review' }));
+    const result = await supabase.from('football_source_prospects').upsert(rows, { onConflict: 'profile_id,prospect_key' });
+    if (result.error) setError('Não foi possível adicionar os links para revisão.');
+    else { setBulkLinks(''); await load(); }
     setBusy(false);
   };
   const saveActivity = async (event: FormEvent) => {
@@ -175,7 +192,7 @@ export function KwaiCut() {
       {tab === 'Visão geral' && <Overview metrics={metrics} sources={sources} events={events} jobs={jobs} deficit={deficit} />}
       {tab === 'Publicar pelo celular' && <ManualPublishing jobs={jobs} activity={activity} markPublished={markPublished} busy={busy} />}
       {tab === 'Histórico' && <Jobs jobs={jobs.filter((job) => ['published','published_manual','rejected','cancelled'].includes(job.status))} cancel={cancelJob} busy={busy} videos />}
-      {tab === 'Fontes' && <Sources sources={sources} form={sourceForm} setForm={setSourceForm} add={addSource} toggle={toggleSource} busy={busy} />}
+      {tab === 'Fontes' && <div className="space-y-4"><ProspectLinks prospects={prospects} value={bulkLinks} setValue={setBulkLinks} add={addBulkLinks} busy={busy} /><Sources sources={sources} form={sourceForm} setForm={setSourceForm} add={addSource} toggle={toggleSource} busy={busy} /></div>}
       {tab === 'Diagnóstico' && <Diagnostics checks={checks} discovered={discovered} sources={sources} />}
       {tab === 'Eventos' && <Events events={events} />}
       {tab === 'Vídeos' && <Jobs jobs={jobs} cancel={cancelJob} busy={busy} videos />}
@@ -195,6 +212,9 @@ function Overview({ metrics, sources, events, jobs, deficit }: { metrics: Metric
   return <div className="grid gap-4 md:grid-cols-3"><Summary title="Operação" lines={[`${sources.filter((s) => s.enabled).length} fontes ativas`, `${events.length} eventos recentes`, `${jobs.length} jobs recentes`]} /><Summary title="Qualidade" lines={[`${metrics.approved} aprovados`, `${metrics.rejected} rejeitados`, `Déficit registrado: ${deficit}`]} /><Summary title="Segurança" lines={['Somente fontes autorizadas', 'Futebol de videogame bloqueado', 'API Kwai desligada']} /></div>;
 }
 function Summary({ title, lines }: { title: string; lines: string[] }) { return <Card><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent>{lines.map((line) => <div key={line} className="mb-2 flex items-center gap-2 text-sm text-zinc-300"><CheckCircle2 className="h-4 w-4 text-emerald-500" />{line}</div>)}</CardContent></Card>; }
+function ProspectLinks({ prospects, value, setValue, add, busy }: { prospects: Prospect[]; value: string; setValue: (value: string) => void; add: () => void; busy: boolean }) {
+  return <Card><CardHeader><CardTitle>VODs, vídeos e fontes para o Kwai CUT</CardTitle></CardHeader><CardContent className="space-y-4"><textarea className="min-h-28 w-full rounded-md border border-zinc-700 bg-zinc-950 p-3 text-sm" placeholder="Cole um link por linha: vídeo, VOD, replay, playlist ou canal" value={value} onChange={(event) => setValue(event.target.value)} /><Button type="button" disabled={busy || !value.trim()} onClick={add}><Plus className="mr-2 h-4 w-4" />Adicionar à fila de revisão</Button><p className="text-xs text-zinc-500">O robô também pesquisa continuamente. Fontes novas aguardam confirmação do direito de uso antes de gerar cortes.</p><Table><TableHeader><TableRow><TableHead>Conteúdo encontrado</TableHead><TableHead>Origem</TableHead><TableHead>Busca</TableHead><TableHead>Status</TableHead></TableRow></TableHeader><TableBody>{prospects.length ? prospects.map((item) => <TableRow key={item.prospect_id}><TableCell><a className="text-orange-300 underline" href={item.source_url} target="_blank" rel="noreferrer">{item.title}</a></TableCell><TableCell>{item.discovered_by}</TableCell><TableCell>{item.search_query || 'link manual'}</TableCell><TableCell><Badge>{item.review_status}</Badge></TableCell></TableRow>) : <TableRow><TableCell colSpan={4}>Nenhuma fonte candidata ainda.</TableCell></TableRow>}</TableBody></Table></CardContent></Card>;
+}
 function Sources({ sources, form, setForm, add, toggle, busy }: { sources: Source[]; form: { name: string; source_type: string; source_ref: string; usage_status: string; priority: number }; setForm: (value: typeof form) => void; add: (event: FormEvent) => void; toggle: (source: Source) => void; busy: boolean }) {
   return <div className="space-y-4"><form onSubmit={add} className="grid gap-3 rounded-xl border border-zinc-800 p-4 md:grid-cols-5"><Input placeholder="Nome" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /><Input placeholder="URL ou referência" value={form.source_ref} onChange={(e) => setForm({ ...form, source_ref: e.target.value })} /><Select value={form.source_type} set={(source_type) => setForm({ ...form, source_type })} options={['youtube_channel','youtube_playlist','youtube_search','youtube_live','direct_video','local_file','watched_folder','authorized_feed']} /><Select value={form.usage_status} set={(usage_status) => setForm({ ...form, usage_status })} options={['review_required','authorized','licensed','campaign_allowed','owned','blocked']} /><Button disabled={busy}><Plus className="mr-2 h-4 w-4" />Adicionar</Button></form><Table><TableHeader><TableRow><TableHead>Fonte</TableHead><TableHead>Tipo</TableHead><TableHead>Direitos</TableHead><TableHead>Status</TableHead><TableHead>Última verificação</TableHead><TableHead>Ação</TableHead></TableRow></TableHeader><TableBody>{sources.length ? sources.map((source) => <TableRow key={source.source_id}><TableCell><b>{source.name}</b><div className="max-w-64 truncate text-xs text-zinc-500">{source.source_ref}</div></TableCell><TableCell>{source.source_type}</TableCell><TableCell><Badge variant={['authorized','licensed','campaign_allowed','owned'].includes(source.usage_status) ? 'success' : 'secondary'}>{source.usage_status}</Badge></TableCell><TableCell>{source.status}</TableCell><TableCell>{source.last_checked_at ? new Date(source.last_checked_at).toLocaleString() : 'Nunca'}</TableCell><TableCell><Button variant="outline" disabled={busy} onClick={() => toggle(source)}>{source.enabled ? 'Desativar' : 'Ativar'}</Button></TableCell></TableRow>) : <TableRow><TableCell colSpan={6} className="py-10 text-center text-zinc-500">Nenhuma fonte cadastrada.</TableCell></TableRow>}</TableBody></Table></div>;
 }
@@ -259,7 +279,7 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
   const [externalId, setExternalId] = useState(job.external_id || '');
   const [publishedAt, setPublishedAt] = useState(job.published_at ? toLocalInput(job.published_at) : toLocalInput(new Date().toISOString()));
   const [description, setDescription] = useState(String(job.metadata?.description || job.caption || ''));
-  const [hashtags, setHashtags] = useState(String(job.metadata?.hashtags || activity.required_hashtags.join(' ')));
+  const [hashtags, setHashtags] = useState(normalizeHashtags(job.metadata?.hashtags || activity.required_hashtags));
   const [credits, setCredits] = useState(String(job.metadata?.credits || ''));
   const [textSaved, setTextSaved] = useState(Boolean(job.metadata?.text_approved));
   const created = new Date(job.created_at);
@@ -269,7 +289,7 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
   const coverName = filename.replace(/\.mp4$/, '-capa.jpg');
   const videoUrl = `/api/assets/${job.asset_id}/video?name=${encodeURIComponent(filename)}`;
   const coverUrl = `/api/assets/${job.asset_id}/cover?name=${encodeURIComponent(coverName)}`;
-  const allText = [description, credits, hashtags].filter(Boolean).join('\n\n');
+  const allText = composePublicationText(description, credits, hashtags);
   const gates = (job.metadata?.gates || {}) as Record<string, unknown>;
   const published = ['published', 'published_manual'].includes(job.status);
   const variant = job.editorial_variants?.variant_signature || 'CUT vertical';
@@ -297,7 +317,7 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
         <CopyButton label="Copiar descrição" value={description} />
         <CopyButton label="Copiar hashtags" value={hashtags} />
         <CopyButton label="Copiar créditos" value={credits} />
-        <CopyButton label="Copiar descrição + hashtags" value={[description, hashtags].filter(Boolean).join('\n\n')} />
+        <CopyButton label="Copiar legenda + hashtags" value={allText} />
         <div className="sm:col-span-2"><CopyButton label="Copiar tudo" value={allText} wide /></div>
       </div>
       <div className="space-y-2 rounded-lg border border-zinc-800 p-3">
@@ -307,7 +327,7 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
         <textarea aria-label="Créditos" className="min-h-16 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={credits} onChange={(event) => { setCredits(event.target.value); setTextSaved(false); }} disabled={published} />
         <Button type="button" variant="outline" disabled={published || textSaved || !supabase} onClick={async () => {
           if (!supabase) return;
-          const finalCaption = [description, credits, hashtags].filter(Boolean).join('\n\n');
+          const finalCaption = composePublicationText(description, credits, hashtags);
           const result = await supabase.rpc('update_publication_text', { p_job_id: job.job_id, p_description: description, p_hashtags: hashtags, p_credits: credits, p_caption: finalCaption });
           if (!result.error) setTextSaved(true);
         }}><Save className="mr-2 h-4 w-4" />{textSaved ? 'Texto aprovado e salvo' : 'Salvar e aprovar texto'}</Button>
@@ -356,6 +376,18 @@ function CopyButton({ label, value, wide }: { label: string; value: string; wide
     window.setTimeout(() => setCopied(false), 1500);
   };
   return <Button type="button" className={wide ? 'w-full' : ''} variant="outline" disabled={!value} onClick={copy}><Copy className="mr-2 h-4 w-4" />{copied ? 'Copiado' : label}</Button>;
+}
+
+function normalizeHashtags(value: unknown) {
+  const raw = Array.isArray(value) ? value.join(' ') : String(value || '');
+  const seen = new Set<string>();
+  return raw.split(/[\s,;]+/).map((item) => item.trim().replace(/^#+/, '').replace(/[^\p{L}\p{N}_]/gu, ''))
+    .filter((item) => item && !seen.has(item.toLocaleLowerCase()) && seen.add(item.toLocaleLowerCase()))
+    .map((item) => `#${item}`).join(' ');
+}
+
+function composePublicationText(description: string, credits: string, hashtags: string) {
+  return [description.trim(), credits.trim(), normalizeHashtags(hashtags)].filter(Boolean).join('\n\n');
 }
 
 function toLocalInput(value: string) {
