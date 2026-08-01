@@ -102,9 +102,13 @@ def download(url: str, dest: Path) -> tuple[bool, str]:
         return True, "yt-dlp"
     # B. pytubefix — engine independente (não usa yt-dlp). ssl-off = mesma postura
     # do nocheckcertificate; rede de casa confiável, vídeo público.
+    import ssl
+    _prev = ssl._create_default_https_context
     try:
-        import ssl
-        ssl._create_default_https_context = ssl._create_unverified_context  # noqa: S323
+        # Escopo local: desativa a verificação só durante o pytubefix (MITM do
+        # AVG) e RESTAURA no finally — nunca fica global.
+        if os.getenv("RELAY_TLS_VERIFY", "0") != "1":
+            ssl._create_default_https_context = ssl._create_unverified_context  # noqa: S323
         from pytubefix import YouTube
 
         yt = YouTube(url)
@@ -116,6 +120,8 @@ def download(url: str, dest: Path) -> tuple[bool, str]:
                 return True, "pytubefix"
     except Exception:  # noqa: BLE001 — pytubefix é opcional
         pass
+    finally:
+        ssl._create_default_https_context = _prev
     return False, "none"
 
 
@@ -196,7 +202,12 @@ def process_one(url: str, key: str, cand: dict) -> str:
              "docker exec -e KWAI_API_ENABLED=0 \"$pc\" python -c "
              "'from database import _get_client; from kwai_real_pipeline import KwaiRealPipeline; "
              "print(KwaiRealPipeline(_get_client()).process_next())'", timeout=600)
-    return "ready" if "ready_review" in (r.stdout + r.stderr) else f"corte:{(r.stdout + r.stderr)[-80:]}"
+    ok_cut = "ready_review" in (r.stdout + r.stderr)
+    if ok_cut:
+        # Disco da VPS é curto: apaga o arquivo-fonte após o corte final (o MP4
+        # cortado já está no volume ready/). Mantém a fonte se o corte falhou.
+        _ssh(f"rm -f {remote_host}")
+    return "ready" if ok_cut else f"corte:{(r.stdout + r.stderr)[-80:]}"
 
 
 def main() -> None:

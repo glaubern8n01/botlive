@@ -60,8 +60,17 @@ class RobustDownloader:
         self._relay_fetch = relay_fetch
 
     def _ytdlp(self, url: str, out: Path, extra: list[str], label: str, result: DownloadResult) -> bool:
-        cmd = ["yt-dlp", "--no-warnings", "-f", "bv*+ba/b", "--merge-output-format", "mp4",
-               "-o", str(out), *extra, url]
+        # Proxy residencial (IPRoyal etc.) — SÓ no downloader, via env, nunca global.
+        # Economia de dados: com proxy, limita a resolução (cota é curta).
+        proxy = os.getenv("IPROYAL_PROXY") or os.getenv("DOWNLOADER_PROXY")
+        maxh = os.getenv("PROXY_MAX_HEIGHT", "480") if proxy else os.getenv("DOWNLOAD_MAX_HEIGHT", "1080")
+        fmt = f"bv*[height<=%s]+ba/b[height<=%s]/b" % (maxh, maxh)
+        cmd = ["yt-dlp", "--no-warnings", "-f", fmt, "--merge-output-format", "mp4",
+               "-o", str(out), *extra]
+        if proxy:
+            cmd += ["--proxy", proxy]
+            label = label + "+proxy"
+        cmd.append(url)
         result.attempts.append(label)
         proc = self._run(cmd)
         text = f"{getattr(proc,'stdout','') or ''}\n{getattr(proc,'stderr','') or ''}"
