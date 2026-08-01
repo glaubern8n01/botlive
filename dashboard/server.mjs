@@ -8,6 +8,10 @@ const distRoot = resolve(process.env.DASHBOARD_DIST_ROOT || 'dist');
 const mediaRoot = resolve(process.env.BOTLIVE_OUTPUT_ROOT || '/data/botlive/output');
 const supabaseUrl = process.env.VITE_SUPABASE_URL;
 const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY;
+// Credencial administrativa (service_role) — SOMENTE server-side. Nunca use prefixo
+// VITE_ para esta variável: isso a incluiria no bundle do browser. As mutações de
+// revisão só rodam com ela; sem ela os endpoints administrativos ficam desligados.
+const adminKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.ROBO_SUPABASE_KEY;
 // Aceita também o identificador legado de 35 caracteres já persistido no banco.
 // A consulta continua limitada a hexadecimal/hífens e igualdade exata no Supabase.
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{11,12}$/i;
@@ -170,10 +174,87 @@ async function cleanupRoute(request, response, url) {
   return json(response, 200, { ok: true, removed: removed.length }), true;
 }
 
+function readJsonBody(request) {
+  return new Promise((resolvePromise, reject) => {
+    let data = '';
+    request.on('data', (chunk) => {
+      data += chunk;
+      if (data.length > 1_000_000) { request.destroy(); reject(new Error('payload muito grande')); }
+    });
+    request.on('end', () => {
+      if (!data) return resolvePromise({});
+      try { resolvePromise(JSON.parse(data)); } catch { reject(new Error('JSON inválido')); }
+    });
+    request.on('error', reject);
+  });
+}
+
+// Chama uma RPC administrativa com a credencial service-side. A service key nunca
+// sai do servidor; o browser só recebe a resposta já processada.
+async function callAdminRpc(fnName, params) {
+  if (!supabaseUrl || !adminKey) throw new Error('Backend administrativo não configurado');
+  const url = new URL(`/rest/v1/rpc/${fnName}`, supabaseUrl);
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { apikey: adminKey, Authorization: `Bearer ${adminKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  return { ok: response.ok, status: response.status };
+}
+
+function missingFields(body, fields) {
+  return fields.filter((field) => !String(body?.[field] ?? '').trim());
+}
+
+// Proxy autenticado (atrás do Basic Auth do Traefik) para as mutações de revisão.
+// O anon key foi revogado dessas RPCs; esta é a única porta para aprovar/bloquear/reavaliar.
+async function kwaiReviewRoute(request, response, url) {
+  if (!url.pathname.startsWith('/api/kwai/prospects/')) return false;
+  if (request.method !== 'POST') return json(response, 405, { error: 'Método não permitido' }), true;
+  if (!adminKey) return json(response, 503, { error: 'Backend administrativo não configurado' }), true;
+  const action = url.pathname.slice('/api/kwai/prospects/'.length);
+  const body = await readJsonBody(request);
+  if (!uuidPattern.test(String(body.prospect_id || ''))) return json(response, 400, { error: 'prospect_id inválido' }), true;
+
+  if (action === 'review') {
+    const status = String(body.status || '');
+    if (!['authorized', 'licensed', 'campaign_allowed', 'approved', 'blocked'].includes(status)) {
+      return json(response, 400, { error: 'status inválido' }), true;
+    }
+    if (status === 'blocked') {
+      if (!String(body.blocked_reason || '').trim()) return json(response, 400, { error: 'motivo do bloqueio obrigatório' }), true;
+    } else {
+      const missing = missingFields(body, ['owner_name', 'authorization_reason', 'license_or_cut_task', 'evidence_url']);
+      if (missing.length) return json(response, 400, { error: `campos obrigatórios: ${missing.join(', ')}` }), true;
+    }
+    const rpc = await callAdminRpc('review_football_source_prospect', {
+      p_prospect_id: body.prospect_id, p_status: status,
+      p_owner_name: body.owner_name || '', p_authorization_reason: body.authorization_reason || '',
+      p_license_or_cut_task: body.license_or_cut_task || '', p_evidence_url: body.evidence_url || '',
+      p_review_notes: body.review_notes || null, p_reviewed_by: 'dashboard',
+      p_authorization_expires_at: body.authorization_expires_at || null,
+      p_blocked_reason: status === 'blocked' ? body.blocked_reason : null,
+    });
+    return json(response, rpc.ok ? 200 : 422, rpc.ok ? { ok: true } : { error: 'Operação recusada pela regra de revisão' }), true;
+  }
+
+  if (action === 'reevaluate') {
+    if (!String(body.reason || '').trim()) return json(response, 400, { error: 'motivo da reavaliação obrigatório' }), true;
+    const rpc = await callAdminRpc('reevaluate_football_source_prospect', {
+      p_prospect_id: body.prospect_id, p_reviewed_by: 'dashboard',
+      p_reason: body.reason, p_notes: body.review_notes || null,
+    });
+    return json(response, rpc.ok ? 200 : 422, rpc.ok ? { ok: true } : { error: 'Operação recusada pela regra de revisão' }), true;
+  }
+
+  return json(response, 404, { error: 'Ação desconhecida' }), true;
+}
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
     if (url.pathname === '/health') return json(response, 200, { ok: true, mode: 'prepare_only' });
+    if (await kwaiReviewRoute(request, response, url)) return;
     if (await cleanupRoute(request, response, url)) return;
     if (await mediaRoute(request, response, url)) return;
     const requested = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\/+/, '');

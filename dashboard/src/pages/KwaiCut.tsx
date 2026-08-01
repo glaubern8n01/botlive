@@ -218,7 +218,7 @@ export function KwaiCut() {
       {tab === 'Visão geral' && <Overview metrics={metrics} sources={sources} events={events} jobs={jobs} deficit={deficit} />}
       {tab === 'Publicar pelo celular' && <ManualPublishing jobs={jobs} activity={activity} markPublished={markPublished} busy={busy} reviewRequired={reviewRequired} />}
       {tab === 'Histórico' && <Jobs jobs={jobs.filter((job) => ['published','published_manual','rejected','cancelled'].includes(job.status))} cancel={cancelJob} busy={busy} videos />}
-      {tab === 'Fontes' && <div className="space-y-4"><ProspectReview prospects={prospects} value={bulkLinks} setValue={setBulkLinks} add={addBulkLinks} busy={busy} reload={load} /><Sources sources={sources} form={sourceForm} setForm={setSourceForm} add={addSource} toggle={toggleSource} busy={busy} /></div>}
+      {tab === 'Fontes' && <div className="space-y-4"><ProspectReview prospects={prospects} value={bulkLinks} setValue={setBulkLinks} add={addBulkLinks} busy={busy} reload={load} setError={setError} /><Sources sources={sources} form={sourceForm} setForm={setSourceForm} add={addSource} toggle={toggleSource} busy={busy} /></div>}
       {tab === 'Diagnóstico' && <Diagnostics checks={checks} discovered={discovered} sources={sources} />}
       {tab === 'Eventos' && <Events events={events} />}
       {tab === 'Vídeos' && <Jobs jobs={jobs} cancel={cancelJob} busy={busy} videos />}
@@ -244,7 +244,7 @@ function matchesEvent(item: Prospect, event: string) {
   const haystack = `${item.title} ${item.search_query || ''}`.toLowerCase();
   return terms.some((term) => haystack.includes(term));
 }
-function ProspectReview({ prospects, value, setValue, add, busy, reload }: { prospects: Prospect[]; value: string; setValue: (value: string) => void; add: () => void; busy: boolean; reload: () => Promise<void> }) {
+function ProspectReview({ prospects, value, setValue, add, busy, reload, setError }: { prospects: Prospect[]; value: string; setValue: (value: string) => void; add: () => void; busy: boolean; reload: () => Promise<void>; setError: (value: string | null) => void }) {
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('review_required');
   const [eventFilter, setEventFilter] = useState('all');
@@ -270,19 +270,21 @@ function ProspectReview({ prospects, value, setValue, add, busy, reload }: { pro
       setHistory((result.data || []) as ReviewHistory[]);
     }
   };
+  // Mutações administrativas passam pelo backend (server.mjs, atrás do Basic Auth),
+  // que usa a service key server-side. O anon key foi revogado dessas RPCs.
   const submitReview = async (status: string) => {
-    if (!supabase || !selected || reviewBusy) return;
+    if (!selected || reviewBusy) return;
     if (status !== 'blocked' && (!review.owner_name.trim() || !review.authorization_reason.trim() || !review.license_or_cut_task.trim() || !review.evidence_url.trim())) return;
     setReviewBusy(true);
-    const result = await supabase.rpc('review_football_source_prospect', { p_prospect_id: selected.prospect_id, p_status: status, p_owner_name: review.owner_name, p_authorization_reason: review.authorization_reason, p_license_or_cut_task: review.license_or_cut_task, p_evidence_url: review.evidence_url, p_review_notes: review.review_notes, p_reviewed_by: 'dashboard', p_authorization_expires_at: review.authorization_expires_at ? new Date(review.authorization_expires_at).toISOString() : null, p_blocked_reason: status === 'blocked' ? review.blocked_reason : null });
-    if (!result.error) { setSelected(null); await reload(); }
+    const response = await fetch('/api/kwai/prospects/review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prospect_id: selected.prospect_id, status, owner_name: review.owner_name, authorization_reason: review.authorization_reason, license_or_cut_task: review.license_or_cut_task, evidence_url: review.evidence_url, review_notes: review.review_notes, authorization_expires_at: review.authorization_expires_at ? new Date(review.authorization_expires_at).toISOString() : null, blocked_reason: status === 'blocked' ? review.blocked_reason : null }) });
+    if (response.ok) { setSelected(null); await reload(); } else { setError('A operação de revisão foi recusada.'); }
     setReviewBusy(false);
   };
   const reevaluate = async () => {
-    if (!supabase || !selected || reviewBusy || !reason.trim()) return;
+    if (!selected || reviewBusy || !reason.trim()) return;
     setReviewBusy(true);
-    const result = await supabase.rpc('reevaluate_football_source_prospect', { p_prospect_id: selected.prospect_id, p_reviewed_by: 'dashboard', p_reason: reason, p_notes: review.review_notes });
-    if (!result.error) { setSelected(null); await reload(); }
+    const response = await fetch('/api/kwai/prospects/reevaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prospect_id: selected.prospect_id, reason, review_notes: review.review_notes }) });
+    if (response.ok) { setSelected(null); await reload(); } else { setError('A reavaliação foi recusada.'); }
     setReviewBusy(false);
   };
   const expired = (item: Prospect) => Boolean(item.authorization_expires_at && new Date(item.authorization_expires_at).getTime() <= Date.now());

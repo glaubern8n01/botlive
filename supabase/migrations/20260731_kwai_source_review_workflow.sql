@@ -149,3 +149,19 @@ begin
   insert into public.football_source_review_history(prospect_id,profile_id,from_status,to_status,action,reviewed_by,reason,notes)
   values (p_prospect_id, p.profile_id, p.review_status, 'review_required', 'reevaluate', p_reviewed_by, p_reason, p_notes);
 end $$;
+
+-- 7. Segurança das mutações administrativas.
+-- O dashboard usa anon key e o RLS está desligado, então estas funções security
+-- definer NÃO podem ficar chamáveis por PUBLIC/anon/authenticated pela API REST do
+-- Supabase. Só o backend server-side (service_role, atrás do Basic Auth) pode executá-las.
+-- Idempotente: revoke/grant podem ser reaplicados sem efeito destrutivo.
+revoke all on function public.review_football_source_prospect(uuid,text,text,text,text,text,text,text,timestamptz,text) from public, anon, authenticated;
+revoke all on function public.reevaluate_football_source_prospect(uuid,text,text,text) from public, anon, authenticated;
+grant execute on function public.review_football_source_prospect(uuid,text,text,text,text,text,text,text,timestamptz,text) to service_role;
+grant execute on function public.reevaluate_football_source_prospect(uuid,text,text,text) to service_role;
+
+-- Histórico de revisão: leitura pelo dashboard (anon) é aceitável, mas a escrita só
+-- pode vir das funções definer (executadas server-side com service_role).
+revoke insert, update, delete, truncate on public.football_source_review_history from public, anon, authenticated;
+grant select on public.football_source_review_history to anon, authenticated, service_role;
+grant insert on public.football_source_review_history to service_role;
