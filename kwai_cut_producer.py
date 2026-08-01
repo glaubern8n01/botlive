@@ -164,7 +164,7 @@ class KwaiCutProducer:
                     "profile_id": PROFILE, "prospect_key": item.prospect_key,
                     "source_url": item.url, "title": item.title,
                     "source_type": item.source_type, "discovered_by": "automatic_search",
-                    "search_query": item.query, "review_status": "pending_review",
+                    "search_query": item.query, "review_status": "review_required",
                     "metadata": dict(item.metadata or {}),
                 }, on_conflict="profile_id,prospect_key").execute()
             LOGGER.info("Kwai CUT source prospecting: %s candidates", len(prospects))

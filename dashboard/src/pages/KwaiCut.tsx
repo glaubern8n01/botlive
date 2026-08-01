@@ -31,7 +31,7 @@ type Activity = {
 type EventRow = { event_id: string; event_type: string; source_ref: string; timestamp_seconds: number; metadata: Record<string, unknown>; created_at: string };
 type SourceCheck = { check_id: string; source_id: string; status: string; checked_at: string; found_count: number; new_count: number; duplicate_count: number; discarded_count: number; live_count: number; discard_reasons: Record<string, number>; error: string | null };
 type Discovered = { discovered_id: string; source_name: string; source_url: string; title: string; duration: number | null; source_published_at: string | null; status: string; discard_reason: string | null; created_at: string };
-type Prospect = { prospect_id: string; source_url: string; title: string; source_type: string; discovered_by: string; search_query: string | null; review_status: string; created_at: string };
+type Prospect = { prospect_id: string; source_url: string; title: string; source_type: string; discovered_by: string; search_query: string | null; review_status: string; owner_name: string | null; authorization_reason: string | null; license_or_cut_task: string | null; evidence_url: string | null; review_notes: string | null; reviewed_at: string | null; created_at: string };
 type JobRow = {
   job_id: string; asset_id: string; status: string; title: string | null; caption: string | null;
   cover_path: string | null; external_id: string | null; published_at: string | null;
@@ -103,6 +103,9 @@ export function KwaiCut() {
   useEffect(() => { load(); }, [load]);
 
   const deficit = Math.max(0, metrics.daily_target - metrics.approved);
+  const reviewRequired = prospects.filter((item) => ['discovered','review_required'].includes(item.review_status)).length;
+  const prospectApproved = prospects.filter((item) => ['approved','campaign_allowed','licensed','authorized'].includes(item.review_status)).length;
+  const prospectBlocked = prospects.filter((item) => item.review_status === 'blocked').length;
   const lastProcessing = jobs[0]?.created_at;
   const failures = useMemo(() => jobs.filter((job) => job.last_error || ['failed', 'rejected'].includes(job.status)), [jobs]);
   const nextRun = jobs.map((job) => job.scheduled_at).filter((value): value is string => Boolean(value)).sort()[0];
@@ -128,7 +131,7 @@ export function KwaiCut() {
     if (!links.length) return;
     setBusy(true);
     const rows = links.map((source_url) => ({ profile_id: PROFILE, prospect_key: source_url, source_url,
-      title: source_url, source_type: 'manual_link', discovered_by: 'dashboard', review_status: 'pending_review' }));
+      title: source_url, source_type: inferSourceType(source_url), discovered_by: 'dashboard', review_status: 'review_required' }));
     const result = await supabase.from('football_source_prospects').upsert(rows, { onConflict: 'profile_id,prospect_key' });
     if (result.error) setError('Não foi possível adicionar os links para revisão.');
     else { setBulkLinks(''); await load(); }
@@ -184,15 +187,20 @@ export function KwaiCut() {
       <Metric title="Publicados" value={metrics.published} />
       <Metric title="Rejeitados" value={metrics.rejected} warn />
       <Metric title="Déficit da meta" value={deficit} warn={deficit > 0} />
+      <Metric title="Fontes encontradas" value={prospects.length} />
+      <Metric title="Aguardando revisão" value={reviewRequired} warn={reviewRequired > 0} />
+      <Metric title="Fontes aprovadas" value={prospectApproved} good />
+      <Metric title="Fontes bloqueadas" value={prospectBlocked} />
+      <Metric title="Em processamento" value={jobs.filter((job) => ['pending','processing','rendering'].includes(job.status)).length} />
       <Card><CardHeader><CardTitle className="text-sm text-zinc-400">Último processamento</CardTitle></CardHeader><CardContent className="text-sm font-semibold">{lastProcessing ? new Date(lastProcessing).toLocaleString() : 'Sem dado real'}</CardContent></Card>
       <Card><CardHeader><CardTitle className="text-sm text-zinc-400">Próxima execução</CardTitle></CardHeader><CardContent className="text-sm font-semibold">{nextRun ? new Date(nextRun).toLocaleString() : 'Não agendada'}</CardContent></Card>
     </div>
     <div className="flex gap-1 overflow-x-auto border-b border-zinc-800">{TABS.map((item) => <button key={item} onClick={() => setTab(item)} className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === item ? 'border-orange-400 text-white' : 'border-transparent text-zinc-400'}`}>{item}</button>)}</div>
     {loading ? <div className="py-16 text-center text-zinc-500">Carregando dados reais...</div> : <>
       {tab === 'Visão geral' && <Overview metrics={metrics} sources={sources} events={events} jobs={jobs} deficit={deficit} />}
-      {tab === 'Publicar pelo celular' && <ManualPublishing jobs={jobs} activity={activity} markPublished={markPublished} busy={busy} />}
+      {tab === 'Publicar pelo celular' && <ManualPublishing jobs={jobs} activity={activity} markPublished={markPublished} busy={busy} reviewRequired={reviewRequired} />}
       {tab === 'Histórico' && <Jobs jobs={jobs.filter((job) => ['published','published_manual','rejected','cancelled'].includes(job.status))} cancel={cancelJob} busy={busy} videos />}
-      {tab === 'Fontes' && <div className="space-y-4"><ProspectLinks prospects={prospects} value={bulkLinks} setValue={setBulkLinks} add={addBulkLinks} busy={busy} /><Sources sources={sources} form={sourceForm} setForm={setSourceForm} add={addSource} toggle={toggleSource} busy={busy} /></div>}
+      {tab === 'Fontes' && <div className="space-y-4"><ProspectReview prospects={prospects} value={bulkLinks} setValue={setBulkLinks} add={addBulkLinks} busy={busy} reload={load} /><Sources sources={sources} form={sourceForm} setForm={setSourceForm} add={addSource} toggle={toggleSource} busy={busy} /></div>}
       {tab === 'Diagnóstico' && <Diagnostics checks={checks} discovered={discovered} sources={sources} />}
       {tab === 'Eventos' && <Events events={events} />}
       {tab === 'Vídeos' && <Jobs jobs={jobs} cancel={cancelJob} busy={busy} videos />}
@@ -212,6 +220,25 @@ function Overview({ metrics, sources, events, jobs, deficit }: { metrics: Metric
   return <div className="grid gap-4 md:grid-cols-3"><Summary title="Operação" lines={[`${sources.filter((s) => s.enabled).length} fontes ativas`, `${events.length} eventos recentes`, `${jobs.length} jobs recentes`]} /><Summary title="Qualidade" lines={[`${metrics.approved} aprovados`, `${metrics.rejected} rejeitados`, `Déficit registrado: ${deficit}`]} /><Summary title="Segurança" lines={['Somente fontes autorizadas', 'Futebol de videogame bloqueado', 'API Kwai desligada']} /></div>;
 }
 function Summary({ title, lines }: { title: string; lines: string[] }) { return <Card><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent>{lines.map((line) => <div key={line} className="mb-2 flex items-center gap-2 text-sm text-zinc-300"><CheckCircle2 className="h-4 w-4 text-emerald-500" />{line}</div>)}</CardContent></Card>; }
+function ProspectReview({ prospects, value, setValue, add, busy, reload }: { prospects: Prospect[]; value: string; setValue: (value: string) => void; add: () => void; busy: boolean; reload: () => Promise<void> }) {
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('review_required');
+  const [selected, setSelected] = useState<Prospect | null>(null);
+  const [review, setReview] = useState({ owner_name: '', authorization_reason: '', license_or_cut_task: '', evidence_url: '', review_notes: '', status: 'authorized' });
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const filtered = prospects.filter((item) => (typeFilter === 'all' || item.source_type === typeFilter) && (statusFilter === 'all' || item.review_status === statusFilter));
+  const openReview = (item: Prospect) => { setSelected(item); setReview({ owner_name: item.owner_name || '', authorization_reason: item.authorization_reason || '', license_or_cut_task: item.license_or_cut_task || '', evidence_url: item.evidence_url || '', review_notes: item.review_notes || '', status: 'authorized' }); };
+  const submitReview = async (status: string) => {
+    if (!supabase || !selected || reviewBusy) return;
+    if (status !== 'blocked' && (!review.owner_name.trim() || !review.authorization_reason.trim() || !review.license_or_cut_task.trim() || !review.evidence_url.trim())) return;
+    setReviewBusy(true);
+    const result = await supabase.rpc('review_football_source_prospect', { p_prospect_id: selected.prospect_id, p_status: status, p_owner_name: review.owner_name, p_authorization_reason: review.authorization_reason, p_license_or_cut_task: review.license_or_cut_task, p_evidence_url: review.evidence_url, p_review_notes: review.review_notes, p_reviewed_by: 'dashboard' });
+    if (!result.error) { setSelected(null); await reload(); }
+    setReviewBusy(false);
+  };
+  const types = Array.from(new Set(prospects.map((item) => item.source_type))).sort();
+  return <div className="space-y-4"><Card><CardHeader><CardTitle>Fontes encontradas · pesquisa contínua do Kwai CUT</CardTitle></CardHeader><CardContent className="space-y-4"><p className="text-sm text-zinc-400">Busca atual: gols, pênaltis, defesas, dribles, melhores momentos e VODs. Nenhuma fonte pública é autorizada automaticamente.</p><textarea className="min-h-28 w-full rounded-md border border-zinc-700 bg-zinc-950 p-3 text-sm" placeholder="Cole um link por linha: vídeo, VOD, replay, playlist ou canal" value={value} onChange={(event) => setValue(event.target.value)} /><Button type="button" disabled={busy || !value.trim()} onClick={add}><Plus className="mr-2 h-4 w-4" />Adicionar à fila de revisão</Button><div className="grid gap-3 md:grid-cols-2"><Label text="Filtrar formato"><Select value={typeFilter} set={setTypeFilter} options={['all', ...types]} /></Label><Label text="Filtrar revisão"><Select value={statusFilter} set={setStatusFilter} options={['all','discovered','review_required','approved','campaign_allowed','licensed','authorized','blocked']} /></Label></div><Table><TableHeader><TableRow><TableHead>Conteúdo / URL</TableHead><TableHead>Formato</TableHead><TableHead>Motivo da descoberta</TableHead><TableHead>Status</TableHead><TableHead>Ações</TableHead></TableRow></TableHeader><TableBody>{filtered.length ? filtered.map((item) => <TableRow key={item.prospect_id}><TableCell><a className="text-orange-300 underline" href={item.source_url} target="_blank" rel="noreferrer">{item.title}</a><div className="max-w-80 truncate text-xs text-zinc-500">{item.source_url}</div></TableCell><TableCell>{item.source_type}</TableCell><TableCell>{item.search_query || (item.discovered_by === 'dashboard' ? 'link informado no dashboard' : item.discovered_by)}</TableCell><TableCell><Badge variant={['approved','campaign_allowed','licensed','authorized'].includes(item.review_status) ? 'success' : 'secondary'}>{item.review_status}</Badge></TableCell><TableCell><Button type="button" variant="outline" onClick={() => openReview(item)}>Revisar</Button></TableCell></TableRow>) : <TableRow><TableCell colSpan={5}>Nenhuma fonte neste filtro.</TableCell></TableRow>}</TableBody></Table></CardContent></Card>{selected && <Card><CardHeader><CardTitle>Revisar fonte: {selected.title}</CardTitle></CardHeader><CardContent className="grid gap-3 md:grid-cols-2"><Label text="URL"><Input value={selected.source_url} disabled /></Label><Label text="Proprietário"><Input value={review.owner_name} onChange={(e) => setReview({...review, owner_name:e.target.value})} /></Label><Label text="Motivo da autorização"><Input value={review.authorization_reason} onChange={(e) => setReview({...review, authorization_reason:e.target.value})} /></Label><Label text="Licença ou tarefa CUT"><Input value={review.license_or_cut_task} onChange={(e) => setReview({...review, license_or_cut_task:e.target.value})} /></Label><Label text="Evidência (URL)"><Input type="url" value={review.evidence_url} onChange={(e) => setReview({...review, evidence_url:e.target.value})} /></Label><Label text="Data da revisão"><Input value={new Date().toLocaleString()} disabled /></Label><div className="md:col-span-2"><Label text="Observação"><Input value={review.review_notes} onChange={(e) => setReview({...review, review_notes:e.target.value})} /></Label></div><Label text="Tipo de autorização"><Select value={review.status} set={(status) => setReview({...review,status})} options={['authorized','licensed','campaign_allowed','approved']} /></Label><div className="flex items-end gap-2"><Button type="button" disabled={reviewBusy || !review.owner_name.trim() || !review.authorization_reason.trim() || !review.license_or_cut_task.trim() || !review.evidence_url.trim()} onClick={() => submitReview(review.status)}>Aprovar com evidência</Button><Button type="button" variant="outline" disabled={reviewBusy} onClick={() => submitReview('blocked')}>Bloquear</Button></div></CardContent></Card>}</div>;
+}
 function ProspectLinks({ prospects, value, setValue, add, busy }: { prospects: Prospect[]; value: string; setValue: (value: string) => void; add: () => void; busy: boolean }) {
   return <Card><CardHeader><CardTitle>VODs, vídeos e fontes para o Kwai CUT</CardTitle></CardHeader><CardContent className="space-y-4"><textarea className="min-h-28 w-full rounded-md border border-zinc-700 bg-zinc-950 p-3 text-sm" placeholder="Cole um link por linha: vídeo, VOD, replay, playlist ou canal" value={value} onChange={(event) => setValue(event.target.value)} /><Button type="button" disabled={busy || !value.trim()} onClick={add}><Plus className="mr-2 h-4 w-4" />Adicionar à fila de revisão</Button><p className="text-xs text-zinc-500">O robô também pesquisa continuamente. Fontes novas aguardam confirmação do direito de uso antes de gerar cortes.</p><Table><TableHeader><TableRow><TableHead>Conteúdo encontrado</TableHead><TableHead>Origem</TableHead><TableHead>Busca</TableHead><TableHead>Status</TableHead></TableRow></TableHeader><TableBody>{prospects.length ? prospects.map((item) => <TableRow key={item.prospect_id}><TableCell><a className="text-orange-300 underline" href={item.source_url} target="_blank" rel="noreferrer">{item.title}</a></TableCell><TableCell>{item.discovered_by}</TableCell><TableCell>{item.search_query || 'link manual'}</TableCell><TableCell><Badge>{item.review_status}</Badge></TableCell></TableRow>) : <TableRow><TableCell colSpan={4}>Nenhuma fonte candidata ainda.</TableCell></TableRow>}</TableBody></Table></CardContent></Card>;
 }
@@ -247,11 +274,12 @@ function AccountPanel({ account }: { account: Account | null }) {
   </div>;
 }
 
-function ManualPublishing({ jobs, activity, markPublished, busy }: {
+function ManualPublishing({ jobs, activity, markPublished, busy, reviewRequired }: {
   jobs: JobRow[];
   activity: Activity;
   markPublished: (jobId: string, assetId: string, externalId: string, publishedAt: string) => Promise<boolean>;
   busy: boolean;
+  reviewRequired: number;
 }) {
   const readyJobs = jobs.filter((job) => job.status === 'ready' && job.media_assets?.validation_status === 'valid');
   return <div className="space-y-5">
@@ -267,7 +295,7 @@ function ManualPublishing({ jobs, activity, markPublished, busy }: {
     <div className="flex items-center gap-2 text-sm text-zinc-400"><Smartphone className="h-5 w-5 text-orange-400" />Arquivos protegidos pelo mesmo acesso do dashboard. Nenhuma sessão do Kwai é usada.</div>
     {readyJobs.length ? <div className="grid gap-5 xl:grid-cols-2">
       {readyJobs.map((job, index) => <div key={job.job_id}><ManualVideoCard job={job} index={index} activity={activity} markPublished={markPublished} busy={busy} /></div>)}
-    </div> : <Empty icon={<Smartphone />} title="Nenhum vídeo pronto" text="Os vídeos aparecerão aqui após geração e validação em prepare_only." />}
+    </div> : <Empty icon={<Smartphone />} title="Nenhum vídeo pronto" text={`Existem ${reviewRequired} fontes aguardando revisão. Os vídeos aparecerão após autorização, geração e validação em prepare_only.`} />}
   </div>;
 }
 
@@ -388,6 +416,14 @@ function normalizeHashtags(value: unknown) {
 
 function composePublicationText(description: string, credits: string, hashtags: string) {
   return [description.trim(), credits.trim(), normalizeHashtags(hashtags)].filter(Boolean).join('\n\n');
+}
+
+function inferSourceType(url: string) {
+  const value = url.toLowerCase();
+  if (value.includes('list=')) return 'youtube_playlist';
+  if (value.includes('/live')) return 'youtube_live';
+  if (value.includes('youtube.com/@') || value.includes('youtube.com/channel/') || value.includes('youtube.com/c/')) return 'youtube_channel';
+  return 'direct_video';
 }
 
 function toLocalInput(value: string) {
