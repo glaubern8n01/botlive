@@ -49,19 +49,28 @@ def _env() -> tuple[str, str]:
     return url, key
 
 
+import ssl as _ssl
+# Contexto TLS tolerante ao MITM local (AVG). Rede de casa confiável; ainda usa
+# HTTPS + a chave de serviço. Não afeta a VPS (lá o certificado é válido).
+_TLS = _ssl.create_default_context()
+if os.getenv("RELAY_TLS_VERIFY", "0") != "1":
+    _TLS.check_hostname = False
+    _TLS.verify_mode = _ssl.CERT_NONE
+
+
 def _rest(url: str, key: str, path: str, method: str = "GET", body=None):
     req = Request(url + "/rest/v1/" + path, method=method,
                   data=(json.dumps(body).encode() if body is not None else None),
                   headers={"apikey": key, "Authorization": "Bearer " + key,
                            "Content-Type": "application/json", "Prefer": "return=representation"})
-    with urlopen(req, timeout=30) as r:
+    with urlopen(req, timeout=30, context=_TLS) as r:
         raw = r.read().decode()
         return json.loads(raw) if raw else []
 
 
-def _ssh(cmd: str) -> subprocess.CompletedProcess:
+def _ssh(cmd: str, timeout: int = 120) -> subprocess.CompletedProcess:
     return subprocess.run(["ssh", "-o", "BatchMode=yes", "-i", SSH_KEY, VPS_HOST, cmd],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=timeout)
 
 
 def _scp(local: Path, remote: str) -> bool:
@@ -176,7 +185,7 @@ def process_one(url: str, key: str, cand: dict) -> str:
     r = _ssh("pc=$(docker ps -q -f name=botlive_kwai-cut-producer | head -1); "
              "docker exec -e KWAI_API_ENABLED=0 \"$pc\" python -c "
              "'from database import _get_client; from kwai_real_pipeline import KwaiRealPipeline; "
-             "print(KwaiRealPipeline(_get_client()).process_next())'")
+             "print(KwaiRealPipeline(_get_client()).process_next())'", timeout=600)
     return "ready" if "ready_review" in (r.stdout + r.stderr) else f"corte:{(r.stdout + r.stderr)[-80:]}"
 
 
