@@ -42,10 +42,20 @@ def _env() -> tuple[str, str]:
     url = os.getenv("ROBO_SUPABASE_URL"); key = os.getenv("ROBO_SUPABASE_KEY")
     if not (url and key):
         for line in (Path(".env").read_text(encoding="utf-8").splitlines() if Path(".env").exists() else []):
-            if line.startswith("ROBO_SUPABASE_URL="): url = line.split("=", 1)[1].strip()
-            if line.startswith("ROBO_SUPABASE_KEY="): key = line.split("=", 1)[1].strip()
+            if line.startswith("ROBO_SUPABASE_URL=") and line.split("=", 1)[1].strip(): url = line.split("=", 1)[1].strip()
+            if line.startswith("ROBO_SUPABASE_KEY=") and line.split("=", 1)[1].strip(): key = line.split("=", 1)[1].strip()
     if not (url and key):
-        sys.exit("Faltam ROBO_SUPABASE_URL/ROBO_SUPABASE_KEY (env ou .env).")
+        # Auto-config: puxa as credenciais da VPS pelo SSH (não guarda no .env
+        # nem imprime). O relay precisa só da chave SSH e do repo.
+        print("[relay] credenciais locais ausentes; puxando da VPS via SSH...")
+        try:
+            g = ("docker exec $(docker ps -q -f name=botlive_kwai-cut-producer | head -1) printenv ")
+            url = url or _ssh(g + "ROBO_SUPABASE_URL").stdout.strip()
+            key = key or _ssh(g + "ROBO_SUPABASE_KEY").stdout.strip()
+        except Exception as exc:  # noqa: BLE001
+            sys.exit(f"Falha ao obter credenciais da VPS: {exc}")
+    if not (url and key):
+        sys.exit("Faltam ROBO_SUPABASE_URL/ROBO_SUPABASE_KEY (env, .env ou VPS).")
     return url, key
 
 
