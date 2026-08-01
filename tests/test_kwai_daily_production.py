@@ -33,7 +33,7 @@ def test_volume_migration_preserves_daily_production_and_manual_history() -> Non
 
 def test_dashboard_supports_platform_text_and_optional_external_id() -> None:
     page = Path("dashboard/src/pages/KwaiCut.tsx").read_text(encoding="utf-8")
-    assert "Copiar descrição + hashtags" in page
+    assert "Copiar legenda + hashtags" in page
     assert "Copiar créditos" in page
     assert "update_publication_text" in page
     assert "!externalId.trim()" not in page

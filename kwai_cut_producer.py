@@ -16,7 +16,7 @@ from kwai_real_pipeline import KwaiRealPipeline
 
 PROFILE = "kwai_cut_futebol"
 LOGGER = logging.getLogger("botlive.kwai_cut_producer")
-ALLOWED = ("owned", "authorized", "licensed", "campaign_allowed")
+ALLOWED = ("owned", "approved", "authorized", "licensed", "campaign_allowed")
 MEMORY_LIMIT_RATIO = float(os.getenv("KWAI_MEMORY_LIMIT_RATIO", "0.80"))
 DAILY_TARGET = min(100, max(1, int(os.getenv("KWAI_DAILY_TARGET", "30"))))
 DAILY_MAXIMUM = min(100, max(DAILY_TARGET, int(os.getenv("KWAI_DAILY_MAXIMUM", "100"))))

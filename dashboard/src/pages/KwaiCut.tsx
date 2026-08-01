@@ -130,7 +130,7 @@ export function KwaiCut() {
     const links = Array.from(new Set(bulkLinks.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)));
     if (!links.length) return;
     setBusy(true);
-    const rows = links.map((source_url) => ({ profile_id: PROFILE, prospect_key: source_url, source_url,
+    const rows = links.map((source_url: string) => ({ profile_id: PROFILE, prospect_key: source_url, source_url,
       title: source_url, source_type: inferSourceType(source_url), discovered_by: 'dashboard', review_status: 'review_required' }));
     const result = await supabase.from('football_source_prospects').upsert(rows, { onConflict: 'profile_id,prospect_key' });
     if (result.error) setError('Não foi possível adicionar os links para revisão.');
