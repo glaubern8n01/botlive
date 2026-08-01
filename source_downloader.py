@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -37,6 +38,19 @@ def resolver_fonte_video(source: str) -> Path:
     job_id = uuid4().hex[:12]
     work_dir = sources_dir() / job_id
     work_dir.mkdir(parents=True, exist_ok=True)
+
+    # Downloader robusto (opt-in): fontes diretas MP4/HLS/DASH e plataformas
+    # não-YouTube (Twitch/Vimeo/Dailymotion) baixam direto na VPS; YouTube usa
+    # o relay/cookies configurados. OFF por padrao para nao alterar o fluxo vivo.
+    if os.getenv("ROBUST_DOWNLOADER_ENABLED", "0") == "1":
+        try:
+            from robust_downloader import RobustDownloader
+
+            res = RobustDownloader().download(source, work_dir, "source.mp4")
+            if res.ok and res.path and Path(res.path).exists():
+                return Path(res.path)
+        except Exception:  # noqa: BLE001 — cai no yt-dlp padrao abaixo
+            pass
 
     ydl_opts = {
         "format": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/best[height<=1080]/best",
