@@ -31,7 +31,10 @@ type Activity = {
 type EventRow = { event_id: string; event_type: string; source_ref: string; timestamp_seconds: number; metadata: Record<string, unknown>; created_at: string };
 type SourceCheck = { check_id: string; source_id: string; status: string; checked_at: string; found_count: number; new_count: number; duplicate_count: number; discarded_count: number; live_count: number; discard_reasons: Record<string, number>; error: string | null };
 type Discovered = { discovered_id: string; source_name: string; source_url: string; title: string; duration: number | null; source_published_at: string | null; status: string; discard_reason: string | null; created_at: string };
-type Prospect = { prospect_id: string; source_url: string; title: string; source_type: string; discovered_by: string; search_query: string | null; review_status: string; owner_name: string | null; authorization_reason: string | null; license_or_cut_task: string | null; evidence_url: string | null; review_notes: string | null; reviewed_at: string | null; created_at: string };
+type Prospect = { prospect_id: string; source_url: string; title: string; source_type: string; discovered_by: string; search_query: string | null; review_status: string; owner_name: string | null; authorization_reason: string | null; license_or_cut_task: string | null; evidence_url: string | null; review_notes: string | null; reviewed_at: string | null; reviewed_by: string | null; blocked_reason: string | null; authorization_expires_at: string | null; previous_review_state: string | null; created_at: string };
+type ReviewHistory = { history_id: string; from_status: string | null; to_status: string; action: string; reviewed_by: string; reason: string | null; notes: string | null; created_at: string };
+const BLOCK_REASONS = ['direitos não comprovados','conteúdo inadequado','gameplay','duplicado','fonte indisponível','fonte privada','fonte com DRM','sem lances reais','histórico/genérico','baixa qualidade','outro'];
+const EVENT_TERMS: Record<string, string[]> = { gol: ['gol','goal'], defesa: ['defesa','save'], pênalti: ['penalti','pênalti','penalty'], drible: ['drible','dribble'], 'melhores momentos': ['melhores momentos','highlight','best of'], expulsão: ['expulsao','expulsão','red card'], var: ['var'], replay: ['replay','reprise'], reação: ['reacao','reação','react'], jogada: ['jogada','skill'] };
 type JobRow = {
   job_id: string; asset_id: string; status: string; title: string | null; caption: string | null;
   cover_path: string | null; external_id: string | null; published_at: string | null;
@@ -64,6 +67,7 @@ export function KwaiCut() {
   const [activity, setActivity] = useState<Activity>(emptyActivity);
   const [account, setAccount] = useState<Account | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [sourceForm, setSourceForm] = useState({ name: '', source_type: 'youtube_channel', source_ref: '', usage_status: 'review_required', priority: 50 });
@@ -103,9 +107,10 @@ export function KwaiCut() {
   useEffect(() => { load(); }, [load]);
 
   const deficit = Math.max(0, metrics.daily_target - metrics.approved);
+  const countStatus = (status: string) => prospects.filter((item) => item.review_status === status).length;
   const reviewRequired = prospects.filter((item) => ['discovered','review_required'].includes(item.review_status)).length;
   const prospectApproved = prospects.filter((item) => ['approved','campaign_allowed','licensed','authorized'].includes(item.review_status)).length;
-  const prospectBlocked = prospects.filter((item) => item.review_status === 'blocked').length;
+  const prospectBlocked = countStatus('blocked');
   const lastProcessing = jobs[0]?.created_at;
   const failures = useMemo(() => jobs.filter((job) => job.last_error || ['failed', 'rejected'].includes(job.status)), [jobs]);
   const nextRun = jobs.map((job) => job.scheduled_at).filter((value): value is string => Boolean(value)).sort()[0];
@@ -127,14 +132,23 @@ export function KwaiCut() {
   };
   const addBulkLinks = async () => {
     if (!supabase || busy) return;
-    const links = Array.from(new Set(bulkLinks.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)));
-    if (!links.length) return;
+    setError(null); setNotice(null);
+    const parsed = parseBulkLinks(bulkLinks);
+    if (!parsed.valid.length && !parsed.invalid) { setError('Nenhum link válido para adicionar.'); return; }
     setBusy(true);
-    const rows = links.map((source_url: string) => ({ profile_id: PROFILE, prospect_key: source_url, source_url,
+    const existing = new Map(prospects.map((item) => [item.source_url, item.review_status]));
+    const fresh = parsed.valid.filter((url) => !existing.has(url));
+    const duplicate = parsed.valid.length - fresh.length;
+    const blocked = parsed.valid.filter((url) => existing.get(url) === 'blocked').length;
+    const rows = fresh.map((source_url: string) => ({ profile_id: PROFILE, prospect_key: source_url, source_url,
       title: source_url, source_type: inferSourceType(source_url), discovered_by: 'dashboard', review_status: 'review_required' }));
-    const result = await supabase.from('football_source_prospects').upsert(rows, { onConflict: 'profile_id,prospect_key' });
+    const result = rows.length ? await supabase.from('football_source_prospects').upsert(rows, { onConflict: 'profile_id,prospect_key' }) : { error: null };
     if (result.error) setError('Não foi possível adicionar os links para revisão.');
-    else { setBulkLinks(''); await load(); }
+    else {
+      setBulkLinks('');
+      setNotice(`Adicionados: ${fresh.length} · duplicados: ${duplicate} · já bloqueados: ${blocked} · inválidos: ${parsed.invalid}. Novos links entram como "aguardando revisão".`);
+      await load();
+    }
     setBusy(false);
   };
   const saveActivity = async (event: FormEvent) => {
@@ -176,6 +190,7 @@ export function KwaiCut() {
       <Button variant="outline" onClick={load} disabled={loading}><RefreshCw className="mr-2 h-4 w-4" />Atualizar</Button>
     </div>
     {error && <div className="flex gap-2 rounded-lg border border-amber-800 bg-amber-950/30 p-3 text-amber-300"><AlertCircle className="h-5 w-5 shrink-0" />{error}</div>}
+    {notice && <div className="flex gap-2 rounded-lg border border-emerald-800 bg-emerald-950/30 p-3 text-emerald-300"><CheckCircle2 className="h-5 w-5 shrink-0" />{notice}</div>}
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
       <Metric title="Meta mínima" value={metrics.daily_minimum} />
       <Metric title="Meta desejada" value={metrics.daily_target} />
@@ -187,10 +202,13 @@ export function KwaiCut() {
       <Metric title="Publicados" value={metrics.published} />
       <Metric title="Rejeitados" value={metrics.rejected} warn />
       <Metric title="Déficit da meta" value={deficit} warn={deficit > 0} />
-      <Metric title="Fontes encontradas" value={prospects.length} />
+      <Metric title="Fontes descobertas" value={prospects.length} />
       <Metric title="Aguardando revisão" value={reviewRequired} warn={reviewRequired > 0} />
-      <Metric title="Fontes aprovadas" value={prospectApproved} good />
-      <Metric title="Fontes bloqueadas" value={prospectBlocked} />
+      <Metric title="Aprovadas" value={countStatus('approved')} good />
+      <Metric title="Autorizadas" value={countStatus('authorized')} good />
+      <Metric title="Licenciadas" value={countStatus('licensed')} good />
+      <Metric title="Permitidas pela campanha" value={countStatus('campaign_allowed')} good />
+      <Metric title="Bloqueadas" value={prospectBlocked} />
       <Metric title="Em processamento" value={jobs.filter((job) => ['pending','processing','rendering'].includes(job.status)).length} />
       <Card><CardHeader><CardTitle className="text-sm text-zinc-400">Último processamento</CardTitle></CardHeader><CardContent className="text-sm font-semibold">{lastProcessing ? new Date(lastProcessing).toLocaleString() : 'Sem dado real'}</CardContent></Card>
       <Card><CardHeader><CardTitle className="text-sm text-zinc-400">Próxima execução</CardTitle></CardHeader><CardContent className="text-sm font-semibold">{nextRun ? new Date(nextRun).toLocaleString() : 'Não agendada'}</CardContent></Card>
@@ -220,27 +238,58 @@ function Overview({ metrics, sources, events, jobs, deficit }: { metrics: Metric
   return <div className="grid gap-4 md:grid-cols-3"><Summary title="Operação" lines={[`${sources.filter((s) => s.enabled).length} fontes ativas`, `${events.length} eventos recentes`, `${jobs.length} jobs recentes`]} /><Summary title="Qualidade" lines={[`${metrics.approved} aprovados`, `${metrics.rejected} rejeitados`, `Déficit registrado: ${deficit}`]} /><Summary title="Segurança" lines={['Somente fontes autorizadas', 'Futebol de videogame bloqueado', 'API Kwai desligada']} /></div>;
 }
 function Summary({ title, lines }: { title: string; lines: string[] }) { return <Card><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent>{lines.map((line) => <div key={line} className="mb-2 flex items-center gap-2 text-sm text-zinc-300"><CheckCircle2 className="h-4 w-4 text-emerald-500" />{line}</div>)}</CardContent></Card>; }
+function matchesEvent(item: Prospect, event: string) {
+  if (event === 'all') return true;
+  const terms = EVENT_TERMS[event] || [event];
+  const haystack = `${item.title} ${item.search_query || ''}`.toLowerCase();
+  return terms.some((term) => haystack.includes(term));
+}
 function ProspectReview({ prospects, value, setValue, add, busy, reload }: { prospects: Prospect[]; value: string; setValue: (value: string) => void; add: () => void; busy: boolean; reload: () => Promise<void> }) {
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('review_required');
+  const [eventFilter, setEventFilter] = useState('all');
+  const [ownerFilter, setOwnerFilter] = useState('all');
+  const [term, setTerm] = useState('');
   const [selected, setSelected] = useState<Prospect | null>(null);
-  const [review, setReview] = useState({ owner_name: '', authorization_reason: '', license_or_cut_task: '', evidence_url: '', review_notes: '', status: 'authorized' });
+  const [history, setHistory] = useState<ReviewHistory[]>([]);
+  const [review, setReview] = useState({ owner_name: '', authorization_reason: '', license_or_cut_task: '', evidence_url: '', review_notes: '', authorization_expires_at: '', status: 'authorized', blocked_reason: BLOCK_REASONS[0] });
+  const [reason, setReason] = useState('');
   const [reviewBusy, setReviewBusy] = useState(false);
-  const filtered = prospects.filter((item) => (typeFilter === 'all' || item.source_type === typeFilter) && (statusFilter === 'all' || item.review_status === statusFilter));
-  const openReview = (item: Prospect) => { setSelected(item); setReview({ owner_name: item.owner_name || '', authorization_reason: item.authorization_reason || '', license_or_cut_task: item.license_or_cut_task || '', evidence_url: item.evidence_url || '', review_notes: item.review_notes || '', status: 'authorized' }); };
+  const search = term.trim().toLowerCase();
+  const filtered = prospects.filter((item) =>
+    (typeFilter === 'all' || item.source_type === typeFilter)
+    && (statusFilter === 'all' || item.review_status === statusFilter)
+    && (ownerFilter === 'all' || (item.owner_name || '') === ownerFilter)
+    && matchesEvent(item, eventFilter)
+    && (!search || `${item.title} ${item.source_url} ${item.owner_name || ''} ${item.search_query || ''}`.toLowerCase().includes(search)));
+  const openReview = async (item: Prospect) => {
+    setSelected(item); setReason('');
+    setReview({ owner_name: item.owner_name || '', authorization_reason: item.authorization_reason || '', license_or_cut_task: item.license_or_cut_task || '', evidence_url: item.evidence_url || '', review_notes: item.review_notes || '', authorization_expires_at: (item.authorization_expires_at || '').slice(0, 16), status: 'authorized', blocked_reason: BLOCK_REASONS[0] });
+    if (supabase) {
+      const result = await supabase.from('football_source_review_history').select('history_id,from_status,to_status,action,reviewed_by,reason,notes,created_at').eq('prospect_id', item.prospect_id).order('created_at', { ascending: false }).limit(20);
+      setHistory((result.data || []) as ReviewHistory[]);
+    }
+  };
   const submitReview = async (status: string) => {
     if (!supabase || !selected || reviewBusy) return;
     if (status !== 'blocked' && (!review.owner_name.trim() || !review.authorization_reason.trim() || !review.license_or_cut_task.trim() || !review.evidence_url.trim())) return;
     setReviewBusy(true);
-    const result = await supabase.rpc('review_football_source_prospect', { p_prospect_id: selected.prospect_id, p_status: status, p_owner_name: review.owner_name, p_authorization_reason: review.authorization_reason, p_license_or_cut_task: review.license_or_cut_task, p_evidence_url: review.evidence_url, p_review_notes: review.review_notes, p_reviewed_by: 'dashboard' });
+    const result = await supabase.rpc('review_football_source_prospect', { p_prospect_id: selected.prospect_id, p_status: status, p_owner_name: review.owner_name, p_authorization_reason: review.authorization_reason, p_license_or_cut_task: review.license_or_cut_task, p_evidence_url: review.evidence_url, p_review_notes: review.review_notes, p_reviewed_by: 'dashboard', p_authorization_expires_at: review.authorization_expires_at ? new Date(review.authorization_expires_at).toISOString() : null, p_blocked_reason: status === 'blocked' ? review.blocked_reason : null });
     if (!result.error) { setSelected(null); await reload(); }
     setReviewBusy(false);
   };
+  const reevaluate = async () => {
+    if (!supabase || !selected || reviewBusy || !reason.trim()) return;
+    setReviewBusy(true);
+    const result = await supabase.rpc('reevaluate_football_source_prospect', { p_prospect_id: selected.prospect_id, p_reviewed_by: 'dashboard', p_reason: reason, p_notes: review.review_notes });
+    if (!result.error) { setSelected(null); await reload(); }
+    setReviewBusy(false);
+  };
+  const expired = (item: Prospect) => Boolean(item.authorization_expires_at && new Date(item.authorization_expires_at).getTime() <= Date.now());
+  const canReevaluate = selected && (['blocked', 'review_required'].includes(selected.review_status) || expired(selected));
   const types = Array.from(new Set(prospects.map((item) => item.source_type))).sort();
-  return <div className="space-y-4"><Card><CardHeader><CardTitle>Fontes encontradas · pesquisa contínua do Kwai CUT</CardTitle></CardHeader><CardContent className="space-y-4"><p className="text-sm text-zinc-400">Busca atual: gols, pênaltis, defesas, dribles, melhores momentos e VODs. Nenhuma fonte pública é autorizada automaticamente.</p><textarea className="min-h-28 w-full rounded-md border border-zinc-700 bg-zinc-950 p-3 text-sm" placeholder="Cole um link por linha: vídeo, VOD, replay, playlist ou canal" value={value} onChange={(event) => setValue(event.target.value)} /><Button type="button" disabled={busy || !value.trim()} onClick={add}><Plus className="mr-2 h-4 w-4" />Adicionar à fila de revisão</Button><div className="grid gap-3 md:grid-cols-2"><Label text="Filtrar formato"><Select value={typeFilter} set={setTypeFilter} options={['all', ...types]} /></Label><Label text="Filtrar revisão"><Select value={statusFilter} set={setStatusFilter} options={['all','discovered','review_required','approved','campaign_allowed','licensed','authorized','blocked']} /></Label></div><Table><TableHeader><TableRow><TableHead>Conteúdo / URL</TableHead><TableHead>Formato</TableHead><TableHead>Motivo da descoberta</TableHead><TableHead>Status</TableHead><TableHead>Ações</TableHead></TableRow></TableHeader><TableBody>{filtered.length ? filtered.map((item) => <TableRow key={item.prospect_id}><TableCell><a className="text-orange-300 underline" href={item.source_url} target="_blank" rel="noreferrer">{item.title}</a><div className="max-w-80 truncate text-xs text-zinc-500">{item.source_url}</div></TableCell><TableCell>{item.source_type}</TableCell><TableCell>{item.search_query || (item.discovered_by === 'dashboard' ? 'link informado no dashboard' : item.discovered_by)}</TableCell><TableCell><Badge variant={['approved','campaign_allowed','licensed','authorized'].includes(item.review_status) ? 'success' : 'secondary'}>{item.review_status}</Badge></TableCell><TableCell><Button type="button" variant="outline" onClick={() => openReview(item)}>Revisar</Button></TableCell></TableRow>) : <TableRow><TableCell colSpan={5}>Nenhuma fonte neste filtro.</TableCell></TableRow>}</TableBody></Table></CardContent></Card>{selected && <Card><CardHeader><CardTitle>Revisar fonte: {selected.title}</CardTitle></CardHeader><CardContent className="grid gap-3 md:grid-cols-2"><Label text="URL"><Input value={selected.source_url} disabled /></Label><Label text="Proprietário"><Input value={review.owner_name} onChange={(e) => setReview({...review, owner_name:e.target.value})} /></Label><Label text="Motivo da autorização"><Input value={review.authorization_reason} onChange={(e) => setReview({...review, authorization_reason:e.target.value})} /></Label><Label text="Licença ou tarefa CUT"><Input value={review.license_or_cut_task} onChange={(e) => setReview({...review, license_or_cut_task:e.target.value})} /></Label><Label text="Evidência (URL)"><Input type="url" value={review.evidence_url} onChange={(e) => setReview({...review, evidence_url:e.target.value})} /></Label><Label text="Data da revisão"><Input value={new Date().toLocaleString()} disabled /></Label><div className="md:col-span-2"><Label text="Observação"><Input value={review.review_notes} onChange={(e) => setReview({...review, review_notes:e.target.value})} /></Label></div><Label text="Tipo de autorização"><Select value={review.status} set={(status) => setReview({...review,status})} options={['authorized','licensed','campaign_allowed','approved']} /></Label><div className="flex items-end gap-2"><Button type="button" disabled={reviewBusy || !review.owner_name.trim() || !review.authorization_reason.trim() || !review.license_or_cut_task.trim() || !review.evidence_url.trim()} onClick={() => submitReview(review.status)}>Aprovar com evidência</Button><Button type="button" variant="outline" disabled={reviewBusy} onClick={() => submitReview('blocked')}>Bloquear</Button></div></CardContent></Card>}</div>;
-}
-function ProspectLinks({ prospects, value, setValue, add, busy }: { prospects: Prospect[]; value: string; setValue: (value: string) => void; add: () => void; busy: boolean }) {
-  return <Card><CardHeader><CardTitle>VODs, vídeos e fontes para o Kwai CUT</CardTitle></CardHeader><CardContent className="space-y-4"><textarea className="min-h-28 w-full rounded-md border border-zinc-700 bg-zinc-950 p-3 text-sm" placeholder="Cole um link por linha: vídeo, VOD, replay, playlist ou canal" value={value} onChange={(event) => setValue(event.target.value)} /><Button type="button" disabled={busy || !value.trim()} onClick={add}><Plus className="mr-2 h-4 w-4" />Adicionar à fila de revisão</Button><p className="text-xs text-zinc-500">O robô também pesquisa continuamente. Fontes novas aguardam confirmação do direito de uso antes de gerar cortes.</p><Table><TableHeader><TableRow><TableHead>Conteúdo encontrado</TableHead><TableHead>Origem</TableHead><TableHead>Busca</TableHead><TableHead>Status</TableHead></TableRow></TableHeader><TableBody>{prospects.length ? prospects.map((item) => <TableRow key={item.prospect_id}><TableCell><a className="text-orange-300 underline" href={item.source_url} target="_blank" rel="noreferrer">{item.title}</a></TableCell><TableCell>{item.discovered_by}</TableCell><TableCell>{item.search_query || 'link manual'}</TableCell><TableCell><Badge>{item.review_status}</Badge></TableCell></TableRow>) : <TableRow><TableCell colSpan={4}>Nenhuma fonte candidata ainda.</TableCell></TableRow>}</TableBody></Table></CardContent></Card>;
+  const owners = Array.from(new Set(prospects.map((item) => item.owner_name).filter((o): o is string => Boolean(o)))).sort();
+  return <div className="space-y-4"><Card><CardHeader><CardTitle>Fontes encontradas · pesquisa contínua do Kwai CUT</CardTitle></CardHeader><CardContent className="space-y-4"><p className="text-sm text-zinc-400">Busca atual: gols, pênaltis, defesas, dribles, melhores momentos e VODs. Nenhuma fonte pública é autorizada automaticamente — nem "está no YouTube" nem "canal oficial" contam como autorização.</p><textarea className="min-h-28 w-full rounded-md border border-zinc-700 bg-zinc-950 p-3 text-sm" placeholder="Cole um link por linha: vídeo, VOD, replay, playlist ou canal" value={value} onChange={(event) => setValue(event.target.value)} /><Button type="button" disabled={busy || !value.trim()} onClick={add}><Plus className="mr-2 h-4 w-4" />Adicionar à fila de revisão</Button><div className="grid gap-3 md:grid-cols-3"><Label text="Filtrar formato"><Select value={typeFilter} set={setTypeFilter} options={['all', ...types]} /></Label><Label text="Filtrar revisão"><Select value={statusFilter} set={setStatusFilter} options={['all','discovered','review_required','approved','campaign_allowed','licensed','authorized','blocked']} /></Label><Label text="Filtrar evento"><Select value={eventFilter} set={setEventFilter} options={['all', ...Object.keys(EVENT_TERMS)]} /></Label><Label text="Filtrar canal/proprietário"><Select value={ownerFilter} set={setOwnerFilter} options={['all', ...owners]} /></Label><div className="md:col-span-2"><Label text="Buscar (título, URL, canal, termo)"><Input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="ex.: pênalti, Copa, nome do canal" /></Label></div></div><Table><TableHeader><TableRow><TableHead>Conteúdo / URL</TableHead><TableHead>Formato</TableHead><TableHead>Motivo da descoberta</TableHead><TableHead>Status</TableHead><TableHead>Ações</TableHead></TableRow></TableHeader><TableBody>{filtered.length ? filtered.map((item) => <TableRow key={item.prospect_id}><TableCell><a className="text-orange-300 underline" href={item.source_url} target="_blank" rel="noreferrer">{item.title}</a><div className="max-w-80 truncate text-xs text-zinc-500">{item.source_url}</div></TableCell><TableCell>{item.source_type}</TableCell><TableCell>{item.search_query || (item.discovered_by === 'dashboard' ? 'link informado no dashboard' : item.discovered_by)}</TableCell><TableCell><Badge variant={['approved','campaign_allowed','licensed','authorized'].includes(item.review_status) && !expired(item) ? 'success' : 'secondary'}>{expired(item) ? 'autorização vencida' : item.review_status}</Badge></TableCell><TableCell><Button type="button" variant="outline" onClick={() => openReview(item)}>Revisar</Button></TableCell></TableRow>) : <TableRow><TableCell colSpan={5}>Nenhuma fonte neste filtro.</TableCell></TableRow>}</TableBody></Table></CardContent></Card>{selected && <Card><CardHeader><CardTitle>Revisar fonte: {selected.title}</CardTitle></CardHeader><CardContent className="space-y-4"><div className="grid gap-3 md:grid-cols-2"><Label text="URL"><Input value={selected.source_url} disabled /></Label><Label text="Proprietário / canal"><Input value={review.owner_name} onChange={(e) => setReview({...review, owner_name:e.target.value})} /></Label><Label text="Fundamento da autorização"><Input value={review.authorization_reason} onChange={(e) => setReview({...review, authorization_reason:e.target.value})} /></Label><Label text="Licença ou tarefa CUT"><Input value={review.license_or_cut_task} onChange={(e) => setReview({...review, license_or_cut_task:e.target.value})} /></Label><Label text="Evidência (URL)"><Input type="url" value={review.evidence_url} onChange={(e) => setReview({...review, evidence_url:e.target.value})} /></Label><Label text="Validade da autorização (opcional)"><Input type="datetime-local" value={review.authorization_expires_at} onChange={(e) => setReview({...review, authorization_expires_at:e.target.value})} /></Label><Label text="Tipo de autorização"><Select value={review.status} set={(status) => setReview({...review,status})} options={['authorized','licensed','campaign_allowed','approved']} /></Label><Label text="Motivo do bloqueio"><Select value={review.blocked_reason} set={(blocked_reason) => setReview({...review,blocked_reason})} options={BLOCK_REASONS} /></Label><div className="md:col-span-2"><Label text="Observação"><Input value={review.review_notes} onChange={(e) => setReview({...review, review_notes:e.target.value})} /></Label></div></div><div className="flex flex-wrap items-end gap-2"><Button type="button" disabled={reviewBusy || !review.owner_name.trim() || !review.authorization_reason.trim() || !review.license_or_cut_task.trim() || !review.evidence_url.trim()} onClick={() => submitReview(review.status)}>Aprovar com evidência</Button><Button type="button" variant="outline" disabled={reviewBusy} onClick={() => submitReview('blocked')}>Bloquear</Button></div>{canReevaluate && <div className="rounded-md border border-zinc-800 p-3"><p className="mb-2 text-sm text-zinc-400">Reavaliar preserva o histórico e devolve a fonte para revisão.</p><div className="flex flex-wrap items-end gap-2"><div className="grow"><Label text="Motivo da reavaliação"><Input value={reason} onChange={(e) => setReason(e.target.value)} /></Label></div><Button type="button" variant="outline" disabled={reviewBusy || !reason.trim()} onClick={reevaluate}>Reavaliar</Button></div></div>}{history.length > 0 && <div><h4 className="mb-2 text-sm font-semibold text-zinc-300">Histórico da revisão</h4><Table><TableHeader><TableRow><TableHead>Quando</TableHead><TableHead>Ação</TableHead><TableHead>De → Para</TableHead><TableHead>Responsável</TableHead><TableHead>Motivo</TableHead></TableRow></TableHeader><TableBody>{history.map((h) => <TableRow key={h.history_id}><TableCell>{new Date(h.created_at).toLocaleString()}</TableCell><TableCell>{h.action}</TableCell><TableCell>{(h.from_status || '—')} → {h.to_status}</TableCell><TableCell>{h.reviewed_by}</TableCell><TableCell>{h.reason || '—'}</TableCell></TableRow>)}</TableBody></Table></div>}</CardContent></Card>}</div>;
 }
 function Sources({ sources, form, setForm, add, toggle, busy }: { sources: Source[]; form: { name: string; source_type: string; source_ref: string; usage_status: string; priority: number }; setForm: (value: typeof form) => void; add: (event: FormEvent) => void; toggle: (source: Source) => void; busy: boolean }) {
   return <div className="space-y-4"><form onSubmit={add} className="grid gap-3 rounded-xl border border-zinc-800 p-4 md:grid-cols-5"><Input placeholder="Nome" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /><Input placeholder="URL ou referência" value={form.source_ref} onChange={(e) => setForm({ ...form, source_ref: e.target.value })} /><Select value={form.source_type} set={(source_type) => setForm({ ...form, source_type })} options={['youtube_channel','youtube_playlist','youtube_search','youtube_live','direct_video','local_file','watched_folder','authorized_feed']} /><Select value={form.usage_status} set={(usage_status) => setForm({ ...form, usage_status })} options={['review_required','authorized','licensed','campaign_allowed','owned','blocked']} /><Button disabled={busy}><Plus className="mr-2 h-4 w-4" />Adicionar</Button></form><Table><TableHeader><TableRow><TableHead>Fonte</TableHead><TableHead>Tipo</TableHead><TableHead>Direitos</TableHead><TableHead>Status</TableHead><TableHead>Última verificação</TableHead><TableHead>Ação</TableHead></TableRow></TableHeader><TableBody>{sources.length ? sources.map((source) => <TableRow key={source.source_id}><TableCell><b>{source.name}</b><div className="max-w-64 truncate text-xs text-zinc-500">{source.source_ref}</div></TableCell><TableCell>{source.source_type}</TableCell><TableCell><Badge variant={['authorized','licensed','campaign_allowed','owned'].includes(source.usage_status) ? 'success' : 'secondary'}>{source.usage_status}</Badge></TableCell><TableCell>{source.status}</TableCell><TableCell>{source.last_checked_at ? new Date(source.last_checked_at).toLocaleString() : 'Nunca'}</TableCell><TableCell><Button variant="outline" disabled={busy} onClick={() => toggle(source)}>{source.enabled ? 'Desativar' : 'Ativar'}</Button></TableCell></TableRow>) : <TableRow><TableCell colSpan={6} className="py-10 text-center text-zinc-500">Nenhuma fonte cadastrada.</TableCell></TableRow>}</TableBody></Table></div>;
@@ -424,6 +473,25 @@ function inferSourceType(url: string) {
   if (value.includes('/live')) return 'youtube_live';
   if (value.includes('youtube.com/@') || value.includes('youtube.com/channel/') || value.includes('youtube.com/c/')) return 'youtube_channel';
   return 'direct_video';
+}
+
+function parseBulkLinks(raw: string): { valid: string[]; invalid: number } {
+  const tokens = raw.split(/[\s,;]+/).map((item) => item.trim()).filter(Boolean);
+  const valid: string[] = [];
+  let invalid = 0;
+  for (const token of tokens) {
+    let url: URL | null = null;
+    try { url = new URL(token); } catch { url = null; }
+    if (url && (url.protocol === 'http:' || url.protocol === 'https:')) {
+      // Remove parâmetros de rastreamento comuns; preserva os que identificam o vídeo/lista.
+      ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'feature', 'si'].forEach((p) => url!.searchParams.delete(p));
+      const normalized = url.toString();
+      if (!valid.includes(normalized)) valid.push(normalized);
+    } else {
+      invalid += 1;
+    }
+  }
+  return { valid, invalid };
 }
 
 function toLocalInput(value: string) {

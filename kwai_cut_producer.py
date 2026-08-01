@@ -17,6 +17,20 @@ from kwai_real_pipeline import KwaiRealPipeline
 PROFILE = "kwai_cut_futebol"
 LOGGER = logging.getLogger("botlive.kwai_cut_producer")
 ALLOWED = ("owned", "approved", "authorized", "licensed", "campaign_allowed")
+
+
+def authorization_active(row: dict) -> bool:
+    """Fonte só é elegível enquanto a autorização não vencer."""
+    expires = row.get("authorization_expires_at")
+    if not expires:
+        return True
+    try:
+        deadline = datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return deadline > datetime.now(timezone.utc)
 MEMORY_LIMIT_RATIO = float(os.getenv("KWAI_MEMORY_LIMIT_RATIO", "0.80"))
 DAILY_TARGET = min(100, max(1, int(os.getenv("KWAI_DAILY_TARGET", "30"))))
 DAILY_MAXIMUM = min(100, max(DAILY_TARGET, int(os.getenv("KWAI_DAILY_MAXIMUM", "100"))))
@@ -79,11 +93,11 @@ class KwaiCutProducer:
         if os.getenv("KWAI_API_ENABLED", "0") != "0":
             raise RuntimeError("KWAI_API_ENABLED must remain 0")
         metrics = self.client.table("kwai_cut_daily_metrics").select("*").eq("profile_id", PROFILE).single().execute().data
-        sources = (self.client.table("football_sources").select("source_ref,usage_status")
+        sources = (self.client.table("football_sources").select("source_ref,usage_status,authorization_expires_at")
                    .eq("profile_id", PROFILE).eq("enabled", True).in_("usage_status", ALLOWED).execute().data or [])
         # A fonte é elegível pela licença registrada, não pelo domínio. Deduplicação
         # de trecho/roteiro/variante continua sendo responsabilidade do planner.
-        current_sources = sources
+        current_sources = [row for row in sources if authorization_active(row)]
         target = min(DAILY_MAXIMUM, max(1, int(metrics.get("daily_target") or DAILY_TARGET)))
         approved = int(metrics.get("approved") or 0)
         deficit = max(0, target - approved)
@@ -109,6 +123,7 @@ class KwaiCutProducer:
         rows = (self.client.table("football_sources").select("*")
                 .eq("profile_id", PROFILE).eq("enabled", True)
                 .in_("usage_status", ALLOWED).execute().data or [])
+        rows = [row for row in rows if authorization_active(row)]
         sources = tuple(FootballSource(
             source_id=str(row["source_id"]), name=str(row["name"]),
             source_type=str(row["source_type"]), source_ref=str(row["source_ref"]),
