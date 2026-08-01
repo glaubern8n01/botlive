@@ -220,6 +220,26 @@ def _registrar_e_renderizar(
                     f"[publisher][falha] corte {corte_id}: {publish_exc}; "
                     "horizontal preservado, pipeline segue."
                 )
+            # Ponte GTA -> rascunho TikTok: usa o MESMO master vertical já gerado
+            # (não baixa do YouTube/Instagram) e enfileira SOMENTE o destino TikTok.
+            # Opt-in por GTA_TIKTOK_AUTO_DRAFT_ENABLED; falha aqui nunca afeta
+            # YouTube, Instagram nem o pipeline; nunca cria job desses destinos.
+            try:
+                from gta_tiktok_bridge import GtaTikTokBridge, bridge_enabled
+
+                if bridge_enabled():
+                    from database import _get_client
+
+                    vertical = output_path.with_name(f"{output_path.stem}_vertical.mp4")
+                    outcome = GtaTikTokBridge(_get_client()).bridge(
+                        vertical, title=getattr(publish_config, "nicho", None)
+                    )
+                    print(f"[gta-tiktok-bridge] corte {corte_id}: {outcome.get('status')} {outcome.get('reason', '')}")
+            except Exception as bridge_exc:
+                print(
+                    f"[gta-tiktok-bridge][falha] corte {corte_id}: {bridge_exc}; "
+                    "YouTube/Instagram intactos, pipeline segue."
+                )
         return CorteResultado(
             corte_id=corte_id,
             output_path=output_path,
