@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 import time
@@ -12,15 +13,9 @@ from typing import Optional
 from caption_ai import gerar_legenda
 from clipper import validar_video_final
 from transcriber import transcrever_fala
-from vertical_meme import MemeTextConfig, credito_canal_para_nicho, renderizar_vertical_meme
+from vertical_meme import MemeTextConfig, renderizar_vertical_meme
 
 
-# Orquestrador de publicacao, sempre POS-corte: recebe um corte horizontal ja
-# pronto e validado e gera a versao vertical legendada + publish.json. Se
-# qualquer etapa falhar, o horizontal ja esta salvo e nada se perde.
-
-# Preco por 1M tokens (entrada, saida) dos modelos conhecidos, para registrar
-# o custo real no publish.json. Modelo fora da tabela -> custo_usd = None.
 PRECOS_USD_POR_MTOKEN = {
     "claude-haiku-4-5": (1.0, 5.0),
 }
@@ -28,12 +23,6 @@ PRECOS_USD_POR_MTOKEN = {
 
 @dataclass(frozen=True)
 class PublishConfig:
-    """Configuracao da publicacao vertical vinda do CLI (--publish-vertical).
-
-    social carrega um SocialConfig (social_publisher) quando o auto-post nas
-    redes esta ligado (--post-youtube); None = sem auto-post, como hoje.
-    """
-
     enabled: bool = False
     nicho: Optional[str] = None
     credito_streamer: Optional[str] = None
@@ -48,6 +37,37 @@ def _custo_usd(model: Optional[str], tokens_in: int, tokens_out: int) -> Optiona
     return round(tokens_in / 1e6 * preco_in + tokens_out / 1e6 * preco_out, 6)
 
 
+def _limpar_texto(texto: str) -> str:
+    texto = re.sub(r"\s+", " ", texto or "").strip()
+    texto = texto.strip('"').strip("'").strip()
+    return texto
+
+
+def gerar_subtitulo(transcricao: str, titulo: str, nicho: Optional[str]) -> str:
+    """Cria o texto inferior sem usar nome de canal ou crédito.
+
+    Prioriza uma frase curta da fala. Quando não há fala aproveitável, usa um
+    complemento neutro do nicho. O subtítulo nunca repete exatamente o título.
+    """
+    fala = _limpar_texto(transcricao)
+    if fala:
+        # Pega a primeira frase útil; evita blocos enormes da transcrição.
+        partes = [p.strip() for p in re.split(r"[.!?]+", fala) if p.strip()]
+        candidato = max(partes[:4], key=len, default=fala)
+        palavras = candidato.split()
+        if len(palavras) > 15:
+            candidato = " ".join(palavras[:15]) + "..."
+        candidato = candidato.upper()
+        if candidato and candidato != (titulo or "").strip().upper():
+            return candidato[:110]
+
+    if nicho == "football":
+        return "O LANCE QUE MUDOU TUDO"
+    if nicho == "gta":
+        return "NINGUÉM ESPERAVA POR ISSO"
+    return "VEJA O QUE ACONTECEU"
+
+
 def publicar_corte(
     corte_path: str | Path,
     nicho: Optional[str] = None,
@@ -56,12 +76,7 @@ def publicar_corte(
     saida_dir: Optional[str | Path] = None,
     social_config: Optional[object] = None,
 ) -> dict:
-    """Gera vertical legendado + publish.json para um corte horizontal pronto.
-
-    Nunca levanta excecao: erros de transcricao/IA caem em fallback e erro no
-    render vertical fica registrado no json (o horizontal permanece intacto).
-    Retorna o registro salvo no publish.json.
-    """
+    """Gera o vertical Shorts/Reels/TikTok + publish.json e publica nas redes."""
     started = time.monotonic()
     corte_path = Path(corte_path)
     target_dir = Path(saida_dir) if saida_dir else corte_path.parent
@@ -72,18 +87,15 @@ def publicar_corte(
         horizontal_path = target_dir / corte_path.name
         shutil.copy2(corte_path, horizontal_path)
 
-    # 1. Fala -> texto (local, gratis). Sem fala/erro -> texto vazio, segue.
     t0 = time.monotonic()
     transcricao = transcrever_fala(corte_path)
     tempo_transcricao = time.monotonic() - t0
 
-    # 2. Texto -> legenda clickbait (unico custo). Sem chave/erro -> fallback.
     t0 = time.monotonic()
     legenda = gerar_legenda(transcricao.text, nicho=nicho, streamer=credito_streamer)
     tempo_ia = time.monotonic() - t0
+    subtitulo = gerar_subtitulo(transcricao.text, legenda.legenda, nicho)
 
-    # 3. Corte + legenda -> vertical 9:16. Falha aqui NAO perde o corte.
-    canal = credito_canal_para_nicho(nicho, credito_canal)
     vertical_path: Optional[Path] = target_dir / f"{corte_path.stem}_vertical.mp4"
     vertical_erro: Optional[str] = None
     t0 = time.monotonic()
@@ -92,14 +104,13 @@ def publicar_corte(
             corte_path,
             vertical_path,
             MemeTextConfig(
-                legenda=legenda.legenda,
-                credito_streamer=credito_streamer,
-                canal_proprio=canal,
+                title=legenda.legenda,
+                subtitle=subtitulo,
             ),
         )
         validation = validar_video_final(vertical_path, require_audio=False)
         if not validation.valid:
-            raise RuntimeError(f"vertical invalido: {validation.reason}")
+            raise RuntimeError(f"vertical inválido: {validation.reason}")
     except Exception as exc:
         vertical_erro = str(exc)
         if vertical_path is not None:
@@ -112,17 +123,28 @@ def publicar_corte(
         "horizontal": str(horizontal_path),
         "vertical": str(vertical_path) if vertical_path else None,
         "vertical_erro": vertical_erro,
+        "layout_vertical": "shorts_social_square",
         "nicho": nicho,
+        # Mantidos como metadados para legenda do post, mas não são desenhados.
         "credito_streamer": credito_streamer,
-        "credito_canal": canal,
+        "credito_canal": credito_canal,
         "legenda": legenda.legenda,
+        "titulo": legenda.legenda,
+        "subtitulo": subtitulo,
         "hashtags": list(legenda.hashtags),
         "legenda_fonte": legenda.source,
         "legenda_fraca": legenda.weak,
         "legenda_modelo": legenda.model,
         "legenda_erro": legenda.error,
-        "tokens": {"entrada": legenda.prompt_tokens, "saida": legenda.completion_tokens},
-        "custo_usd": _custo_usd(legenda.model, legenda.prompt_tokens, legenda.completion_tokens),
+        "tokens": {
+            "entrada": legenda.prompt_tokens,
+            "saida": legenda.completion_tokens,
+        },
+        "custo_usd": _custo_usd(
+            legenda.model,
+            legenda.prompt_tokens,
+            legenda.completion_tokens,
+        ),
         "transcricao": transcricao.text,
         "transcricao_erro": transcricao.error,
         "tempos_s": {
@@ -135,18 +157,17 @@ def publicar_corte(
     }
 
     json_path = target_dir / f"{corte_path.stem}_publish.json"
-    json_path.write_text(json.dumps(registro, ensure_ascii=False, indent=4), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(registro, ensure_ascii=False, indent=4),
+        encoding="utf-8",
+    )
 
     status = "ok" if vertical_erro is None else f"vertical_erro={vertical_erro}"
     print(
-        f"[publisher] {corte_path.name} | legenda={legenda.legenda!r} "
-        f"fonte={legenda.source} fraca={legenda.weak} | {status} | "
-        f"tempos={registro['tempos_s']}"
+        f"[publisher] {corte_path.name} | título={legenda.legenda!r} "
+        f"subtítulo={subtitulo!r} | {status} | tempos={registro['tempos_s']}"
     )
 
-    # Auto-post nas redes: sempre depois do json salvo e opt-in (--post-youtube).
-    # postar_redes nunca levanta excecao, mas o try garante que nem um bug do
-    # modulo social derruba a publicacao (json e videos ja estao no disco).
     if social_config is not None and getattr(social_config, "enabled", False):
         try:
             from social_publisher import postar_redes
@@ -178,37 +199,39 @@ if __name__ == "__main__":
             _stream.reconfigure(errors="replace")
 
     parser = argparse.ArgumentParser(
-        description="Gera versao vertical legendada + publish.json para cortes ja prontos."
+        description="Gera vertical grande com título/subtítulo + publish.json."
     )
-    parser.add_argument("entrada", help="Arquivo de corte ou pasta com corte_*.mp4.")
+    parser.add_argument("entrada")
     parser.add_argument("--nicho", choices=["football", "gta"], default=None)
-    parser.add_argument("--credito", default=None, help="@ do streamer na tarja de baixo.")
+    parser.add_argument("--credito", default=None)
+    parser.add_argument("--credito-canal", default=None)
+    parser.add_argument("--saida", default=None)
+    parser.add_argument("--post-youtube", action="store_true")
+    parser.add_argument("--post-instagram", action="store_true")
+    parser.add_argument("--post-tiktok", action="store_true")
+    parser.add_argument("--post-dry-run", action="store_true")
     parser.add_argument(
-        "--credito-canal",
-        default=None,
-        help="Canal proprio abaixo do credito. Sem esse valor, usa o default do --nicho.",
+        "--post-visibilidade",
+        choices=["private", "unlisted", "public"],
+        default="unlisted",
     )
-    parser.add_argument("--saida", default=None, help="Pasta de saida. Padrao: mesma pasta do corte.")
-    parser.add_argument(
-        "--post-youtube",
-        action="store_true",
-        help="OPT-IN: apos gerar o publish.json, posta horizontal + vertical no YouTube.",
-    )
-    parser.add_argument(
-        "--post-dry-run",
-        action="store_true",
-        help="Simula o auto-post: grava o bloco 'postagens' no json sem subir nada.",
-    )
-    parser.add_argument("--post-visibilidade", choices=["private", "unlisted", "public"], default="unlisted")
-    parser.add_argument("--post-conta", default="principal", help="Conta autorizada (token em .tokens/).")
+    parser.add_argument("--post-conta", default="principal")
     args = parser.parse_args()
 
-    social_config = None
+    redes: list[str] = []
     if args.post_youtube:
+        redes.append("youtube")
+    if args.post_instagram:
+        redes.append("instagram")
+    if args.post_tiktok:
+        redes.append("tiktok")
+
+    social_config = None
+    if redes:
         from social_publisher import SocialConfig
 
         social_config = SocialConfig(
-            redes=("youtube",),
+            redes=tuple(redes),
             dry_run=args.post_dry_run,
             visibilidade=args.post_visibilidade,
             conta=args.post_conta,
