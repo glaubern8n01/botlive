@@ -12,20 +12,12 @@ from typing import Optional
 
 # Nucleo generico de auto-post nas redes sociais. Roda sempre DEPOIS da
 # publicacao (publish.json ja gravado) e e opt-in por flag (--post-youtube).
-# Cada rede e um plugin em seu proprio modulo, importado de forma lazy: quem
-# nao liga a flag nao precisa nem ter as dependencias da rede instaladas.
-#
-# Contrato do plugin (modulo Python):
-#   postar_corte_registro(registro: dict, config: SocialConfig) -> dict
-# O dict retornado vira o bloco registro["postagens"][rede] no publish.json.
-# O plugin NUNCA deve derrubar o pipeline: erro interno por destino fica no
-# proprio bloco; excecao que escapar e capturada aqui e registrada como erro
-# da rede inteira.
-
+# YouTube e Instagram usam plugins locais. TikTok permanece isolado no worker
+# tiktok-public: depois do sucesso do Reel, apenas criamos um job Supabase em
+# tiktok_standard/upload_draft; nenhuma credencial TikTok entra neste container.
 REDES_DISPONIVEIS = {
     "youtube": "yt_publisher",
-    "instagram": "instagram_publisher",  # Reels a partir do vertical 9:16
-    # futuras: "tiktok": "tiktok_publisher", "facebook": ...
+    "instagram": "instagram_publisher",
 }
 
 VISIBILIDADES = ("private", "unlisted", "public")
@@ -52,6 +44,24 @@ def _carregar_plugin(rede: str):
     return importlib.import_module(module_name)
 
 
+def _enfileirar_tiktok_apos_instagram(registro: dict, config: SocialConfig) -> dict:
+    """Restaura o fluxo antigo: Reel aceito -> fila do servico tiktok-public."""
+    if config.dry_run:
+        return {"tipo": "fila_tiktok_public", "dry_run": True, "erro": None}
+    try:
+        from legacy_tiktok_bridge import enfileirar_rascunho_tiktok
+
+        resultado = enfileirar_rascunho_tiktok(registro)
+        print(
+            "[social] Instagram concluido; job tiktok_standard/upload_draft "
+            f"enfileirado para tiktok-public: {resultado.get('job_id')}"
+        )
+        return resultado
+    except Exception as exc:
+        print(f"[social][tiktok][falha] Reel publicado, mas fila TikTok falhou: {exc}")
+        return {"tipo": "fila_tiktok_public", "erro": str(exc), "dry_run": False}
+
+
 def postar_redes(
     registro: dict,
     config: SocialConfig,
@@ -60,17 +70,23 @@ def postar_redes(
     """Posta o corte nas redes configuradas e grava o resultado no publish.json.
 
     Nunca levanta excecao: qualquer falha vira {"erro": ...} no bloco da rede
-    e o pipeline segue. Idempotente por rede: bloco existente sem erro (post
-    ja feito ou ja simulado) nao e refeito.
+    e o pipeline segue. Depois de um Instagram real bem-sucedido, cria de forma
+    idempotente o job que o container tiktok-public transforma em notificacao
+    editavel no aplicativo TikTok.
     """
     postagens = registro.get("postagens") or {}
     for rede in config.redes:
         anterior = postagens.get(rede)
-        # Idempotente so para post REAL bem-sucedido; bloco de dry-run ou com
-        # erro e substituido na proxima tentativa.
         if anterior and not anterior.get("erro") and not anterior.get("dry_run"):
             print(f"[social] {rede}: ja postado antes, pulando (idempotente).")
+            # Um Reel antigo pode ter sido publicado antes da ponte ser restaurada.
+            # Nesse caso ainda tentamos criar o job TikTok ausente.
+            if rede == "instagram":
+                tiktok = postagens.get("tiktok") or {}
+                if not tiktok or tiktok.get("erro"):
+                    postagens["tiktok"] = _enfileirar_tiktok_apos_instagram(registro, config)
             continue
+
         t0 = time.monotonic()
         try:
             plugin = _carregar_plugin(rede)
@@ -84,11 +100,26 @@ def postar_redes(
         resultado["tempo_s"] = round(time.monotonic() - t0, 1)
         resultado["registrado_em"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         postagens[rede] = resultado
+        registro["postagens"] = postagens
         modo = "dry-run" if config.dry_run else "real"
         status = "ok" if resultado.get("erro") is None else f"erro={resultado['erro']}"
         print(f"[social] rede={rede} modo={modo} conta={config.conta} | {status}")
-    registro["postagens"] = postagens
 
+        if rede == "instagram" and resultado.get("erro") is None:
+            postagens["tiktok"] = _enfileirar_tiktok_apos_instagram(registro, config)
+            registro["postagens"] = postagens
+
+        # Persiste apos cada destino, para o erro da ponte ficar visivel e poder
+        # ser retentado no ciclo seguinte sem repetir um Reel ja publicado.
+        if json_path is not None:
+            try:
+                Path(json_path).write_text(
+                    json.dumps(registro, ensure_ascii=False, indent=4), encoding="utf-8"
+                )
+            except Exception as exc:
+                print(f"[social][falha] nao gravou postagens em {json_path}: {exc}")
+
+    registro["postagens"] = postagens
     if json_path is not None:
         try:
             Path(json_path).write_text(
