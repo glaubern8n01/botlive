@@ -17,7 +17,9 @@ from typing import Optional
 # tiktok_standard/upload_draft; nenhuma credencial TikTok entra neste container.
 REDES_DISPONIVEIS = {
     "youtube": "yt_publisher",
-    "instagram": "instagram_publisher",
+    # Normaliza H.264/AAC/yuv420p/faststart antes do rupload para evitar
+    # ProcessingFailedError da Meta em MP4 gerado por fontes variadas.
+    "instagram": "instagram_safe_publisher",
 }
 
 VISIBILIDADES = ("private", "unlisted", "public")
