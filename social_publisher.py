@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -10,22 +11,13 @@ from pathlib import Path
 from typing import Optional
 
 
-# Nucleo generico de auto-post nas redes sociais. Roda sempre DEPOIS da
-# publicacao (publish.json ja gravado) e e opt-in por flag (--post-youtube).
-# Cada rede e um plugin em seu proprio modulo, importado de forma lazy: quem
-# nao liga a flag nao precisa nem ter as dependencias da rede instaladas.
-#
-# Contrato do plugin (modulo Python):
-#   postar_corte_registro(registro: dict, config: SocialConfig) -> dict
-# O dict retornado vira o bloco registro["postagens"][rede] no publish.json.
-# O plugin NUNCA deve derrubar o pipeline: erro interno por destino fica no
-# proprio bloco; excecao que escapar e capturada aqui e registrada como erro
-# da rede inteira.
-
+# Núcleo genérico de auto-post. Cada rede é um plugin importado sob demanda.
+# O TikTok usa Upload to TikTok: envia para a caixa de entrada como rascunho,
+# nunca publica diretamente no perfil.
 REDES_DISPONIVEIS = {
     "youtube": "yt_publisher",
-    "instagram": "instagram_publisher",  # Reels a partir do vertical 9:16
-    # futuras: "tiktok": "tiktok_publisher", "facebook": ...
+    "instagram": "instagram_publisher",
+    "tiktok": "tiktok_publisher",
 }
 
 VISIBILIDADES = ("private", "unlisted", "public")
@@ -33,8 +25,6 @@ VISIBILIDADES = ("private", "unlisted", "public")
 
 @dataclass(frozen=True)
 class SocialConfig:
-    """Config do auto-post vinda do CLI. redes vazio = auto-post desligado."""
-
     redes: tuple[str, ...] = ()
     dry_run: bool = False
     visibilidade: str = "unlisted"
@@ -48,8 +38,25 @@ class SocialConfig:
 def _carregar_plugin(rede: str):
     module_name = REDES_DISPONIVEIS.get(rede)
     if not module_name:
-        raise ValueError(f"rede desconhecida: {rede!r} (disponiveis: {sorted(REDES_DISPONIVEIS)})")
+        raise ValueError(
+            f"rede desconhecida: {rede!r} (disponíveis: {sorted(REDES_DISPONIVEIS)})"
+        )
     return importlib.import_module(module_name)
+
+
+def _tiktok_depois_do_instagram() -> bool:
+    """Liga o encadeamento Reels -> rascunho TikTok.
+
+    Padrão ligado para restaurar o fluxo pedido. Pode ser desligado com
+    BOTLIVE_TIKTOK_AFTER_INSTAGRAM=0. Sem token, a falha fica registrada no
+    publish.json e não derruba o Reel nem o restante do pipeline.
+    """
+    return os.environ.get("BOTLIVE_TIKTOK_AFTER_INSTAGRAM", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
 
 def postar_redes(
@@ -57,20 +64,32 @@ def postar_redes(
     config: SocialConfig,
     json_path: Optional[str | Path] = None,
 ) -> dict:
-    """Posta o corte nas redes configuradas e grava o resultado no publish.json.
+    """Posta nas redes e persiste cada resultado no publish.json.
 
-    Nunca levanta excecao: qualquer falha vira {"erro": ...} no bloco da rede
-    e o pipeline segue. Idempotente por rede: bloco existente sem erro (post
-    ja feito ou ja simulado) nao e refeito.
+    Quando Instagram termina com sucesso, adiciona TikTok à fila e envia o
+    mesmo MP4 vertical para a caixa de entrada como rascunho. O encadeamento é
+    idempotente e não baixa o Reel: reutiliza o arquivo original sem marca-d'água.
     """
     postagens = registro.get("postagens") or {}
-    for rede in config.redes:
+    fila = list(dict.fromkeys(config.redes))
+    indice = 0
+
+    while indice < len(fila):
+        rede = fila[indice]
+        indice += 1
         anterior = postagens.get(rede)
-        # Idempotente so para post REAL bem-sucedido; bloco de dry-run ou com
-        # erro e substituido na proxima tentativa.
+        # Idempotente apenas para ação real bem-sucedida. Dry-run e erro podem
+        # ser substituídos numa tentativa futura.
         if anterior and not anterior.get("erro") and not anterior.get("dry_run"):
-            print(f"[social] {rede}: ja postado antes, pulando (idempotente).")
+            print(f"[social] {rede}: já concluído antes, pulando (idempotente).")
+            if (
+                rede == "instagram"
+                and _tiktok_depois_do_instagram()
+                and "tiktok" not in fila
+            ):
+                fila.append("tiktok")
             continue
+
         t0 = time.monotonic()
         try:
             plugin = _carregar_plugin(rede)
@@ -78,29 +97,46 @@ def postar_redes(
         except Exception as exc:
             resultado = {"erro": str(exc), "dry_run": config.dry_run}
             print(f"[social][falha] rede={rede} motivo={exc}; pipeline segue.")
+
         resultado.setdefault("erro", None)
         resultado["conta"] = config.conta
         resultado["dry_run"] = config.dry_run
         resultado["tempo_s"] = round(time.monotonic() - t0, 1)
-        resultado["registrado_em"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        resultado["registrado_em"] = datetime.now(timezone.utc).isoformat(
+            timespec="seconds"
+        )
         postagens[rede] = resultado
+
         modo = "dry-run" if config.dry_run else "real"
         status = "ok" if resultado.get("erro") is None else f"erro={resultado['erro']}"
         print(f"[social] rede={rede} modo={modo} conta={config.conta} | {status}")
-    registro["postagens"] = postagens
 
-    if json_path is not None:
-        try:
-            Path(json_path).write_text(
-                json.dumps(registro, ensure_ascii=False, indent=4), encoding="utf-8"
-            )
-        except Exception as exc:
-            print(f"[social][falha] nao gravou postagens em {json_path}: {exc}")
+        # Só encadeia após Reel realmente aceito. Erro no TikTok nunca desfaz o
+        # Instagram e fica visível no publish.json para nova tentativa.
+        if (
+            rede == "instagram"
+            and resultado.get("erro") is None
+            and _tiktok_depois_do_instagram()
+            and "tiktok" not in fila
+        ):
+            fila.append("tiktok")
+            print("[social] Instagram concluído; enviando o mesmo vertical ao TikTok como rascunho.")
+
+        if json_path is not None:
+            try:
+                registro["postagens"] = postagens
+                Path(json_path).write_text(
+                    json.dumps(registro, ensure_ascii=False, indent=4),
+                    encoding="utf-8",
+                )
+            except Exception as exc:
+                print(f"[social][falha] não gravou postagens em {json_path}: {exc}")
+
+    registro["postagens"] = postagens
     return postagens
 
 
 def postar_de_publish_json(json_path: str | Path, config: SocialConfig) -> dict:
-    """Auto-post a partir de um publish.json ja existente (uso standalone)."""
     json_path = Path(json_path)
     registro = json.loads(json_path.read_text(encoding="utf-8"))
     return postar_redes(registro, config, json_path=json_path)
@@ -123,19 +159,23 @@ if __name__ == "__main__":
             _stream.reconfigure(errors="replace")
 
     parser = argparse.ArgumentParser(
-        description="Auto-post nas redes a partir de publish.json ja gerados."
+        description="Publica a partir de publish.json; TikTok é enviado como rascunho."
     )
-    parser.add_argument("entrada", help="Um *_publish.json ou pasta com varios.")
+    parser.add_argument("entrada", help="Um *_publish.json ou pasta com vários.")
     parser.add_argument(
         "--rede",
         action="append",
         choices=sorted(REDES_DISPONIVEIS),
         required=True,
-        help="Rede de destino; repita a flag para mais de uma.",
+        help="Rede de destino; repita para mais de uma.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Simula: monta o post e grava no json, sem subir nada.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Simula e grava o resultado sem subir nada.",
+    )
     parser.add_argument("--visibilidade", choices=VISIBILIDADES, default="unlisted")
-    parser.add_argument("--conta", default="principal", help="Nome da conta autorizada (token em .tokens/).")
+    parser.add_argument("--conta", default="principal")
     args = parser.parse_args()
 
     config = SocialConfig(
