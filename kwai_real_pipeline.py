@@ -138,9 +138,12 @@ class KwaiRealPipeline:
         run_dir.mkdir(parents=True, exist_ok=True)
         token = re.sub(r"[^a-zA-Z0-9]+", "-", discovered_id)[:16]
         self._update(discovered_id, status="rendering")
+        # "original" mantém o corte 16:9; o renderizar_vertical_meme faz o
+        # crop-to-fill 9:16 (tela toda) + banners. (vertical-fit letterboxava e
+        # deixava o vídeo pequeno.)
         raw = criar_corte_vertical_de_arquivo(
             source, candidate.timestamp_seconds, f"kwai-real-{token}",
-            seconds_before=12, seconds_after=23, output_layout="vertical-fit",
+            seconds_before=12, seconds_after=23, output_layout="original",
         )
         title, description, hashtags = action_metadata(str(row.get("title") or ""))
         final = run_dir / f"kwai-real-{token}-aprovado.mp4"
