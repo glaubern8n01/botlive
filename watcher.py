@@ -20,6 +20,7 @@ Escopo implementado (V3 + V4 + V5):
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -164,6 +165,10 @@ class Vigia:
         self.api = TwitchHelix()
         self._running_vod_jobs: dict[str, tuple[subprocess.Popen, Path, str]] = {}
         self._running_live_jobs: dict[str, tuple[subprocess.Popen, Path, str]] = {}
+        # Início (monotonic) de cada job, para timeout: um render travado (ex.:
+        # ffmpeg preso no disco cheio) não pode segurar a vaga para sempre.
+        self._job_started: dict[str, float] = {}
+        self._render_timeout = max(300, int(os.getenv("VIGIA_RENDER_TIMEOUT_SECONDS", "1800")))
         self._terminated_by_grace: set[str] = set()
         self._last_config: Optional[VigiaConfig] = None
         self._miss_counts: dict[str, int] = {}
@@ -580,6 +585,7 @@ class Vigia:
         )
         log_file.close()
         self._running_live_jobs[stream_id] = (process, log_path, session_id)
+        self._job_started[stream_id] = time.monotonic()
         if post:
             self._job_reserva[session_id] = ("uploads_done_live", uploads_expected)
         self._ledger_update(
@@ -693,6 +699,7 @@ class Vigia:
         )
         log_file.close()  # Popen herdou o handle; o nosso pode fechar
         self._running_vod_jobs[stream_id] = (process, log_path, session_id)
+        self._job_started[stream_id] = time.monotonic()
         if post:
             self._job_reserva[session_id] = ("uploads_done", uploads_expected)
         self._ledger_update(stream_id, {"vod_job_status": "running", "vod_url": vod_url})
@@ -801,9 +808,26 @@ class Vigia:
     ) -> None:
         for stream_id in list(running):
             process, log_path, session_id = running[stream_id]
-            if process.poll() is None:
+            started = self._job_started.get(stream_id)
+            timed_out = (
+                process.poll() is None and started is not None
+                and (time.monotonic() - started) > self._render_timeout
+            )
+            if timed_out:
+                # Render travado (ex.: ffmpeg preso): finaliza o processo, marca
+                # failed abaixo e libera a vaga — a fila volta a andar sozinha,
+                # sem precisar reiniciar o container.
+                print(f"[vigia] {label} job {stream_id} estourou o timeout "
+                      f"({self._render_timeout}s); finalizando o processo travado e liberando a vaga.")
+                try:
+                    process.kill()
+                    process.wait(timeout=15)
+                except Exception:
+                    pass
+            elif process.poll() is None:
                 continue
             del running[stream_id]
+            self._job_started.pop(stream_id, None)
             # Job saiu de voo: libera a reserva de orcamento (o ledger passa a
             # contar os uploads reais deste job logo abaixo).
             self._job_reserva.pop(session_id, None)
