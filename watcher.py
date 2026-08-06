@@ -759,8 +759,15 @@ class Vigia:
                     continue
                 postagens = registro.get("postagens") or {}
                 instagram = postagens.get("instagram")
-                if instagram and not instagram.get("erro") and not instagram.get("dry_run"):
-                    continue  # Reel ja publicado
+                if instagram and not instagram.get("dry_run"):
+                    if not instagram.get("erro"):
+                        continue  # Reel ja publicado (ou marcado como pulado)
+                    # Erro PERMANENTE do IG (retriable:false / ProcessingFailedError):
+                    # nao pode ser retentado a cada ciclo, senao entope a fila e
+                    # paralisa TODAS as postagens. Marca como pulado e segue.
+                    erro_ig = str(instagram.get("erro") or "")
+                    if instagram.get("pulado") or '"retriable":false' in erro_ig or "ProcessingFailedError" in erro_ig:
+                        continue
                 if not registro.get("vertical"):
                     continue  # sem vertical nao ha Reel
                 youtube = postagens.get("youtube") or {}
