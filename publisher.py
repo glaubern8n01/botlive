@@ -91,10 +91,11 @@ def publicar_corte(
         renderizar_vertical_meme(
             corte_path,
             vertical_path,
+            # Nome do canal/streamer NÃO vai queimado no vídeo (afasta seguidor);
+            # a atribuição fica na DESCRIÇÃO (montar_descricao já inclui "Creditos:").
+            # O vídeo leva só o hook clickbait no topo.
             MemeTextConfig(
                 legenda=legenda.legenda,
-                credito_streamer=credito_streamer,
-                canal_proprio=canal,
             ),
         )
         validation = validar_video_final(vertical_path, require_audio=False)

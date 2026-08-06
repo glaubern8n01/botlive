@@ -59,6 +59,52 @@ def legenda_aleatoria(highlight: Optional[str] = None, seed: Optional[int] = Non
     return rng.choice(pool + LEGENDAS_GENERICAS)
 
 
+# Contexto real extraído do título do vídeo (competição, clássico, craques) para
+# gerar hooks específicos como o Futebol Respira ("MAIOR CLÁSSICO DO BRASIL",
+# "MOMENTO RAIVA NA FINAL DA LIBERTADORES"), em vez de frase genérica.
+_COMPETICOES = {
+    "libertadores": "NA LIBERTADORES", "copa do brasil": "NA COPA DO BRASIL",
+    "champions": "NA CHAMPIONS", "brasileir": "NO BRASILEIRÃO", "copa américa": "NA COPA AMÉRICA",
+    "copa america": "NA COPA AMÉRICA", "conmebol": "NA CONMEBOL", "mundial": "NO MUNDIAL",
+    "copa do mundo": "NA COPA DO MUNDO", "premier": "NA PREMIER LEAGUE", "la liga": "NA LA LIGA",
+    "sul-americana": "NA SUL-AMERICANA", "sudamericana": "NA SUL-AMERICANA", "paulista": "NO PAULISTÃO",
+    "carioca": "NO CARIOCA", "final": "NA FINAL",
+}
+_CRAQUES = ("neymar", "messi", "cristiano", "ronaldo", "romário", "romario", "ronaldinho",
+            "maradona", "pelé", "pele", "raphinha", "vini", "vinícius", "vinicius", "endrick",
+            "haaland", "mbappé", "mbappe", "suárez", "suarez", "gabigol", "hulk", "arrascaeta")
+_CLASSICOS = ("clássico", "classico", "derby", "dérbi")
+
+
+def contexto_do_titulo(titulo: Optional[str]) -> dict:
+    """Extrai competição, craque e se é clássico do título real (minúsculo)."""
+    t = " ".join((titulo or "").split()).lower()
+    comp = next((rotulo for termo, rotulo in _COMPETICOES.items() if termo in t), None)
+    craque = next((c for c in _CRAQUES if c in t), None)
+    classico = any(m in t for m in _CLASSICOS)
+    return {"competicao": comp, "craque": craque, "classico": classico, "cru": t}
+
+
+def legenda_contextual(titulo_real: Optional[str], highlight: Optional[str] = None,
+                       seed: Optional[int] = None) -> str:
+    """Hook de topo específico do vídeo quando o título dá contexto real; senão
+    cai no pool variado por tipo de lance."""
+    rng = _random.Random(seed)
+    ctx = contexto_do_titulo(titulo_real)
+    opcoes: list[str] = []
+    if ctx["craque"]:
+        nome = ctx["craque"].upper()
+        opcoes += [f"OLHA O QUE {nome} FEZ", f"{nome} DECIDIU O JOGO", f"CRAQUE É CRAQUE: {nome}"]
+    if ctx["competicao"]:
+        opcoes += [f"MOMENTO QUENTE {ctx['competicao']}", f"ISSO ACONTECEU {ctx['competicao']}",
+                   f"LANCE PRA HISTÓRIA {ctx['competicao']}"]
+    if ctx["classico"]:
+        opcoes += ["TENSÃO NO CLÁSSICO", "CLÁSSICO PEGA FOGO", "ISSO É CLÁSSICO DE VERDADE"]
+    if opcoes:
+        return rng.choice(opcoes)
+    return legenda_aleatoria(highlight, seed=seed)
+
+
 # Subtexto (linha menor de baixo): fala do vídeo/torcida, nunca @ nem nome de canal.
 SUBTEXTOS_POR_LANCE = {
     "defesa": ["O goleiro fez o impossível", "Salvou o time no último segundo", "A torcida foi à loucura",

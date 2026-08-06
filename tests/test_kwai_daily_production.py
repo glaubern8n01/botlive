@@ -33,7 +33,12 @@ def test_volume_migration_preserves_daily_production_and_manual_history() -> Non
 
 def test_dashboard_supports_platform_text_and_optional_external_id() -> None:
     page = Path("dashboard/src/pages/KwaiCut.tsx").read_text(encoding="utf-8")
+    server = Path("dashboard/server.mjs").read_text(encoding="utf-8")
     assert "Copiar legenda + hashtags" in page
     assert "Copiar créditos" in page
-    assert "update_publication_text" in page
-    assert "!externalId.trim()" not in page
+    # As RPCs (texto e publicação manual) foram revogadas do anon; o painel chama
+    # os endpoints do backend, que usam a service key.
+    assert "/api/kwai/update-text" in page and "update_publication_text" in server
+    assert "/api/kwai/mark-published" in page and "mark_manual_publication" in server
+    # A RPC em produção exige a URL/ID do Kwai -> o botão fica travado sem ela.
+    assert "!externalId.trim()" in page
