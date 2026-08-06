@@ -303,12 +303,30 @@ async function kwaiPublishRoute(request, response, url) {
   return json(response, rpc.ok ? 200 : 422, rpc.ok ? { ok: true } : { error: 'Não foi possível registrar a publicação' }), true;
 }
 
+// Salvar/aprovar o texto da publicação. Mesmo motivo: anon revogado da RPC.
+async function kwaiTextRoute(request, response, url) {
+  if (url.pathname !== '/api/kwai/update-text') return false;
+  if (request.method !== 'POST') return json(response, 405, { error: 'Método não permitido' }), true;
+  if (!adminKey) return json(response, 503, { error: 'Backend administrativo não configurado' }), true;
+  const body = await readJsonBody(request);
+  if (!uuidPattern.test(String(body.job_id || ''))) return json(response, 400, { error: 'job_id inválido' }), true;
+  const rpc = await callAdminRpc('update_publication_text', {
+    p_job_id: body.job_id,
+    p_description: String(body.description || ''),
+    p_hashtags: String(body.hashtags || ''),
+    p_credits: String(body.credits || ''),
+    p_caption: String(body.caption || ''),
+  });
+  return json(response, rpc.ok ? 200 : 422, rpc.ok ? { ok: true } : { error: 'Não foi possível salvar o texto' }), true;
+}
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
     if (url.pathname === '/health') return json(response, 200, { ok: true, mode: 'prepare_only' });
     if (await kwaiBulkRoute(request, response, url)) return;
     if (await kwaiPublishRoute(request, response, url)) return;
+    if (await kwaiTextRoute(request, response, url)) return;
     if (await kwaiReviewRoute(request, response, url)) return;
     if (await cleanupRoute(request, response, url)) return;
     if (await mediaRoute(request, response, url)) return;

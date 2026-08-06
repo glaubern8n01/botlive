@@ -424,11 +424,13 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
         <textarea aria-label="Descrição" className="min-h-20 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={description} onChange={(event) => { setDescription(event.target.value); setTextSaved(false); }} disabled={published} />
         <textarea aria-label="Hashtags" className="min-h-16 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={hashtags} onChange={(event) => { setHashtags(event.target.value); setTextSaved(false); }} disabled={published} />
         <textarea aria-label="Créditos" className="min-h-16 w-full rounded-md border border-zinc-700 bg-zinc-950 p-2 text-sm" value={credits} onChange={(event) => { setCredits(event.target.value); setTextSaved(false); }} disabled={published} />
-        <Button type="button" variant="outline" disabled={published || textSaved || !supabase} onClick={async () => {
-          if (!supabase) return;
+        <Button type="button" variant="outline" disabled={published || textSaved} onClick={async () => {
           const finalCaption = composePublicationText(description, credits, hashtags);
-          const result = await supabase.rpc('update_publication_text', { p_job_id: job.job_id, p_description: description, p_hashtags: hashtags, p_credits: credits, p_caption: finalCaption });
-          if (!result.error) setTextSaved(true);
+          const response = await fetch('/api/kwai/update-text', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: job.job_id, description, hashtags, credits, caption: finalCaption }),
+          });
+          if (response.ok) setTextSaved(true);
         }}><Save className="mr-2 h-4 w-4" />{textSaved ? 'Texto aprovado e salvo' : 'Salvar e aprovar texto'}</Button>
       </div>
       {job.metadata?.version === 2 && <div className="rounded-lg border border-zinc-800 p-3 text-xs">
@@ -454,7 +456,7 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
         <div className="space-y-2">
           <Input aria-label="URL ou ID da publicação" placeholder="URL ou ID da publicação" value={externalId} onChange={(event) => setExternalId(event.target.value)} disabled={published} />
           <Input aria-label="Horário da publicação" type="datetime-local" value={publishedAt} onChange={(event) => setPublishedAt(event.target.value)} disabled={published} />
-          <Button className="w-full" disabled={busy || published || !publishedAt} onClick={() => {
+          <Button className="w-full" disabled={busy || published || !publishedAt || !externalId.trim()} onClick={() => {
             if (window.confirm('Confirmar publicação? O vídeo sairá da lista de prontos e ficará no histórico. A mídia será preservada pelo período de retenção.')) {
               void markPublished(job.job_id, job.asset_id, externalId, publishedAt);
             }
