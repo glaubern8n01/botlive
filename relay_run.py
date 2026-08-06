@@ -29,6 +29,14 @@ import uuid
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+# Títulos de futebol vêm com emoji (🔴 live etc.); no console do Windows (cp1252)
+# o print quebra. Força UTF-8 tolerante no stdout/stderr para nunca abortar por isso.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 — streams sem reconfigure (redirecionados) seguem
+        pass
+
 PROFILE = "kwai_cut_futebol"
 VPS_HOST = os.getenv("VPS_HOST", "root@69.62.96.161")
 SSH_KEY = os.path.expanduser(os.getenv("VPS_SSH_KEY", "~/.ssh/id_ed25519"))
@@ -84,8 +92,38 @@ def _ssh(cmd: str, timeout: int = 120) -> subprocess.CompletedProcess:
 
 
 def _scp(local: Path, remote: str) -> bool:
-    r = subprocess.run(["scp", "-o", "BatchMode=yes", "-i", SSH_KEY, str(local), f"{VPS_HOST}:{remote}"],
-                       capture_output=True, text=True, timeout=1800)
+    """Envia o arquivo pra VPS de forma resiliente. Transferências grandes num
+    scp único caem ("Connection reset by peer" — AVG/rede cortam streams longos);
+    por isso quebra em pedaços de 15MB, envia cada um com retry e remonta na VPS.
+    Arquivos pequenos vão em scp direto."""
+    size = local.stat().st_size
+    if size <= 30 * 1024 * 1024:
+        r = subprocess.run(["scp", "-o", "BatchMode=yes", "-i", SSH_KEY, str(local), f"{VPS_HOST}:{remote}"],
+                           capture_output=True, text=True, timeout=1800)
+        return r.returncode == 0
+    chunk = 15 * 1024 * 1024
+    parts = (size + chunk - 1) // chunk
+    _ssh(f"rm -f {remote} {remote}.part_*")
+    with local.open("rb") as fh:
+        for i in range(parts):
+            block = fh.read(chunk)
+            tmp = local.with_name(local.name + f".part_{i:04d}")
+            tmp.write_bytes(block)
+            ok = False
+            for _ in range(4):
+                r = subprocess.run(["scp", "-o", "BatchMode=yes", "-l", "20000", "-i", SSH_KEY,
+                                    str(tmp), f"{VPS_HOST}:{remote}.part_{i:04d}"],
+                                   capture_output=True, text=True, timeout=1800)
+                if r.returncode == 0:
+                    ok = True
+                    break
+                time.sleep(2)
+            tmp.unlink(missing_ok=True)
+            if not ok:
+                _ssh(f"rm -f {remote}.part_*")
+                return False
+    r = _ssh(f"cat {remote}.part_* > {remote} && rm -f {remote}.part_* && "
+             f"test $(stat -c %s {remote}) -eq {size}")
     return r.returncode == 0
 
 
