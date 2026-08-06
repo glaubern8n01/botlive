@@ -50,10 +50,14 @@ def chunk_geometry(video_size: int) -> tuple[int, int]:
     # >64MB: divide em chunks ~iguais, todos entre MIN_CHUNK e MAX_CHUNK. Usar
     # MAX_CHUNK direto deixava o último chunk < 5MB (TikTok recusa com
     # "total chunk count is invalid"); chunks iguais evitam isso.
+    # O TikTok recalcula total_chunk_count = floor(video_size / chunk_size) e o
+    # ÚLTIMO chunk absorve o resto (pode passar de chunk_size). Por isso chunk_size
+    # tem que ser FLOOR (video_size // count), senão o count enviado diverge do
+    # que o TikTok calcula ("total chunk count is invalid").
     count = (video_size + MAX_CHUNK - 1) // MAX_CHUNK
-    chunk_size = (video_size + count - 1) // count
+    chunk_size = video_size // count
     last = video_size - chunk_size * (count - 1)
-    if count > 1000 or chunk_size > MAX_CHUNK or chunk_size < MIN_CHUNK or not (0 < last <= MAX_CHUNK):
+    if count > 1000 or chunk_size > MAX_CHUNK or chunk_size < MIN_CHUNK or last <= 0 or video_size // chunk_size != count:
         raise ValueError("invalid chunk geometry")
     return chunk_size, count
 
@@ -141,7 +145,9 @@ def diagnose_tiktok_upload(path: Path, publication_key: str, no_upload: bool = F
     sent = 0
     with path.open("rb") as handle:
         for index in range(chunk_count):
-            block = handle.read(chunk_size)
+            # último chunk absorve o resto (pode ser > chunk_size), como o TikTok espera
+            to_read = (size - sent) if index == chunk_count - 1 else chunk_size
+            block = handle.read(to_read)
             if not block:
                 raise RuntimeError("unexpected empty media chunk")
             start, end = sent, sent + len(block) - 1
