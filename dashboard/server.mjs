@@ -286,11 +286,29 @@ async function kwaiBulkRoute(request, response, url) {
   return json(response, 200, { ok: true, action, done, failed }), true;
 }
 
+// Registro de publicação manual (o operador postou no app do Kwai e confirma no
+// painel). O anon foi revogado da RPC mark_manual_publication; esta é a porta
+// service-side. Depois o janitor/cleanup remove o arquivo da VPS.
+async function kwaiPublishRoute(request, response, url) {
+  if (url.pathname !== '/api/kwai/mark-published') return false;
+  if (request.method !== 'POST') return json(response, 405, { error: 'Método não permitido' }), true;
+  if (!adminKey) return json(response, 503, { error: 'Backend administrativo não configurado' }), true;
+  const body = await readJsonBody(request);
+  if (!uuidPattern.test(String(body.job_id || ''))) return json(response, 400, { error: 'job_id inválido' }), true;
+  const rpc = await callAdminRpc('mark_manual_publication', {
+    p_job_id: body.job_id,
+    p_external_id: String(body.external_id || '') || null,
+    p_published_at: body.published_at || new Date().toISOString(),
+  });
+  return json(response, rpc.ok ? 200 : 422, rpc.ok ? { ok: true } : { error: 'Não foi possível registrar a publicação' }), true;
+}
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
     if (url.pathname === '/health') return json(response, 200, { ok: true, mode: 'prepare_only' });
     if (await kwaiBulkRoute(request, response, url)) return;
+    if (await kwaiPublishRoute(request, response, url)) return;
     if (await kwaiReviewRoute(request, response, url)) return;
     if (await cleanupRoute(request, response, url)) return;
     if (await mediaRoute(request, response, url)) return;

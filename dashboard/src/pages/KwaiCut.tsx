@@ -167,15 +167,15 @@ export function KwaiCut() {
     setBusy(false);
   };
   const markPublished = async (jobId: string, _assetId: string, externalId: string, publishedAt: string) => {
-    if (!supabase || busy) return false;
+    if (busy) return false;
     setBusy(true); setError(null);
-    const result = await supabase.rpc('mark_manual_publication', {
-      p_job_id: jobId,
-      p_external_id: externalId,
-      p_published_at: new Date(publishedAt).toISOString(),
+    const response = await fetch('/api/kwai/mark-published', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: jobId, external_id: externalId, published_at: new Date(publishedAt).toISOString() }),
     });
-    if (result.error) {
-      setError(result.error.message || 'Não foi possível registrar a publicação manual.');
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      setError(payload.error || 'Não foi possível registrar a publicação manual.');
       setBusy(false);
       return false;
     }
