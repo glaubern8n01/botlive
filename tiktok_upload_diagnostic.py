@@ -47,9 +47,13 @@ def chunk_geometry(video_size: int) -> tuple[int, int]:
         raise ValueError("empty video")
     if video_size <= MAX_CHUNK:
         return video_size, 1
-    chunk_size = MAX_CHUNK
-    count = (video_size + chunk_size - 1) // chunk_size
-    if count > 1000 or video_size - chunk_size * (count - 1) <= 0:
+    # >64MB: divide em chunks ~iguais, todos entre MIN_CHUNK e MAX_CHUNK. Usar
+    # MAX_CHUNK direto deixava o último chunk < 5MB (TikTok recusa com
+    # "total chunk count is invalid"); chunks iguais evitam isso.
+    count = (video_size + MAX_CHUNK - 1) // MAX_CHUNK
+    chunk_size = (video_size + count - 1) // count
+    last = video_size - chunk_size * (count - 1)
+    if count > 1000 or chunk_size > MAX_CHUNK or chunk_size < MIN_CHUNK or not (0 < last <= MAX_CHUNK):
         raise ValueError("invalid chunk geometry")
     return chunk_size, count
 
