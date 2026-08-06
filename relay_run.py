@@ -133,8 +133,12 @@ def download(url: str, dest: Path) -> tuple[bool, str]:
     erro, não contam como fallback separado. Retorna (ok, engine que funcionou)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     # A. yt-dlp — --no-check-certificates cobre o MITM local (AVG).
+    # Resolução limitada por RELAY_MAX_HEIGHT (default 720): o corte é vertical
+    # 1080-largura, então 720p de fonte basta e economiza MUITA banda/tempo/disco
+    # (essencial pra rodar 30-100/dia sem estourar internet).
+    h = max(360, min(1080, int(os.getenv("RELAY_MAX_HEIGHT", "720"))))
     cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates",
-           "-f", "bv*[height<=1080][vcodec^=avc1]+ba[acodec^=mp4a]/b[height<=1080]/best",
+           "-f", f"bv*[height<={h}][vcodec^=avc1]+ba[acodec^=mp4a]/b[height<={h}]/best",
            "--merge-output-format", "mp4", "-o", str(dest), url]
     if subprocess.run(cmd, capture_output=True, text=True, timeout=3600).returncode == 0 and dest.exists():
         return True, "yt-dlp"
@@ -269,7 +273,12 @@ def main() -> None:
             print("[relay] estoque cheio; aguardando."); time.sleep(300); continue
         cands = pending_candidates(url, key, min(args.limit, max(1, args.target - have)))
         if not cands:
-            print("[relay] sem candidatos em review_required."); break
+            # No modo loop (PC/celular sempre ligado), espera novos candidatos que
+            # o produtor descobre com o tempo em vez de encerrar.
+            print("[relay] sem candidatos em review_required.")
+            if not args.loop:
+                break
+            time.sleep(300); continue
         for c in cands:
             print(f"[relay] {done+1}: {c['source_url']}")
             r = process_one(url, key, c)
