@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -351,7 +352,10 @@ def renderizar_vertical_meme(
     try:
         src_w, src_h = source.size
         has_audio = source.audio is not None
-        fps = int(min(float(getattr(source, "fps", 30) or 30), 60)) or 30
+        # Cap em 30fps: o Instagram Reels via API (rupload) rejeita 60fps com
+        # ProcessingFailedError. 30fps é universalmente aceito (YouTube/IG/TikTok/Kwai).
+        _fps_max = float(os.getenv("VERTICAL_MAX_FPS", "30"))
+        fps = int(min(float(getattr(source, "fps", 30) or 30), _fps_max)) or 30
     finally:
         source.close()
 
