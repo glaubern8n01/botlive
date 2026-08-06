@@ -256,28 +256,28 @@ def _desenhar_banner(draw, lines, font, line_height, center_y) -> None:
         y += line_height
 
 
-def gerar_texto_overlay(texts: MemeTextConfig) -> Image.Image:
+def gerar_texto_overlay(texts: MemeTextConfig, top_center: int = 150, bottom_center: int = 1785) -> Image.Image:
     """Overlay 1080x1920 TRANSPARENTE no estilo Futebol Respira/GTA: banner branco
-    com texto preto SOBRE o vídeo (que ocupa a tela toda). Topo = hook viral GRANDE;
-    rodapé = subtexto MENOR. Sem @ nem nome de canal. Posições fixas (área segura)."""
+    com texto preto nas BANDAS PRETAS acima/abaixo do vídeo. Topo = hook viral
+    GRANDE; rodapé = subtexto MENOR. Sem @ nem nome de canal."""
     image = Image.new("RGBA", (CANVAS_WIDTH, CANVAS_HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     max_text_width = CANVAS_WIDTH - 2 * MARGIN_X - 40
 
-    # Topo: hook viral GRANDE (banda alta -> fonte maior), centro ~y210.
+    # Topo: hook viral GRANDE, na banda preta de cima (centro ~y150).
     if texts.legenda:
         caption = texts.legenda.strip().upper()
         if len(caption) > CAPTION_MAX_CHARS:
             caption = caption[:CAPTION_MAX_CHARS].rstrip() + "..."
-        font, lines, line_height = _ajustar_legenda(draw, caption, max_text_width, 300)
-        _desenhar_banner(draw, lines, font, line_height, 215)
+        font, lines, line_height = _ajustar_legenda(draw, caption, max_text_width, 220)
+        _desenhar_banner(draw, lines, font, line_height, top_center)
 
-    # Rodapé: subtexto MENOR (banda menor -> fonte menor), centro ~y1640.
+    # Rodapé: subtexto MENOR, na banda preta de baixo (centro ~y1785).
     sub = texts.subtexto or (" · ".join(t.strip() for t in (texts.credito_streamer, texts.canal_proprio) if t) or None)
     if sub:
         sub = sub.strip().upper()
-        font, lines, line_height = _ajustar_legenda(draw, sub, max_text_width, 150)
-        _desenhar_banner(draw, lines, font, line_height, 1640)
+        font, lines, line_height = _ajustar_legenda(draw, sub, max_text_width, 140)
+        _desenhar_banner(draw, lines, font, line_height, bottom_center)
 
     return image
 
@@ -309,20 +309,29 @@ def renderizar_vertical_meme(
     finally:
         source.close()
 
-    del src_w, src_h  # crop-to-fill não precisa das dimensões
-    overlay_png = output_path.with_name(output_path.stem + "_overlay.png")
-    gerar_texto_overlay(texts).save(overlay_png)
-
-    # Best-effort para tirar marca d'água/logo do canal original: apara uma borda
-    # pequena antes do crop (marcas costumam ficar nos cantos). Configurável.
+    del src_w, src_h
     import os as _os
+    # Vídeo GRANDE no meio (crop-to-fill na largura), com BANDA PRETA em cima e
+    # embaixo para os textos (estilo Futebol Respira/GTA). Altura do vídeo
+    # configurável; o resto do canvas fica preto.
+    video_h = max(900, min(1920, int(_os.getenv("KWAI_VIDEO_HEIGHT", "1400"))))
+    if video_h % 2:
+        video_h -= 1
+    vtop = (CANVAS_HEIGHT - video_h) // 2
+    top_center = max(60, vtop // 2)
+    bottom_center = min(CANVAS_HEIGHT - 60, vtop + video_h + (CANVAS_HEIGHT - vtop - video_h) // 2)
+    overlay_png = output_path.with_name(output_path.stem + "_overlay.png")
+    gerar_texto_overlay(texts, top_center, bottom_center).save(overlay_png)
+
+    # Best-effort para tirar marca d'água/logo do canal original: apara borda.
     b = max(0.0, min(0.12, float(_os.getenv("KWAI_LOGO_CROP", "0.045"))))
     crop_mn = f"crop=iw*{1-2*b:.3f}:ih*{1-2*b:.3f}:iw*{b:.3f}:ih*{b:.3f}," if b > 0 else ""
     filtro = (
-        # vídeo ocupa a TELA TODA 9:16 (zoom + crop central), sem tarja preta;
-        # depois os banners (topo grande + rodapé menor) por cima.
-        f"[0:v]{crop_mn}scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,"
-        "crop=1080:1920,setsar=1[base];"
+        # vídeo grande: preenche a largura (1080) e altura video_h (crop central),
+        # centralizado sobre canvas PRETO; bandas pretas em cima/baixo p/ o texto.
+        f"[0:v]{crop_mn}scale=1080:{video_h}:force_original_aspect_ratio=increase:flags=lanczos,"
+        f"crop=1080:{video_h},setsar=1,"
+        f"pad=1080:1920:0:{vtop}:black[base];"
         "[base][1:v]overlay=0:0[vout]"
     )
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
