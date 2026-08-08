@@ -12,6 +12,7 @@ import { Contas } from "./pages/Contas";
 import { Metricas } from "./pages/Metricas";
 import { KwaiCut } from "./pages/KwaiCut";
 import { TikTok } from "./pages/TikTok";
+import { ShopLive } from "./pages/ShopLive";
 
 export default function App() {
   return (
@@ -30,6 +31,7 @@ export default function App() {
             <Route path="metricas" element={<Metricas />} />
             <Route path="kwai-cut" element={<KwaiCut />} />
             <Route path="tiktok" element={<TikTok />} />
+            {import.meta.env.VITE_SHOP_LIVE_ENABLED === "true" && <Route path="shop-live" element={<ShopLive />} />}
           </Route>
         </Routes>
       </AuthWrapper>

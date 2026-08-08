@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router';
-import { LayoutDashboard, Settings2, Users, History, Scissors, LogOut, Layers3, ListVideo, KeyRound, BarChart3, Clapperboard, Music2 } from 'lucide-react';
+import { LayoutDashboard, Settings2, Users, History, Scissors, LogOut, Layers3, ListVideo, KeyRound, BarChart3, Clapperboard, Music2, ShoppingBag } from 'lucide-react';
 
 export function Layout() {
   const handleLogout = () => {
@@ -14,6 +14,7 @@ export function Layout() {
     { to: "/perfis", icon: Layers3, label: "Perfis" },
     { to: "/kwai-cut", icon: Clapperboard, label: "Kwai CUT" },
     { to: "/tiktok", icon: Music2, label: "TikTok" },
+    ...(import.meta.env.VITE_SHOP_LIVE_ENABLED === "true" ? [{ to: "/shop-live", icon: ShoppingBag, label: "Shop LIVE" }] : []),
     { to: "/fila", icon: ListVideo, label: "Fila" },
     { to: "/contas", icon: KeyRound, label: "Contas" },
     { to: "/metricas", icon: BarChart3, label: "Métricas" },
