@@ -39,3 +39,6 @@ class SessionMaterialIn(BaseModel):
     media_id: str
     position: int = Field(ge=0, le=1000)
     planned_duration_seconds: int = Field(ge=1, le=86400)
+
+class PlaybackControl(BaseModel):
+    action: Literal["start", "pause", "resume", "next", "stop"]

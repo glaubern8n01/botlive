@@ -13,3 +13,5 @@ Carregue `apps/extension/` como extensão descompactada no Chrome. Ela possui si
 Capacidades reais de TikTok e DOM são `UNVERIFIED` e desabilitadas. OBS é futuro, opcional e não faz parte do fluxo principal. Nenhum cookie ou senha é armazenado.
 
 Consulte `docs/architecture.md`, `docs/roadmap.md`, `docs/research.md`, `docs/security.md` e `docs/compatibility.md`.
+
+A mídia local autorizada da Fase 2 está descrita em `docs/PHASE-2-LOCAL-MEDIA.md`; o armazenamento é configurável, ignorado pelo Git e não envolve OBS.

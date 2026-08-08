@@ -1,4 +1,4 @@
-import os, subprocess, sys, tempfile, unittest
+import io, os, subprocess, sys, tempfile, unittest, wave
 from unittest import mock
 from pathlib import Path
 
@@ -8,6 +8,7 @@ os.environ["SHOP_LIVE_DATABASE_URL"] = f"sqlite:///{Path(TEMP.name, 'test.db').a
 os.environ["SHOP_LIVE_ALLOWED_ORIGINS"] = "http://localhost:3000"
 os.environ["SHOP_LIVE_ALLOWED_EXTENSION_IDS"] = "abcdefghijklmnopabcdefghijklmnop"
 os.environ["SHOP_LIVE_AUTH_DISABLED"] = "true"
+os.environ["SHOP_LIVE_MEDIA_ROOT"] = str(Path(TEMP.name,"media"))
 sys.path.insert(0, str(LOCAL_AGENT))
 subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=LOCAL_AGENT, check=True, capture_output=True)
 
@@ -70,6 +71,36 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.delete(f'/shop-live/v1/scripts/{block["id"]}').status_code,204)
         audit=self.client.get("/shop-live/v1/audit?limit=100").json()["items"]
         self.assertTrue(any(row["type"]=="product.updated" for row in audit)); self.assertTrue(any(row["type"]=="script.deleted" for row in audit))
+
+    def test_real_upload_metadata_playback_and_safe_delete(self):
+        buffer=io.BytesIO()
+        with wave.open(buffer,"wb") as wav:
+            wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(8000);wav.writeframes(b"\0\0"*8000)
+        response=self.client.post("/shop-live/v1/media/upload",data={"authorized":"true","authorization_source":"Gerado pelo teste"},files={"file":("operator.wav",buffer.getvalue(),"audio/wav")})
+        self.assertEqual(response.status_code,201,response.text);media=response.json()
+        self.assertEqual(media["kind"],"audio");self.assertEqual(media["duration_seconds"],1);self.assertEqual(media["size_bytes"],16044)
+        self.assertNotEqual(media["stored_name"],"operator.wav");self.assertNotIn("/",media["stored_name"])
+        self.assertEqual(self.client.get(f'/shop-live/v1/media/{media["id"]}/content').content[:4],b"RIFF")
+        session=self.client.post("/shop-live/v1/sessions",json={"title":"Fila local","estimated_minutes":5}).json()
+        self.assertEqual(self.client.put(f'/shop-live/v1/sessions/{session["id"]}/materials',json=[{"media_id":media["id"],"position":0,"planned_duration_seconds":30}]).status_code,200)
+        started=self.client.post(f'/shop-live/v1/sessions/{session["id"]}/playback/control',json={"action":"start"}).json();self.assertEqual(started["status"],"playing")
+        self.assertEqual(self.client.post(f'/shop-live/v1/sessions/{session["id"]}/playback/control',json={"action":"pause"}).json()["status"],"paused")
+        self.assertEqual(self.client.post(f'/shop-live/v1/sessions/{session["id"]}/playback/control',json={"action":"resume"}).json()["status"],"playing")
+        self.assertEqual(self.client.delete(f'/shop-live/v1/media/{media["id"]}').status_code,409)
+        self.assertEqual(self.client.post(f'/shop-live/v1/sessions/{session["id"]}/playback/control',json={"action":"stop"}).json()["status"],"stopped")
+        self.client.put(f'/shop-live/v1/sessions/{session["id"]}/materials',json=[])
+        self.assertEqual(self.client.delete(f'/shop-live/v1/media/{media["id"]}').status_code,204)
+        self.assertFalse(Path(TEMP.name,"media",media["stored_name"]).exists())
+        audit=self.client.get("/shop-live/v1/audit?limit=200").json()["items"]
+        for event in ["media.uploaded","playback.started","playback.paused","playback.resumed","playback.stopped","media.delete_blocked","media.deleted"]: self.assertTrue(any(row["type"]==event for row in audit),event)
+
+    def test_upload_rejects_extension_mime_content_size_and_traversal(self):
+        bad=self.client.post("/shop-live/v1/media/upload",data={"authorized":"true","authorization_source":"Teste"},files={"file":("bad.exe",b"x","application/octet-stream")});self.assertEqual(bad.status_code,422)
+        mismatch=self.client.post("/shop-live/v1/media/upload",data={"authorized":"true","authorization_source":"Teste"},files={"file":("bad.wav",b"not-wave","audio/wav")});self.assertEqual(mismatch.status_code,422)
+        with mock.patch.dict(os.environ,{"SHOP_LIVE_MEDIA_MAX_BYTES":"4"}):
+            too_big=self.client.post("/shop-live/v1/media/upload",data={"authorized":"true","authorization_source":"Teste"},files={"file":("large.wav",b"RIFFxxxxWAVE", "audio/wav")});self.assertEqual(too_big.status_code,422)
+        from app.media_storage import safe_path
+        with self.assertRaises(ValueError): safe_path("../outside.wav")
 
     def test_extension_allowlist_is_exact(self):
         from app.main import allowed_websocket_origin

@@ -1,7 +1,7 @@
 name: Shop LIVE CI
 on:
   push:
-    branches: [codex/shop-live-phase1-clean]
+    branches: [main, codex/shop-live-media-local]
     paths: ["botlive-shop/**", "dashboard/**", ".github/workflows/shop-live-ci.yml"]
   pull_request:
     paths: ["botlive-shop/**", "dashboard/**", ".github/workflows/shop-live-ci.yml"]

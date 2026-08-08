@@ -56,8 +56,15 @@ class MediaAsset(Base):
     name: Mapped[str] = mapped_column(String(160))
     local_path: Mapped[str] = mapped_column(Text)
     duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    duration_milliseconds: Mapped[int] = mapped_column(Integer, default=0)
     authorized: Mapped[bool] = mapped_column(Boolean, default=False)
     authorization_source: Mapped[str] = mapped_column(String(200), default="")
+    stored_name: Mapped[str | None] = mapped_column(String(80), nullable=True, unique=True)
+    mime_type: Mapped[str] = mapped_column(String(100), default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    format_name: Mapped[str] = mapped_column(String(80), default="")
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 class ScriptBlock(Base):
@@ -76,3 +83,12 @@ class SessionMaterial(Base):
     media_id: Mapped[str] = mapped_column(ForeignKey("shop_live_media_assets.id", ondelete="CASCADE"), primary_key=True)
     position: Mapped[int] = mapped_column(Integer)
     planned_duration_seconds: Mapped[int] = mapped_column(Integer)
+
+class MediaPlayback(Base):
+    __tablename__ = "shop_live_media_playback"
+    session_id: Mapped[str] = mapped_column(ForeignKey("shop_live_sessions.id", ondelete="CASCADE"), primary_key=True)
+    media_id: Mapped[str | None] = mapped_column(ForeignKey("shop_live_media_assets.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="stopped")
+    queue_index: Mapped[int] = mapped_column(Integer, default=0)
+    position_seconds: Mapped[float] = mapped_column(Float, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)

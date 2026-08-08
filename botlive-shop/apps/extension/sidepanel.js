@@ -22,12 +22,20 @@ function connect() {
   socket.onmessage = message => {
     const event = JSON.parse(message.data);
     if (event.type === 'operation.context') renderContext(event.payload);
+    if (event.type === 'media.playback_state') renderPlayback(event.payload);
     if (['simulation.started','simulation.resumed'].includes(event.type)) setState('executando');
     if (event.type === 'simulation.paused') setState('pausada');
     if (['simulation.ready','simulation.stopped','simulation.completed'].includes(event.type)) setState('pronto');
     if (event.type === 'comment.received') $('comments').textContent=String(Number($('comments').textContent)+1);
     if (event.type === 'compliance.warning_received') { $('alerts').textContent=String(Number($('alerts').textContent)+1); $('alert').textContent=String(event.payload.problem); }
   };
+}
+function renderPlayback(state) {
+  let section=$('playback');
+  if(!section){section=document.createElement('section');section.id='playback';section.innerHTML='<label>Reprodução local</label><strong id="playback-media">Nenhuma mídia</strong><p><span id="playback-status">stopped</span> · <span id="playback-progress">0</span>s</p>';$('panel').prepend(section);}
+  $('playback-media').textContent=state.media?.name||'Nenhuma mídia';
+  $('playback-status').textContent=state.status;
+  $('playback-progress').textContent=String(Math.floor(state.position_seconds||0));
 }
 function renderContext(context) {
   $('product').textContent=context.current_product?.name || 'Sem produto selecionado';

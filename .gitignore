@@ -19,6 +19,7 @@ dist/
 *.log
 run_logs/
 test-results/
+botlive-shop/data/media/
 
 *.mp4
 *.mov

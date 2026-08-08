@@ -2,17 +2,31 @@ from __future__ import annotations
 
 import asyncio
 import re
-from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from .auth import require_http_auth, require_websocket_auth
+from .auth import require_http_auth, require_websocket_auth, valid_token
 from .database import SessionLocal, get_db
-from .models import AuditEvent, LiveSession, MediaAsset, Product, ScriptBlock, SessionMaterial
-from .schemas import MediaAssetIn, ProductIn, ScriptBlockIn, SessionIn, SessionMaterialIn, SimulationControl
+from .models import AuditEvent, LiveSession, MediaAsset, MediaPlayback, Product, ScriptBlock, SessionMaterial
+from .schemas import MediaAssetIn, PlaybackControl, ProductIn, ScriptBlockIn, SessionIn, SessionMaterialIn, SimulationControl
+from .media_storage import inspect_media, safe_path, store_upload
 from .simulator import scenario, stream
 import os
+from pathlib import Path
+
+CLIENTS: set[WebSocket] = set()
+CLIENT_LOCKS: dict[WebSocket,asyncio.Lock] = {}
+PLAYBACK_TASKS: dict[str,asyncio.Task] = {}
+
+async def broadcast(event: dict) -> None:
+    stale=[]
+    for client in list(CLIENTS):
+        try:
+            async with CLIENT_LOCKS[client]: await client.send_json(event)
+        except Exception: stale.append(client)
+    for client in stale: CLIENTS.discard(client)
 
 def allowed_origins() -> list[str]:
     return [x.strip() for x in os.getenv("SHOP_LIVE_ALLOWED_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
@@ -35,8 +49,8 @@ def serialize(row) -> dict:
     if isinstance(row, LiveSession): data["product_ids"] = list(row.product_order)
     return data
 
-def record(db: Session, kind: str, payload: dict, session_id: str | None = None) -> AuditEvent:
-    event = AuditEvent(type=kind, payload=payload, session_id=session_id)
+def record(db: Session, kind: str, payload: dict, session_id: str | None = None, result: str = "ok") -> AuditEvent:
+    event = AuditEvent(type=kind, payload=payload, session_id=session_id, result=result)
     db.add(event); db.commit(); db.refresh(event); return event
 
 def set_session_status(session_id: str, status: str, event_type: str, payload: dict | None = None) -> None:
@@ -130,6 +144,36 @@ def list_media(kind: str | None = None, product_id: str | None = None, db: Sessi
     if product_id: query = query.where(MediaAsset.product_id == product_id)
     return [serialize(row) for row in db.scalars(query).all()]
 
+@app.post("/shop-live/v1/media/upload", status_code=201, dependencies=AUTH)
+async def upload_media(file: UploadFile = File(...), product_id: str | None = Form(default=None), authorized: bool = Form(...), authorization_source: str = Form(...), db: Session = Depends(get_db)):
+    product_id=product_id or None
+    stored_path: Path | None = None
+    if not authorized: raise HTTPException(422,"O operador deve autorizar o arquivo")
+    if not authorization_source.strip(): raise HTTPException(422,"Informe a origem da autorização")
+    if product_id and not db.get(Product,product_id): raise HTTPException(422,"Produto inexistente")
+    try:
+        stored_name,stored_path,size,mime,extension=await store_upload(file)
+        metadata=inspect_media(stored_path,extension);kind="video" if metadata.get("width") else "audio"
+        item=MediaAsset(product_id=product_id,kind=kind,name=Path(file.filename or "Mídia autorizada").name[:160],local_path=stored_name,duration_seconds=max(0,int(round(metadata["duration_seconds"]))),duration_milliseconds=max(0,int(round(metadata["duration_seconds"]*1000))),authorized=True,authorization_source=authorization_source.strip(),stored_name=stored_name,mime_type=mime,size_bytes=size,format_name=metadata["format_name"],width=metadata["width"],height=metadata["height"])
+        db.add(item);db.commit();db.refresh(item);record(db,"media.uploaded",{"media_id":item.id,"size_bytes":size,"format":metadata["format_name"],"authorized":True});return serialize(item)
+    except ValueError as error:
+        record(db,"media.upload_failed",{"filename":Path(file.filename or "").name,"reason":str(error)},result="blocked")
+        raise HTTPException(422,str(error))
+    except Exception as error:
+        if stored_path: stored_path.unlink(missing_ok=True)
+        record(db,"media.upload_failed",{"filename":Path(file.filename or "").name,"reason":type(error).__name__},result="error")
+        raise HTTPException(500,"Falha ao armazenar mídia")
+
+@app.get("/shop-live/v1/media/{item_id}/content")
+def media_content(item_id: str, token: str | None = None, db: Session = Depends(get_db)):
+    if not valid_token(token): raise HTTPException(401,"Token local inválido")
+    item=db.get(MediaAsset,item_id)
+    if not item or not item.stored_name: raise HTTPException(404,"Arquivo inexistente")
+    try: path=safe_path(item.stored_name)
+    except ValueError: raise HTTPException(403,"Caminho de mídia inválido")
+    if not path.is_file(): raise HTTPException(404,"Arquivo inexistente")
+    return FileResponse(path,media_type=item.mime_type,filename=item.name,content_disposition_type="inline")
+
 @app.put("/shop-live/v1/media/{item_id}", dependencies=AUTH)
 def update_media(item_id: str, payload: MediaAssetIn, db: Session = Depends(get_db)):
     item=db.get(MediaAsset,item_id)
@@ -144,7 +188,19 @@ def update_media(item_id: str, payload: MediaAssetIn, db: Session = Depends(get_
 def delete_media(item_id: str, db: Session = Depends(get_db)):
     item=db.get(MediaAsset,item_id)
     if not item: raise HTTPException(404,"Mídia inexistente")
-    before=serialize(item); db.delete(item); db.commit(); record(db,"media.deleted",{"before":before})
+    usage=db.scalar(select(SessionMaterial).where(SessionMaterial.media_id == item_id).limit(1))
+    if usage:
+        record(db,"media.delete_blocked",{"media_id":item_id,"session_id":usage.session_id},result="blocked")
+        raise HTTPException(409,"Media utilizada por uma sessao")
+    before=serialize(item); path=None
+    if item.stored_name:
+        try: path=safe_path(item.stored_name)
+        except ValueError:
+            record(db,"media.delete_failed",{"media_id":item_id,"reason":"unsafe_path"},result="blocked")
+            raise HTTPException(403,"Caminho de media invalido")
+    db.delete(item); db.commit()
+    if path and path.exists(): path.unlink()
+    record(db,"media.deleted",{"before":before})
 
 @app.post("/shop-live/v1/scripts", status_code=201, dependencies=AUTH)
 def create_script_block(payload: ScriptBlockIn, db: Session = Depends(get_db)):
@@ -190,7 +246,71 @@ def set_session_materials(session_id: str, payload: list[SessionMaterialIn], db:
 @app.get("/shop-live/v1/sessions/{session_id}/materials", dependencies=AUTH)
 def list_session_materials(session_id: str, db: Session = Depends(get_db)):
     rows = db.scalars(select(SessionMaterial).where(SessionMaterial.session_id == session_id).order_by(SessionMaterial.position)).all()
-    return {"items":[serialize(row) for row in rows]}
+    return {"items":[{**serialize(row),"media":serialize(db.get(MediaAsset,row.media_id))} for row in rows]}
+
+def playback_payload(db: Session, session_id: str) -> dict:
+    state=db.get(MediaPlayback,session_id)
+    if not state:
+        state=MediaPlayback(session_id=session_id);db.add(state);db.commit();db.refresh(state)
+    media=db.get(MediaAsset,state.media_id) if state.media_id else None
+    return {**serialize(state),"media":serialize(media) if media else None}
+
+def playback_queue(db: Session, session_id: str):
+    return db.scalars(select(SessionMaterial).where(SessionMaterial.session_id == session_id).order_by(SessionMaterial.position)).all()
+
+async def publish_playback(session_id: str) -> None:
+    with SessionLocal() as db: payload=playback_payload(db,session_id)
+    await broadcast({"type":"media.playback_state","payload":payload})
+
+async def playback_clock(session_id: str) -> None:
+    while True:
+        await asyncio.sleep(1)
+        with SessionLocal() as db:
+            state=db.get(MediaPlayback,session_id)
+            if not state or state.status == "stopped": return
+            if state.status != "playing": continue
+            queue=playback_queue(db,session_id)
+            if not queue or state.queue_index >= len(queue):
+                state.status="stopped";state.media_id=None;db.commit();continue
+            current=queue[state.queue_index];state.position_seconds += 1
+            if state.position_seconds >= current.planned_duration_seconds:
+                if state.queue_index + 1 < len(queue):
+                    state.queue_index += 1;state.media_id=queue[state.queue_index].media_id;state.position_seconds=0
+                    record(db,"playback.advanced",{"media_id":state.media_id,"automatic":True},session_id)
+                else:
+                    state.status="stopped";state.position_seconds=0
+                    record(db,"playback.stopped",{"reason":"queue_completed"},session_id)
+            db.commit()
+        await publish_playback(session_id)
+
+@app.get("/shop-live/v1/sessions/{session_id}/playback", dependencies=AUTH)
+def get_playback(session_id: str, db: Session = Depends(get_db)):
+    if not db.get(LiveSession,session_id): raise HTTPException(404,"Sessao inexistente")
+    return playback_payload(db,session_id)
+
+@app.post("/shop-live/v1/sessions/{session_id}/playback/control", dependencies=AUTH)
+async def control_playback(session_id: str, payload: PlaybackControl, db: Session = Depends(get_db)):
+    if not db.get(LiveSession,session_id): raise HTTPException(404,"Sessao inexistente")
+    queue=playback_queue(db,session_id);state=db.get(MediaPlayback,session_id) or MediaPlayback(session_id=session_id)
+    if not queue:
+        record(db,"playback.failed",{"action":payload.action,"reason":"empty_queue"},session_id,result="blocked")
+        raise HTTPException(422,"A sessao nao possui midias")
+    events={"start":"playback.started","pause":"playback.paused","resume":"playback.resumed","next":"playback.advanced","stop":"playback.stopped"}
+    if payload.action == "start": state.queue_index=0;state.media_id=queue[0].media_id;state.position_seconds=0;state.status="playing"
+    elif payload.action == "pause":
+        if state.status != "playing": raise HTTPException(409,"Reproducao nao iniciada")
+        state.status="paused"
+    elif payload.action == "resume":
+        if state.status != "paused": raise HTTPException(409,"Reproducao nao pausada")
+        state.status="playing"
+    elif payload.action == "next":
+        if state.queue_index + 1 >= len(queue): state.status="stopped";state.position_seconds=0
+        else: state.queue_index+=1;state.media_id=queue[state.queue_index].media_id;state.position_seconds=0;state.status="playing"
+    else: state.status="stopped";state.position_seconds=0
+    db.add(state);db.commit();db.refresh(state);record(db,events[payload.action],{"media_id":state.media_id,"queue_index":state.queue_index},session_id)
+    if payload.action in {"start","resume","next"} and (session_id not in PLAYBACK_TASKS or PLAYBACK_TASKS[session_id].done()):
+        PLAYBACK_TASKS[session_id]=asyncio.create_task(playback_clock(session_id))
+    result=playback_payload(db,session_id);await broadcast({"type":"media.playback_state","payload":result});return result
 
 def operation_context(db: Session, live: LiveSession) -> dict:
     by_id={product.id:product for product in live.products}; products=[by_id[value] for value in live.product_order if value in by_id]; current=products[0] if products else None; following=products[1] if len(products)>1 else None
@@ -213,8 +333,10 @@ async def events(socket: WebSocket):
     if not allowed_websocket_origin(socket.headers.get("origin")) or not await require_websocket_auth(socket):
         await socket.close(code=1008); return
     await socket.accept()
+    CLIENTS.add(socket)
+    CLIENT_LOCKS[socket]=asyncio.Lock()
     await socket.send_json({"type": "simulation.ready", "payload": {"seed": 42, "state": "ready"}})
-    paused, stopped, send_lock = asyncio.Event(), asyncio.Event(), asyncio.Lock()
+    paused, stopped, send_lock = asyncio.Event(), asyncio.Event(), CLIENT_LOCKS[socket]
     task: asyncio.Task | None = None
     session_id: str | None = None
 
@@ -263,3 +385,6 @@ async def events(socket: WebSocket):
     except (WebSocketDisconnect, ValueError):
         if task and not task.done(): task.cancel()
         if session_id: interrupt_if_active(session_id)
+    finally:
+        CLIENTS.discard(socket)
+        CLIENT_LOCKS.pop(socket,None)
