@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "BotLive Shop LIVE — Simulação",
+  "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkoVbZ9qe+nh9u3xnXxRITEqg703oylpMDAt1Y23ZCQmmT3VDCj+feMYwwjXiKdBleilEeoY9rVNJvh8bW7vzhYxojNBAPZQtarZT1EdzH1E3EIpwlhXIEpSy+xTLTqBfsN3GyjiPmrHh56oyOco8SlcPyVBIq3kEcvg+RNFtWQKLpluBnOHFj3QH7O9pE/ykMLj44G6a/mIKPPmaoSJmT2jwKtJhoF5cCg3eZvG7o2VkDxWdNbmiRatHicYfZ7x3QUyKgYg6Q9VJ/h/1GThFCTAjcysleJAqbYjpQ/eCAQ/oHt7fRxyF8AHcE9hJAYTuTwASJ24Q8m0Duof0sChUCQIDAQAB",
+  "description": "Painel assistido do Shop LIVE. Não executa ações em contas reais.",
+  "permissions": ["sidePanel", "storage"],
+  "host_permissions": ["http://127.0.0.1:8765/*", "http://localhost:8765/*"],
+  "background": {"service_worker": "service-worker.js", "type": "module"},
+  "side_panel": {"default_path": "sidepanel.html"},
+  "content_scripts": [{
+    "matches": ["http://127.0.0.1:8765/shop-live/simulator-page*", "http://localhost:8765/shop-live/simulator-page*"],
+    "js": ["content-script.js"],
+    "run_at": "document_idle"
+  }],
+  "action": {"default_title": "Abrir Shop LIVE"},
+  "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"}
+}
