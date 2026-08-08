@@ -15,3 +15,5 @@ Capacidades reais de TikTok e DOM são `UNVERIFIED` e desabilitadas. OBS é futu
 Consulte `docs/architecture.md`, `docs/roadmap.md`, `docs/research.md`, `docs/security.md` e `docs/compatibility.md`.
 
 A mídia local autorizada da Fase 2 está descrita em `docs/PHASE-2-LOCAL-MEDIA.md`; o armazenamento é configurável, ignorado pelo Git e não envolve OBS.
+
+Para instalar e operar a entrega completa, consulte `docs/INSTALL-WINDOWS.md`, `docs/USER-MANUAL.md`, `docs/TROUBLESHOOTING.md` e `docs/TIKTOK-OFFICIAL-INTEGRATION.md`.

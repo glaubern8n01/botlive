@@ -25,6 +25,10 @@ class ApiTests(unittest.TestCase):
     def product(self):
         return self.client.post("/shop-live/v1/products",json={"name":"Produto teste","price":10}).json()
 
+    def ws_url(self,headers=None):
+        ticket=self.client.post("/shop-live/v1/auth/ws-ticket",headers=headers or {}).json()
+        return f'/shop-live/v1/events?expires={ticket["expires"]}&ticket={ticket["ticket"]}'
+
     def test_auth_is_required_outside_controlled_tests(self):
         with mock.patch.dict(os.environ,{"SHOP_LIVE_AUTH_DISABLED":"false","SHOP_LIVE_LOCAL_TOKEN":"correct"}):
             self.assertEqual(self.client.get("/shop-live/v1/health").status_code,401)
@@ -80,7 +84,8 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code,201,response.text);media=response.json()
         self.assertEqual(media["kind"],"audio");self.assertEqual(media["duration_seconds"],1);self.assertEqual(media["size_bytes"],16044)
         self.assertNotEqual(media["stored_name"],"operator.wav");self.assertNotIn("/",media["stored_name"])
-        self.assertEqual(self.client.get(f'/shop-live/v1/media/{media["id"]}/content').content[:4],b"RIFF")
+        ticket=self.client.get(f'/shop-live/v1/media/{media["id"]}/ticket').json()
+        self.assertEqual(self.client.get(ticket["url"]).content[:4],b"RIFF")
         session=self.client.post("/shop-live/v1/sessions",json={"title":"Fila local","estimated_minutes":5}).json()
         self.assertEqual(self.client.put(f'/shop-live/v1/sessions/{session["id"]}/materials',json=[{"media_id":media["id"],"position":0,"planned_duration_seconds":30}]).status_code,200)
         started=self.client.post(f'/shop-live/v1/sessions/{session["id"]}/playback/control',json={"action":"start"}).json();self.assertEqual(started["status"],"playing")
@@ -102,13 +107,36 @@ class ApiTests(unittest.TestCase):
         from app.media_storage import safe_path
         with self.assertRaises(ValueError): safe_path("../outside.wav")
 
+    def test_complete_assisted_runtime_library_diagnostics_report_and_settings(self):
+        product=self.client.post("/shop-live/v1/products",json={"name":"Produto completo","category":"Casa","price":99,"tags":["destaque"],"notes":"Uso autorizado"}).json()
+        duplicate=self.client.post(f'/shop-live/v1/products/{product["id"]}/duplicate');self.assertEqual(duplicate.status_code,201)
+        script=self.client.post("/shop-live/v1/scripts",json={"product_id":product["id"],"kind":"apresentacao","position":0,"duration_seconds":30,"title":"Abertura humana","text":"Apresente o produto sem alegações proibidas."}).json()
+        self.assertEqual(self.client.post(f'/shop-live/v1/scripts/{script["id"]}/duplicate').status_code,201)
+        buffer=io.BytesIO()
+        with wave.open(buffer,"wb") as wav: wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(8000);wav.writeframes(b"\0\0"*4000)
+        media=self.client.post("/shop-live/v1/media/upload",data={"product_id":product["id"],"authorized":"true","authorization_source":"Teste local"},files={"file":("complete.wav",buffer.getvalue(),"audio/wav")}).json()
+        self.assertEqual(self.client.post(f'/shop-live/v1/media/{media["id"]}/duplicate').status_code,201)
+        library=self.client.get("/shop-live/v1/library?q=completo&kind=product").json();self.assertIn(product["id"],{row["id"] for row in library["products"]})
+        session=self.client.post("/shop-live/v1/sessions",json={"title":"Fluxo completo","estimated_minutes":30,"product_ids":[product["id"]]}).json()
+        item={"media_id":media["id"],"position":0,"planned_duration_seconds":20,"product_id":product["id"],"script_id":script["id"]}
+        self.assertEqual(self.client.put(f'/shop-live/v1/sessions/{session["id"]}/materials',json=[item]).status_code,200)
+        started=self.client.post(f'/shop-live/v1/sessions/{session["id"]}/runtime/control',json={"action":"start_rehearsal"}).json();self.assertEqual(started["mode"],"rehearsal");self.assertEqual(started["product"]["id"],product["id"]);self.assertEqual(started["script"]["id"],script["id"])
+        tele=self.client.post(f'/shop-live/v1/sessions/{session["id"]}/runtime/control',json={"action":"teleprompter","speed":1.5,"font_size":40,"teleprompter_paused":False}).json();self.assertEqual(tele["teleprompter_font_size"],40)
+        diagnostic=self.client.post(f'/shop-live/v1/sessions/{session["id"]}/diagnostics',json={"camera":"frozen","microphone":"silent","connection":"unstable","volume":0}).json();self.assertIn("camera_frozen",diagnostic["problems"])
+        self.assertEqual(self.client.post(f'/shop-live/v1/sessions/{session["id"]}/comments/simulated?text=Teste').status_code,201)
+        self.assertEqual(self.client.put("/shop-live/v1/settings/hotkeys",json={"value":{"Space":"pause"}}).status_code,200);self.assertEqual(self.client.get("/shop-live/v1/settings").json()["hotkeys"]["Space"],"pause")
+        report=self.client.get(f'/shop-live/v1/sessions/{session["id"]}/report').json();self.assertGreater(report["summary"]["events"],3);self.assertGreater(report["summary"]["problems"],0)
+        csv_report=self.client.get(f'/shop-live/v1/sessions/{session["id"]}/report?format=csv');self.assertEqual(csv_report.status_code,200);self.assertIn("timestamp,type,result",csv_report.text)
+        self.assertFalse(self.client.get("/shop-live/v1/integrations/tiktok").json()["connected"])
+        signed=self.client.get(f'/shop-live/v1/media/{media["id"]}/ticket').json();self.assertEqual(self.client.get(signed["url"]).status_code,200);self.assertEqual(self.client.get(f'/shop-live/v1/media/{media["id"]}/content?expires=9999999999&ticket=bad').status_code,401)
+
     def test_extension_allowlist_is_exact(self):
         from app.main import allowed_websocket_origin
         self.assertTrue(allowed_websocket_origin("chrome-extension://abcdefghijklmnopabcdefghijklmnop"))
         self.assertFalse(allowed_websocket_origin("chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
 
     def test_websocket_start_pause_resume_stop(self):
-        with self.client.websocket_connect("/shop-live/v1/events",headers={"origin":"http://localhost:3000"}) as ws:
+        with self.client.websocket_connect(self.ws_url(),headers={"origin":"http://localhost:3000"}) as ws:
             self.assertEqual(ws.receive_json()["type"],"simulation.ready")
             ws.send_json({"action":"start","speed":1})
             self._until(ws,"simulation.started")
@@ -118,28 +146,28 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/shop-live/v1/sessions").json()[-1]["status"],"encerrada")
 
     def test_disconnect_marks_running_session_interrupted(self):
-        with self.client.websocket_connect("/shop-live/v1/events",headers={"origin":"http://localhost:3000"}) as ws:
+        with self.client.websocket_connect(self.ws_url(),headers={"origin":"http://localhost:3000"}) as ws:
             ws.receive_json(); ws.send_json({"action":"start","speed":1}); self._until(ws,"simulation.started")
         self.assertEqual(self.client.get("/shop-live/v1/sessions").json()[-1]["status"],"interrompida")
 
     def test_websocket_rejects_unknown_origin(self):
         with self.assertRaises(Exception):
-            with self.client.websocket_connect("/shop-live/v1/events",headers={"origin":"https://evil.example"}) as ws: ws.receive_json()
+            with self.client.websocket_connect(self.ws_url(),headers={"origin":"https://evil.example"}) as ws: ws.receive_json()
 
     def test_websocket_requires_local_token_when_auth_enabled(self):
         with mock.patch.dict(os.environ,{"SHOP_LIVE_AUTH_DISABLED":"false","SHOP_LIVE_LOCAL_TOKEN":"correct"}):
             with self.assertRaises(Exception):
-                with self.client.websocket_connect("/shop-live/v1/events?token=wrong",headers={"origin":"http://localhost:3000"}) as ws: ws.receive_json()
-            with self.client.websocket_connect("/shop-live/v1/events?token=correct",headers={"origin":"http://localhost:3000"}) as ws:
+                with self.client.websocket_connect("/shop-live/v1/events?expires=9999999999&ticket=wrong",headers={"origin":"http://localhost:3000"}) as ws: ws.receive_json()
+            with self.client.websocket_connect(self.ws_url({"X-Shop-Live-Token":"correct"}),headers={"origin":"http://localhost:3000"}) as ws:
                 self.assertEqual(ws.receive_json()["type"],"simulation.ready")
 
     def test_chrome_extension_origin_requires_valid_shape_and_token(self):
         chrome_origin="chrome-extension://abcdefghijklmnopabcdefghijklmnop"
         with mock.patch.dict(os.environ,{"SHOP_LIVE_AUTH_DISABLED":"false","SHOP_LIVE_LOCAL_TOKEN":"correct"}):
-            with self.client.websocket_connect("/shop-live/v1/events?token=correct",headers={"origin":chrome_origin}) as ws:
+            with self.client.websocket_connect(self.ws_url({"X-Shop-Live-Token":"correct"}),headers={"origin":chrome_origin}) as ws:
                 self.assertEqual(ws.receive_json()["type"],"simulation.ready")
             with self.assertRaises(Exception):
-                with self.client.websocket_connect("/shop-live/v1/events?token=wrong",headers={"origin":chrome_origin}) as ws: ws.receive_json()
+                with self.client.websocket_connect("/shop-live/v1/events?expires=9999999999&ticket=wrong",headers={"origin":chrome_origin}) as ws: ws.receive_json()
 
     def _until(self,ws,expected):
         for _ in range(80):
@@ -150,6 +178,8 @@ class ApiTests(unittest.TestCase):
 class DashboardContractTests(unittest.TestCase):
     def test_dashboard_has_real_crud_session_builder_and_controls(self):
         source=(Path(__file__).parents[2]/"dashboard"/"src"/"pages"/"ShopLive.tsx").read_text(encoding="utf-8")
-        self.assertIn('command("pause")',source); self.assertIn('command("resume")',source); self.assertIn('command("stop")',source)
+        self.assertIn('playback?.status==="playing"?"pause"',source); self.assertIn('runtimeCommand("start_rehearsal")',source); self.assertIn('runtimeCommand("stop")',source)
         self.assertIn('method:"PUT"',source); self.assertIn('method:"DELETE"',source)
-        self.assertIn("MaterialForm",source)
+        self.assertIn("SessionBuilder",source);self.assertIn("draggable",source);self.assertIn("Teleprompter",source)
+        self.assertIn("navigator.mediaDevices.getUserMedia",source);self.assertIn("requestFullscreen",source)
+        self.assertNotIn("content?token=",source)

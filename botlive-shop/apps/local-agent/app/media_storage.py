@@ -45,16 +45,21 @@ async def store_upload(upload: UploadFile) -> tuple[str,Path,int,str,str]:
     mime=(upload.content_type or mimetypes.guess_type(original.name)[0] or "").lower()
     if mime not in ALLOWED[extension]: raise ValueError("MIME não permitido para a extensão")
     max_bytes=int(os.getenv("SHOP_LIVE_MEDIA_MAX_BYTES",str(100*1024*1024)))
+    total_limit=int(os.getenv("SHOP_LIVE_MEDIA_TOTAL_MAX_BYTES",str(10*1024*1024*1024)))
+    existing=sum(path.stat().st_size for path in storage_root().iterdir() if path.is_file())
     stored_name=f"{uuid4().hex}{extension}"; target=safe_path(stored_name); size=0; header=b""
     try:
         with target.open("xb") as output:
             while chunk:=await upload.read(1024*1024):
                 size+=len(chunk)
                 if size>max_bytes: raise ValueError("Arquivo excede o tamanho máximo")
+                if existing+size>total_limit: raise ValueError("Armazenamento local atingiu o limite configurado")
                 if len(header)<64: header=(header+chunk)[:64]
                 output.write(chunk)
         if not size: raise ValueError("Arquivo vazio")
         validate_header(extension,header)
+        try: target.chmod(0o600)
+        except OSError: pass
         return stored_name,target,size,mime,extension.lstrip(".")
     except Exception:
         target.unlink(missing_ok=True)

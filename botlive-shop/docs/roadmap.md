@@ -1,30 +1,20 @@
 # Roadmap do Shop LIVE
 
-Atualizado em 2026-08-08 após análise dos vídeos de referência.
+## Entrega assistida local concluída
 
-## Concluído — Fase 1
+- biblioteca real de produtos, mídias autorizadas e roteiros com pesquisa, filtros, edição, duplicação, tags e arquivamento;
+- montagem visual persistida com arrastar e soltar, produto, mídia, roteiro, ordem e duração;
+- player local completo, fila sem loop, teleprompter, atalhos e sincronização WebSocket;
+- extensão MV3 restrita ao agente e à página simulada local;
+- diagnóstico consentido de câmera, microfone, volume, congelamento, silêncio, conexão e permissões;
+- checklist, ensaio, operação humana assistida, recuperação, auditoria e relatório CSV/JSON;
+- armazenamento limitado, limpeza de órfãos, backup e instalação Windows;
+- adapter oficial TikTok Shop inerte, condicionado à aprovação e credenciais da plataforma.
 
-Agente FastAPI isolado, autenticação local, SQLite/Alembic, sessões, produtos, auditoria append-only, simulador determinístico, WebSocket, compliance e dashboard protegido por feature flag.
+## Dependências externas não implementadas
 
-## Em andamento — Fase 2: operação assistida no navegador
+Catálogo/pedidos/webhooks reais dependem de Partner Center, Development Shop, revisão, escopos e autorização do seller. Controle de LIVE Studio e comentários permanecem manuais enquanto não houver API pública oficial comprovada.
 
-1. Biblioteca administrável de produtos e mídias próprias/autorizadas.
-2. Blocos de roteiro vinculados aos produtos.
-3. Ordem e duração planejada dos materiais por sessão.
-4. Extensão Chrome MV3 com side panel e comunicação autenticada com o agente local.
-5. Página simulada local para validar content scripts.
-6. Produto atual/próximo, roteiro, comentários e alertas no painel lateral.
-7. Checklist assistido para preparação humana no TikTok LIVE Studio.
-8. Ações manuais assistidas sempre que não houver API oficial.
+## Permanentemente fora do escopo
 
-## Próxima — Fase 3: presença humana e diagnóstico
-
-Captura consentida e diagnóstico real de câmera/microfone, sem gravação por padrão; luz, FPS, silêncio, clipping, congelamento e presença. Nenhuma transmissão será iniciada automaticamente.
-
-## Futuro opcional, sem prioridade
-
-`ObsWebSocketAdapter` permanece apenas como capacidade futura, separada, desabilitada e dispensável. O Shop LIVE não exigirá instalação ou configuração do OBS.
-
-## Bloqueado por política
-
-Avatar/voz de IA fingindo ser apresentador, vídeo gravado em repetição, comentários automáticos, LIVE autônoma 24h, seletores frágeis, ocultação de alertas e qualquer ação em conta real sem autorização explícita.
+OBS como requisito, avatar/voz artificial fingindo presença, LIVE autônoma, loop disfarçado, comentários automáticos, evasão de moderação, seletores frágeis e acesso real sem autorização.

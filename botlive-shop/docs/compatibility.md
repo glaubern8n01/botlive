@@ -1,18 +1,12 @@
-# Compatibilidade
+# Compatibilidade e isolamento
 
-A branch limpa foi criada sobre `origin/main` em `3f2eca1`. O dashboard legado continua passando em typecheck e builds com a feature flag ligada e desligada. A suíte anterior de 151 testes pertencia a 90 commits não relacionados e não foi transplantada.
+A entrega parte de `origin/main` no SHA `6368f255d0719aa9b01ed5b9a1dbf866abe14c65` e preserva integralmente o BotLive legado.
 
-## Fase 1 preservada
+- Windows 10/11: scripts PowerShell, Python 3.12+, Node 20+, Chrome/Chromium e FFmpeg/FFprobe.
+- Linux CI: backend, Alembic, TypeScript, builds e Chromium/Playwright.
+- Dashboard: feature flag `VITE_SHOP_LIVE_ENABLED` desligada por padrão.
+- Agente: somente `127.0.0.1`, prefixo `/shop-live/v1`, tabelas `shop_live_*`, autenticação e dados próprios.
+- Extensão: Manifest V3, IDs explicitamente permitidos e host permissions somente para localhost.
+- TikTok/OBS/VPS: nenhuma dependência ou acesso.
 
-Continuam isolados: endpoints, WebSocket, origem permitida, autenticação local, persistência, migrações, simulador, compliance e auditoria.
-
-## Isolamento da Fase 2
-
-- novas tabelas somente com prefixo `shop_live_`;
-- extensão sem acesso ao domínio TikTok;
-- content script limitado a `127.0.0.1:8765` e `localhost:8765`;
-- biblioteca não move, publica ou reproduz arquivos automaticamente;
-- OBS não é dependência;
-- nenhuma importação dos módulos legados do BotLive.
-
-Os testes da fase cobrem migrações, biblioteca, autorização de mídia, roteiros, ordem/duração e permissões da extensão.
+Tickets HMAC temporários protegem URLs de mídia e WebSocket; o token principal não aparece nessas URLs. Arquivos, banco, backups e PIDs permanecem fora do Git.

@@ -1,1 +1,8 @@
 @import "tailwindcss";
+
+@keyframes shop-live-teleprompter {
+  from { transform: translateY(0); }
+  to { transform: translateY(-35%); }
+}
+.teleprompter-running { animation: shop-live-teleprompter 60s linear forwards; }
+@media (prefers-reduced-motion: reduce) { .teleprompter-running { animation: none; } }

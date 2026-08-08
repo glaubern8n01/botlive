@@ -1,57 +1,18 @@
-let socket = null;
-let reconnects = 0;
-let reconnectTimer = null;
-let token = "";
-const MAX_RECONNECTS = 5;
-const $ = id => document.getElementById(id);
-
-function setState(state) {
-  $('status').textContent = state;
-  for (const button of document.querySelectorAll('[data-command]')) button.hidden = button.dataset.state !== state;
-  $('stop').hidden = !['executando','pausada'].includes(state);
-}
-function connect() {
-  if (!token || socket?.readyState === WebSocket.OPEN) return;
-  clearTimeout(reconnectTimer); setState('conectando');
-  socket = new WebSocket(`ws://127.0.0.1:8765/shop-live/v1/events?token=${encodeURIComponent(token)}`);
-  socket.onopen = () => { reconnects=0; setState('pronto'); $('panel').hidden=false; };
-  socket.onclose = () => {
-    setState('offline');
-    if (token && reconnects < MAX_RECONNECTS) reconnectTimer=setTimeout(connect, Math.min(1000*2**reconnects++,8000));
-  };
-  socket.onmessage = message => {
-    const event = JSON.parse(message.data);
-    if (event.type === 'operation.context') renderContext(event.payload);
-    if (event.type === 'media.playback_state') renderPlayback(event.payload);
-    if (['simulation.started','simulation.resumed'].includes(event.type)) setState('executando');
-    if (event.type === 'simulation.paused') setState('pausada');
-    if (['simulation.ready','simulation.stopped','simulation.completed'].includes(event.type)) setState('pronto');
-    if (event.type === 'comment.received') $('comments').textContent=String(Number($('comments').textContent)+1);
-    if (event.type === 'compliance.warning_received') { $('alerts').textContent=String(Number($('alerts').textContent)+1); $('alert').textContent=String(event.payload.problem); }
-  };
-}
-function renderPlayback(state) {
-  let section=$('playback');
-  if(!section){section=document.createElement('section');section.id='playback';section.innerHTML='<label>Reprodução local</label><strong id="playback-media">Nenhuma mídia</strong><p><span id="playback-status">stopped</span> · <span id="playback-progress">0</span>s</p>';$('panel').prepend(section);}
-  $('playback-media').textContent=state.media?.name||'Nenhuma mídia';
-  $('playback-status').textContent=state.status;
-  $('playback-progress').textContent=String(Math.floor(state.position_seconds||0));
-}
-function renderContext(context) {
-  $('product').textContent=context.current_product?.name || 'Sem produto selecionado';
-  $('next').textContent=`Próximo: ${context.next_product?.name || '—'}`;
-  $('script').textContent=context.scripts?.map(block=>`${block.position}. ${block.text}`).join('\n') || 'Sem bloco de roteiro cadastrado.';
-  $('materials').textContent=context.materials?.map(item=>`${item.position}. ${item.planned_duration_seconds}s`).join(' · ') || 'Sem materiais ordenados.';
-}
-function command(action) {
-  if (socket?.readyState !== WebSocket.OPEN) return;
-  const sessionId=$('session').value.trim();
-  socket.send(JSON.stringify({action,speed:2,session_id:action==='start'&&sessionId?sessionId:null}));
-}
-$('auth').addEventListener('submit', event => { event.preventDefault(); token=$('token').value.trim(); if(!token)return; chrome.storage.session.set({shopLiveToken:token}); socket?.close(); connect(); });
-for (const button of document.querySelectorAll('[data-command]')) button.addEventListener('click',()=>command(button.dataset.command));
-$('stop').addEventListener('click',()=>command('stop'));
-function renderSnapshot(snapshot){$('snapshot-id').textContent=snapshot.snapshotId||'snapshot ausente';$('comments').textContent=String(snapshot.comments||0);if(snapshot.alert)$('alert').textContent=snapshot.alert;}
-chrome.runtime.onMessage.addListener(message => { if(message.type==='simulator.snapshot.forwarded') renderSnapshot(message.payload); });
-chrome.runtime.sendMessage({type:'simulator.snapshot.request'}, snapshot => { if(snapshot) renderSnapshot(snapshot); });
-chrome.storage.session.get('shopLiveToken').then(saved => { token=saved.shopLiveToken||''; if(token){$('token').value=token;connect();} });
+let socket=null,reconnects=0,reconnectTimer=null,token="",runtime=null;
+const MAX_RECONNECTS=8,$=id=>document.getElementById(id),API="http://127.0.0.1:8765";
+function setState(state){$('status').textContent=state;for(const button of document.querySelectorAll('[data-command]'))button.hidden=button.dataset.state!==state;$('stop').hidden=!['executando','pausada'].includes(state)}
+async function api(path,init={}){const response=await fetch(API+path,{...init,headers:{'content-type':'application/json','X-Shop-Live-Token':token,...init.headers}});if(!response.ok)throw new Error(await response.text());return response.status===204?null:response.json()}
+async function connect(){if(!token||socket?.readyState===WebSocket.OPEN)return;clearTimeout(reconnectTimer);setState('conectando');try{const auth=await api('/shop-live/v1/auth/ws-ticket',{method:'POST'});socket=new WebSocket(`ws://127.0.0.1:8765/shop-live/v1/events?expires=${auth.expires}&ticket=${auth.ticket}`);socket.onopen=async()=>{reconnects=0;setState('pronto');$('panel').hidden=false;const id=$('session').value.trim();if(id)try{renderRuntime(await api(`/shop-live/v1/sessions/${id}/runtime`))}catch{}};socket.onclose=()=>{setState('offline');if(token&&reconnects<MAX_RECONNECTS)reconnectTimer=setTimeout(connect,Math.min(1000*2**reconnects++,15000))};socket.onmessage=message=>{const event=JSON.parse(message.data);if(event.type==='operation.context')renderContext(event.payload);if(event.type==='media.playback_state')renderPlayback(event.payload);if(event.type==='session.runtime')renderRuntime(event.payload);if(event.type==='operation.alert')renderAlert(event.payload);if(['simulation.started','simulation.resumed'].includes(event.type))setState('executando');if(event.type==='simulation.paused')setState('pausada');if(['simulation.ready','simulation.stopped','simulation.completed'].includes(event.type))setState('pronto');if(['comment.received','comment.simulated'].includes(event.type))$('comments').textContent=String(Number($('comments').textContent)+1)}}catch{setState('offline')}}
+function ensureOperation(){let section=$('runtime');if(section)return;section=document.createElement('section');section.id='runtime';section.innerHTML='<label>Operação assistida</label><strong id="runtime-product">Sem produto</strong><small id="runtime-next">Próximo: —</small><pre id="runtime-script">Sem roteiro</pre><p><span id="runtime-clock">00:00</span> · <span id="runtime-media">Sem mídia</span></p>';$('panel').prepend(section)}
+function renderRuntime(state){runtime=state;ensureOperation();$('runtime-product').textContent=state.product?.name||'Sem produto';$('runtime-next').textContent=`Próximo: ${state.next?`item ${state.current_index+2}`:'—'}`;$('runtime-script').textContent=state.script?.text||'Sem roteiro vinculado';$('runtime-media').textContent=state.media?.name||'Sem mídia';$('runtime-clock').textContent=formatTime(state.elapsed_seconds||0);setState(state.status==='running'?'executando':state.status==='paused'?'pausada':'pronto')}
+function renderPlayback(state){let section=$('playback');if(!section){section=document.createElement('section');section.id='playback';section.innerHTML='<label>Reprodução local</label><strong id="playback-media">Nenhuma mídia</strong><p><span id="playback-status">stopped</span> · <span id="playback-progress">0</span>s</p>';$('panel').prepend(section)}$('playback-media').textContent=state.media?.name||'Nenhuma mídia';$('playback-status').textContent=state.status;$('playback-progress').textContent=String(Math.floor(state.position_seconds||0))}
+function renderContext(context){$('product').textContent=context.current_product?.name||'Sem produto selecionado';$('next').textContent=`Próximo: ${context.next_product?.name||'—'}`;$('script').textContent=context.scripts?.map(block=>`${block.position}. ${block.text}`).join('\n')||'Sem bloco de roteiro cadastrado.';$('materials').textContent=context.materials?.map(item=>`${item.position}. ${item.planned_duration_seconds}s`).join(' · ')||'Sem materiais ordenados.'}
+function renderAlert(payload){$('alerts').textContent=String(Number($('alerts').textContent)+1);$('alert').textContent=(payload.problems||[]).join(', ')||'Alerta local'}
+function formatTime(value){return `${String(Math.floor(value/60)).padStart(2,'0')}:${String(value%60).padStart(2,'0')}`}
+async function command(action){const id=$('session').value.trim();if(!id)return;const map={start:'start_rehearsal',pause:'pause',resume:'resume',stop:'stop'};try{renderRuntime(await api(`/shop-live/v1/sessions/${id}/runtime/control`,{method:'POST',body:JSON.stringify({action:map[action]})}))}catch(error){$('alert').textContent=String(error.message)}}
+$('auth').addEventListener('submit',event=>{event.preventDefault();token=$('token').value.trim();if(!token)return;chrome.storage.session.set({shopLiveToken:token,shopLiveSession:$('session').value.trim()});socket?.close();void connect()});
+for(const button of document.querySelectorAll('[data-command]'))button.addEventListener('click',()=>void command(button.dataset.command));$('stop').addEventListener('click',()=>void command('stop'));
+function renderSnapshot(snapshot){$('snapshot-id').textContent=snapshot.snapshotId||'snapshot ausente';$('comments').textContent=String(snapshot.comments||0);if(snapshot.alert)$('alert').textContent=snapshot.alert}
+chrome.runtime.onMessage.addListener(message=>{if(message.type==='simulator.snapshot.forwarded')renderSnapshot(message.payload)});chrome.runtime.sendMessage({type:'simulator.snapshot.request'},snapshot=>{if(snapshot)renderSnapshot(snapshot)});
+chrome.storage.session.get(['shopLiveToken','shopLiveSession']).then(saved=>{token=saved.shopLiveToken||'';$('session').value=saved.shopLiveSession||'';if(token){$('token').value=token;void connect()}});
+setInterval(()=>{if(runtime?.status==='running'){runtime.elapsed_seconds=(runtime.elapsed_seconds||0)+1;if($('runtime-clock'))$('runtime-clock').textContent=formatTime(runtime.elapsed_seconds)}},1000);

@@ -7,26 +7,19 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from .auth import require_http_auth, require_websocket_auth, valid_token
+from .auth import media_ticket, require_http_auth, valid_media_ticket, valid_websocket_ticket, websocket_ticket
 from .database import SessionLocal, get_db
 from .models import AuditEvent, LiveSession, MediaAsset, MediaPlayback, Product, ScriptBlock, SessionMaterial
 from .schemas import MediaAssetIn, PlaybackControl, ProductIn, ScriptBlockIn, SessionIn, SessionMaterialIn, SimulationControl
 from .media_storage import inspect_media, safe_path, store_upload
+from .realtime import CLIENTS, CLIENT_LOCKS, broadcast
+from .advanced import router as advanced_router
 from .simulator import scenario, stream
 import os
+import time
 from pathlib import Path
 
-CLIENTS: set[WebSocket] = set()
-CLIENT_LOCKS: dict[WebSocket,asyncio.Lock] = {}
 PLAYBACK_TASKS: dict[str,asyncio.Task] = {}
-
-async def broadcast(event: dict) -> None:
-    stale=[]
-    for client in list(CLIENTS):
-        try:
-            async with CLIENT_LOCKS[client]: await client.send_json(event)
-        except Exception: stale.append(client)
-    for client in stale: CLIENTS.discard(client)
 
 def allowed_origins() -> list[str]:
     return [x.strip() for x in os.getenv("SHOP_LIVE_ALLOWED_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
@@ -41,6 +34,7 @@ def allowed_websocket_origin(origin: str | None) -> bool:
 
 app = FastAPI(title="BotLive Shop Local Agent", version="0.3.0", docs_url="/shop-live/docs")
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins(), allow_credentials=False, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Content-Type", "X-Shop-Live-Token"])
+app.include_router(advanced_router)
 
 def serialize(row) -> dict:
     data = {column.name: getattr(row, column.name) for column in row.__table__.columns}
@@ -71,7 +65,12 @@ def interrupt_if_active(session_id: str) -> None:
 AUTH = [Depends(require_http_auth)]
 
 @app.get("/shop-live/v1/health", dependencies=AUTH)
-def health(): return {"ok": True, "mode": "simulation", "external_actions": False, "database": "migration-managed"}
+def health(): return {"ok": True, "mode": "assisted-local", "simulator_available": True, "external_actions": False, "database": "migration-managed"}
+
+@app.post("/shop-live/v1/auth/ws-ticket", dependencies=AUTH)
+def get_ws_ticket():
+    expires=int(time.time())+120
+    return {"ticket":websocket_ticket(expires),"expires":expires}
 
 @app.post("/shop-live/v1/products", status_code=201, dependencies=AUTH)
 def create_product(payload: ProductIn, db: Session = Depends(get_db)):
@@ -79,8 +78,12 @@ def create_product(payload: ProductIn, db: Session = Depends(get_db)):
     record(db, "product.created", {"product_id": item.id}); return serialize(item)
 
 @app.get("/shop-live/v1/products", dependencies=AUTH)
-def list_products(db: Session = Depends(get_db)):
-    return [serialize(row) for row in db.scalars(select(Product).order_by(Product.created_at)).all()]
+def list_products(q: str = "", category: str = "", active: bool | None = None, db: Session = Depends(get_db)):
+    query=select(Product).order_by(Product.created_at)
+    if q: query=query.where(Product.name.ilike(f"%{q.strip()}%"))
+    if category: query=query.where(Product.category==category)
+    if active is not None: query=query.where(Product.active==active)
+    return [serialize(row) for row in db.scalars(query).all()]
 
 @app.put("/shop-live/v1/products/{item_id}", dependencies=AUTH)
 def update_product(item_id: str, payload: ProductIn, db: Session = Depends(get_db)):
@@ -95,6 +98,7 @@ def update_product(item_id: str, payload: ProductIn, db: Session = Depends(get_d
 def delete_product(item_id: str, db: Session = Depends(get_db)):
     item = db.get(Product, item_id)
     if not item: raise HTTPException(404, "Produto inexistente")
+    if item.sessions or db.scalar(select(MediaAsset).where(MediaAsset.product_id==item_id).limit(1)) or db.scalar(select(ScriptBlock).where(ScriptBlock.product_id==item_id).limit(1)): raise HTTPException(409,"Produto em uso; arquive-o em vez de excluir")
     before = serialize(item); db.delete(item); db.commit(); record(db, "product.deleted", {"before": before})
 
 @app.post("/shop-live/v1/sessions", status_code=201, dependencies=AUTH)
@@ -138,10 +142,11 @@ def create_media(payload: MediaAssetIn, db: Session = Depends(get_db)):
     record(db, "media.created", {"media_id":item.id,"kind":item.kind,"authorized":item.authorized}); return serialize(item)
 
 @app.get("/shop-live/v1/media", dependencies=AUTH)
-def list_media(kind: str | None = None, product_id: str | None = None, db: Session = Depends(get_db)):
+def list_media(kind: str | None = None, product_id: str | None = None, q: str = "", db: Session = Depends(get_db)):
     query = select(MediaAsset).order_by(MediaAsset.created_at)
     if kind: query = query.where(MediaAsset.kind == kind)
     if product_id: query = query.where(MediaAsset.product_id == product_id)
+    if q: query=query.where(MediaAsset.name.ilike(f"%{q.strip()}%"))
     return [serialize(row) for row in db.scalars(query).all()]
 
 @app.post("/shop-live/v1/media/upload", status_code=201, dependencies=AUTH)
@@ -164,15 +169,21 @@ async def upload_media(file: UploadFile = File(...), product_id: str | None = Fo
         record(db,"media.upload_failed",{"filename":Path(file.filename or "").name,"reason":type(error).__name__},result="error")
         raise HTTPException(500,"Falha ao armazenar mídia")
 
+@app.get("/shop-live/v1/media/{item_id}/ticket", dependencies=AUTH)
+def get_media_ticket(item_id: str, db: Session = Depends(get_db)):
+    if not db.get(MediaAsset,item_id): raise HTTPException(404,"Mídia inexistente")
+    expires=int(time.time())+300
+    return {"url":f"/shop-live/v1/media/{item_id}/content?expires={expires}&ticket={media_ticket(item_id,expires)}","expires":expires}
+
 @app.get("/shop-live/v1/media/{item_id}/content")
-def media_content(item_id: str, token: str | None = None, db: Session = Depends(get_db)):
-    if not valid_token(token): raise HTTPException(401,"Token local inválido")
+def media_content(item_id: str, expires: int = 0, ticket: str | None = None, db: Session = Depends(get_db)):
+    if not valid_media_ticket(item_id,expires,ticket): raise HTTPException(401,"Acesso temporário inválido")
     item=db.get(MediaAsset,item_id)
     if not item or not item.stored_name: raise HTTPException(404,"Arquivo inexistente")
     try: path=safe_path(item.stored_name)
     except ValueError: raise HTTPException(403,"Caminho de mídia inválido")
     if not path.is_file(): raise HTTPException(404,"Arquivo inexistente")
-    return FileResponse(path,media_type=item.mime_type,filename=item.name,content_disposition_type="inline")
+    return FileResponse(path,media_type=item.mime_type,filename=item.name,content_disposition_type="inline",headers={"Cache-Control":"private, no-store","X-Content-Type-Options":"nosniff"})
 
 @app.put("/shop-live/v1/media/{item_id}", dependencies=AUTH)
 def update_media(item_id: str, payload: MediaAssetIn, db: Session = Depends(get_db)):
@@ -213,6 +224,13 @@ def list_script_blocks(product_id: str, db: Session = Depends(get_db)):
     rows = db.scalars(select(ScriptBlock).where(ScriptBlock.product_id == product_id).order_by(ScriptBlock.position)).all()
     return [serialize(row) for row in rows]
 
+@app.get("/shop-live/v1/scripts", dependencies=AUTH)
+def list_all_script_blocks(q: str = "", product_id: str | None = None, db: Session = Depends(get_db)):
+    query=select(ScriptBlock).order_by(ScriptBlock.product_id,ScriptBlock.position)
+    if q: query=query.where(ScriptBlock.text.ilike(f"%{q.strip()}%"))
+    if product_id: query=query.where(ScriptBlock.product_id==product_id)
+    return [serialize(row) for row in db.scalars(query).all()]
+
 @app.put("/shop-live/v1/scripts/{item_id}", dependencies=AUTH)
 def update_script(item_id: str, payload: ScriptBlockIn, db: Session = Depends(get_db)):
     item=db.get(ScriptBlock,item_id)
@@ -238,6 +256,14 @@ def set_session_materials(session_id: str, payload: list[SessionMaterialIn], db:
     media = db.scalars(select(MediaAsset).where(MediaAsset.id.in_(ids))).all() if ids else []
     if set(ids) != {item.id for item in media}: raise HTTPException(422, "Mídia inexistente")
     if any(not item.authorized for item in media): raise HTTPException(422, "Somente mídia autorizada pode entrar na sessão")
+    for item in payload:
+        asset=next(value for value in media if value.id==item.media_id)
+        if item.product_id and not db.get(Product,item.product_id): raise HTTPException(422,"Produto do bloco inexistente")
+        if item.script_id:
+            script=db.get(ScriptBlock,item.script_id)
+            if not script: raise HTTPException(422,"Roteiro do bloco inexistente")
+            if item.product_id and script.product_id != item.product_id: raise HTTPException(422,"Roteiro não pertence ao produto do bloco")
+        if item.product_id and asset.product_id and asset.product_id != item.product_id: raise HTTPException(422,"Mídia não pertence ao produto do bloco")
     db.query(SessionMaterial).filter(SessionMaterial.session_id == session_id).delete()
     db.add_all([SessionMaterial(session_id=session_id, **item.model_dump()) for item in payload]); db.commit()
     record(db, "session.materials_updated", {"count":len(payload)}, session_id)
@@ -295,7 +321,7 @@ async def control_playback(session_id: str, payload: PlaybackControl, db: Sessio
     if not queue:
         record(db,"playback.failed",{"action":payload.action,"reason":"empty_queue"},session_id,result="blocked")
         raise HTTPException(422,"A sessao nao possui midias")
-    events={"start":"playback.started","pause":"playback.paused","resume":"playback.resumed","next":"playback.advanced","stop":"playback.stopped"}
+    events={"start":"playback.started","pause":"playback.paused","resume":"playback.resumed","next":"playback.advanced","previous":"playback.returned","seek":"playback.seeked","volume":"playback.volume_changed","stop":"playback.stopped"}
     if payload.action == "start": state.queue_index=0;state.media_id=queue[0].media_id;state.position_seconds=0;state.status="playing"
     elif payload.action == "pause":
         if state.status != "playing": raise HTTPException(409,"Reproducao nao iniciada")
@@ -306,9 +332,17 @@ async def control_playback(session_id: str, payload: PlaybackControl, db: Sessio
     elif payload.action == "next":
         if state.queue_index + 1 >= len(queue): state.status="stopped";state.position_seconds=0
         else: state.queue_index+=1;state.media_id=queue[state.queue_index].media_id;state.position_seconds=0;state.status="playing"
+    elif payload.action == "previous":
+        state.queue_index=max(0,state.queue_index-1);state.media_id=queue[state.queue_index].media_id;state.position_seconds=0;state.status="playing"
+    elif payload.action == "seek":
+        if payload.value is None: raise HTTPException(422,"Informe a posição")
+        state.position_seconds=max(0,min(float(payload.value),queue[state.queue_index].planned_duration_seconds))
+    elif payload.action == "volume":
+        if payload.value is None or not 0 <= payload.value <= 1: raise HTTPException(422,"Volume deve estar entre 0 e 1")
+        state.volume=float(payload.value)
     else: state.status="stopped";state.position_seconds=0
     db.add(state);db.commit();db.refresh(state);record(db,events[payload.action],{"media_id":state.media_id,"queue_index":state.queue_index},session_id)
-    if payload.action in {"start","resume","next"} and (session_id not in PLAYBACK_TASKS or PLAYBACK_TASKS[session_id].done()):
+    if payload.action in {"start","resume","next","previous"} and (session_id not in PLAYBACK_TASKS or PLAYBACK_TASKS[session_id].done()):
         PLAYBACK_TASKS[session_id]=asyncio.create_task(playback_clock(session_id))
     result=playback_payload(db,session_id);await broadcast({"type":"media.playback_state","payload":result});return result
 
@@ -330,7 +364,9 @@ def simulator_page():
 
 @app.websocket("/shop-live/v1/events")
 async def events(socket: WebSocket):
-    if not allowed_websocket_origin(socket.headers.get("origin")) or not await require_websocket_auth(socket):
+    try: expires=int(socket.query_params.get("expires") or 0)
+    except ValueError: expires=0
+    if not allowed_websocket_origin(socket.headers.get("origin")) or not valid_websocket_ticket(expires,socket.query_params.get("ticket")):
         await socket.close(code=1008); return
     await socket.accept()
     CLIENTS.add(socket)

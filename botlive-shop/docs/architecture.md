@@ -1,15 +1,18 @@
 # Arquitetura e isolamento
 
-Data: 2026-08-08. O módulo vive em `botlive-shop/`. O BotLive existente mantém seu fluxo captura/replay → cortes → fila → adapters. Nenhum serviço legado é importado ou alterado pelo Shop LIVE.
+O módulo vive em `botlive-shop/`; apenas a rota React condicionada pela feature flag toca o dashboard existente. Nenhum serviço ou módulo do BotLive legado é importado.
 
-A integração visível é uma aba React condicionada por `VITE_SHOP_LIVE_ENABLED=true`. O agente FastAPI usa processo, prefixo `/shop-live/v1`, SQLite, Alembic, WebSocket e autenticação próprios. A Fase 1 permanece: simulador seed 42 → eventos tipados → compliance → auditoria e dashboard.
+```text
+Dashboard / extensão MV3
+        │ HTTP + WebSocket com tickets temporários
+        ▼
+Agente FastAPI em 127.0.0.1
+        ├── biblioteca local autorizada
+        ├── runtime / fila / teleprompter / diagnósticos
+        ├── auditoria e relatórios
+        └── SQLite gerido exclusivamente por Alembic
+```
 
-## Fluxo principal corrigido
+O runtime persistido reúne sessão, fila, player, teleprompter, alertas e relatório. Dashboard e side panel recebem o mesmo estado. A câmera e o microfone permanecem no `MediaStream` do navegador e não são gravados nem enviados ao agente.
 
-Biblioteca local autorizada → produto → roteiro/blocos → ordem e duração da sessão → agente local autenticado → extensão MV3/side panel → checklist humano no TikTok LIVE Studio.
-
-A extensão inicia limitada à página simulada local e não possui host permission para TikTok. Ações sem API oficial são instruções manuais assistidas. Nenhuma ação real ocorre sem autorização explícita.
-
-OBS não pertence ao fluxo principal. Um possível `ObsWebSocketAdapter` fica fora das próximas prioridades, opcional, desabilitado e sem dependência para instalação ou operação.
-
-As tabelas usam exclusivamente o prefixo `shop_live_`; Alembic é a única fonte do schema. A biblioteca registra caminhos locais, duração e evidência de autorização, mas não publica nem reproduz mídia automaticamente.
+O TikTok LIVE Studio é preparado e operado manualmente. O adapter oficial permanece inerte até revisão, escopos, credenciais e autorização explícita. A extensão não possui host permission para TikTok. OBS é futuro opcional e não integra instalação ou operação.

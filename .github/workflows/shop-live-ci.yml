@@ -51,3 +51,36 @@ jobs:
         working-directory: dashboard
         env: {VITE_SHOP_LIVE_ENABLED: "true"}
         run: npm run build
+  shop-live-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - name: Install backend dependencies
+        working-directory: botlive-shop/apps/local-agent
+        run: python -m pip install -r requirements-dev.txt
+      - name: Alembic incremental schema
+        working-directory: botlive-shop/apps/local-agent
+        env: {SHOP_LIVE_DATABASE_URL: "sqlite:///./windows-ci.db"}
+        run: python -m alembic upgrade head
+      - name: Python tests
+        working-directory: botlive-shop
+        run: python -m unittest discover -s tests -t . -v
+      - uses: actions/setup-node@v4
+        with: {node-version: "20", cache: npm, cache-dependency-path: dashboard/package-lock.json}
+      - name: TypeScript and builds
+        working-directory: dashboard
+        shell: pwsh
+        run: |
+          npm ci
+          npm run lint
+          $env:VITE_SHOP_LIVE_ENABLED='false'; npm run build
+          $env:VITE_SHOP_LIVE_ENABLED='true'; npm run build
+      - name: PowerShell syntax and extension syntax
+        shell: pwsh
+        run: |
+          Get-ChildItem botlive-shop/scripts/*.ps1 | ForEach-Object { [void][scriptblock]::Create((Get-Content -Raw $_.FullName)) }
+          node --check botlive-shop/apps/extension/service-worker.js
+          node --check botlive-shop/apps/extension/content-script.js
+          node --check botlive-shop/apps/extension/sidepanel.js

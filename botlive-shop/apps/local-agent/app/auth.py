@@ -1,5 +1,7 @@
 import hmac
+import hashlib
 import os
+import time
 from fastapi import Header, HTTPException, WebSocket
 
 def auth_disabled() -> bool:
@@ -19,3 +21,17 @@ def require_http_auth(x_shop_live_token: str | None = Header(default=None)) -> N
 
 async def require_websocket_auth(socket: WebSocket) -> bool:
     return valid_token(socket.query_params.get("token"))
+
+def media_ticket(media_id: str, expires: int) -> str:
+    secret=configured_token() or "controlled-test-only"
+    return hmac.new(secret.encode(),f"{media_id}:{expires}".encode(),hashlib.sha256).hexdigest()
+
+def valid_media_ticket(media_id: str, expires: int, candidate: str | None) -> bool:
+    return bool(candidate and expires >= int(time.time()) and expires <= int(time.time())+600 and hmac.compare_digest(media_ticket(media_id,expires),candidate))
+
+def websocket_ticket(expires: int) -> str:
+    secret=configured_token() or "controlled-test-only"
+    return hmac.new(secret.encode(),f"websocket:{expires}".encode(),hashlib.sha256).hexdigest()
+
+def valid_websocket_ticket(expires: int, candidate: str | None) -> bool:
+    return bool(candidate and expires >= int(time.time()) and expires <= int(time.time())+180 and hmac.compare_digest(websocket_ticket(expires),candidate))

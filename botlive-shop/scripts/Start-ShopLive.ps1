@@ -1,0 +1,7 @@
+param([ValidateSet('production','development')]$Mode='production')
+$ErrorActionPreference='Stop';$Root=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path;$Run=Join-Path $Root 'data\run';New-Item -ItemType Directory -Force -Path $Run|Out-Null
+$EnvFile=Join-Path $Root '.env.local';if(-not (Test-Path $EnvFile)){throw 'Execute Install-ShopLive.ps1 primeiro'}
+Get-Content -LiteralPath $EnvFile|ForEach-Object{if($_ -match '^([^#=]+)=(.*)$'){[Environment]::SetEnvironmentVariable($Matches[1],$Matches[2],'Process')}}
+$Agent=Join-Path $Root 'apps\local-agent';Push-Location $Agent;try{$AgentProcess=Start-Process -FilePath '.\.venv\Scripts\python.exe' -ArgumentList @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8765') -PassThru -WindowStyle Hidden}finally{Pop-Location};$AgentProcess.Id|Set-Content -LiteralPath (Join-Path $Run 'agent.pid')
+$Dashboard=Resolve-Path (Join-Path $Root '..\dashboard');if($Mode -eq 'development'){$Ui=Start-Process -FilePath 'npm.cmd' -ArgumentList @('run','dev','--','--host','127.0.0.1','--port','3017') -WorkingDirectory $Dashboard -PassThru -WindowStyle Hidden}else{$Ui=Start-Process -FilePath 'python.exe' -ArgumentList @('-m','http.server','3017','--bind','127.0.0.1','--directory',(Join-Path $Dashboard 'dist')) -PassThru -WindowStyle Hidden};$Ui.Id|Set-Content -LiteralPath (Join-Path $Run 'dashboard.pid')
+Write-Host "Shop LIVE iniciado em modo ${Mode}: http://127.0.0.1:3017/shop-live"
