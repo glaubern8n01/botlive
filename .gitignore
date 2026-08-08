@@ -18,6 +18,7 @@ dist/
 .ruff_cache/
 *.log
 run_logs/
+test-results/
 
 *.mp4
 *.mov
