@@ -41,6 +41,19 @@ class ApiTests(unittest.TestCase):
     def test_session_rejects_unknown_product(self):
         self.assertEqual(self.client.post("/shop-live/v1/sessions",json={"title":"Sessão teste","estimated_minutes":30,"product_ids":["missing"]}).status_code,422)
 
+    def test_authorized_media_scripts_and_session_order(self):
+        product=self.product()
+        session=self.client.post("/shop-live/v1/sessions",json={"title":"Operação assistida","estimated_minutes":30,"product_ids":[product["id"]]}).json()
+        blocked=self.client.post("/shop-live/v1/media",json={"product_id":product["id"],"kind":"video","name":"Sem autorização","local_path":"media/demo.mp4","authorized":True})
+        self.assertEqual(blocked.status_code,422)
+        media=self.client.post("/shop-live/v1/media",json={"product_id":product["id"],"kind":"video","name":"Demonstração autorizada","local_path":"media/demo.mp4","duration_seconds":90,"authorized":True,"authorization_source":"Produção própria"}).json()
+        script=self.client.post("/shop-live/v1/scripts",json={"product_id":product["id"],"kind":"demonstracao","position":1,"duration_seconds":60,"text":"Mostre o produto com presença humana."})
+        self.assertEqual(script.status_code,201)
+        self.assertEqual(self.client.get(f'/shop-live/v1/products/{product["id"]}/scripts').json()[0]["kind"],"demonstracao")
+        planned=self.client.put(f'/shop-live/v1/sessions/{session["id"]}/materials',json=[{"media_id":media["id"],"position":1,"planned_duration_seconds":75}])
+        self.assertEqual(planned.status_code,200)
+        self.assertEqual(self.client.get(f'/shop-live/v1/sessions/{session["id"]}/materials').json()["items"][0]["planned_duration_seconds"],75)
+
     def test_websocket_start_pause_resume_stop(self):
         with self.client.websocket_connect("/shop-live/v1/events",headers={"origin":"http://localhost:3000"}) as ws:
             self.assertEqual(ws.receive_json()["type"],"simulation.ready")
@@ -66,6 +79,14 @@ class ApiTests(unittest.TestCase):
                 with self.client.websocket_connect("/shop-live/v1/events?token=wrong",headers={"origin":"http://localhost:3000"}) as ws: ws.receive_json()
             with self.client.websocket_connect("/shop-live/v1/events?token=correct",headers={"origin":"http://localhost:3000"}) as ws:
                 self.assertEqual(ws.receive_json()["type"],"simulation.ready")
+
+    def test_chrome_extension_origin_requires_valid_shape_and_token(self):
+        chrome_origin="chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+        with mock.patch.dict(os.environ,{"SHOP_LIVE_AUTH_DISABLED":"false","SHOP_LIVE_LOCAL_TOKEN":"correct"}):
+            with self.client.websocket_connect("/shop-live/v1/events?token=correct",headers={"origin":chrome_origin}) as ws:
+                self.assertEqual(ws.receive_json()["type"],"simulation.ready")
+            with self.assertRaises(Exception):
+                with self.client.websocket_connect("/shop-live/v1/events?token=wrong",headers={"origin":chrome_origin}) as ws: ws.receive_json()
 
     def _until(self,ws,expected):
         for _ in range(80):

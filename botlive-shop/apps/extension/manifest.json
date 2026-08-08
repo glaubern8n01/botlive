@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "BotLive Shop LIVE — Simulação",
+  "version": "0.1.0",
+  "description": "Painel assistido do Shop LIVE. Não executa ações em contas reais.",
+  "permissions": ["sidePanel", "storage"],
+  "host_permissions": ["http://127.0.0.1:8765/*", "http://localhost:8765/*"],
+  "background": {"service_worker": "service-worker.js", "type": "module"},
+  "side_panel": {"default_path": "sidepanel.html"},
+  "content_scripts": [{
+    "matches": ["http://127.0.0.1:8765/shop-live/simulator-page*", "http://localhost:8765/shop-live/simulator-page*"],
+    "js": ["content-script.js"],
+    "run_at": "document_idle"
+  }],
+  "action": {"default_title": "Abrir Shop LIVE"},
+  "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"}
+}

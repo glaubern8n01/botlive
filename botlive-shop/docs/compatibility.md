@@ -1,14 +1,18 @@
 # Compatibilidade
 
-Linha de base em 2026-08-08, antes da alteração:
+A branch limpa foi criada sobre `origin/main` em `3f2eca1`. O dashboard legado continua passando em typecheck e builds com a feature flag ligada e desligada. A suíte anterior de 151 testes pertencia a 90 commits não relacionados e não foi transplantada.
 
-- dashboard `npm run lint`: aprovado;
-- dashboard `npm run build`: aprovado, com aviso de chunk >500 kB;
-- Pytest com temporário isolado: 151 aprovados e 1 falha preexistente em `test_real_size_geometry_uses_64mb_then_remainder`;
-- sem `--basetemp`, 43 setups falharam por permissão do temporário global do Windows.
+## Fase 1 preservada
 
-Qualquer falha adicional bloqueia a entrega. A divergência preexistente de `chunk_geometry` não faz parte deste módulo.
+Continuam isolados: endpoints, WebSocket, origem permitida, autenticação local, persistência, migrações, simulador, compliance e auditoria.
 
-## Branch limpa da Fase 1
+## Isolamento da Fase 2
 
-A branch foi recriada sobre `origin/main` em `3f2eca1`. Essa base não contém a pasta rastreada `tests/`; a suíte de 151 testes observada anteriormente pertencia aos 90 commits não relacionados da branch antiga e não foi copiada. Validações disponíveis na base limpa: typecheck e builds Vite off/on. O Shop LIVE possui sua própria suíte isolada com endpoint, WebSocket, origem, persistência, migração, simulador, compliance e contrato do dashboard.
+- novas tabelas somente com prefixo `shop_live_`;
+- extensão sem acesso ao domínio TikTok;
+- content script limitado a `127.0.0.1:8765` e `localhost:8765`;
+- biblioteca não move, publica ou reproduz arquivos automaticamente;
+- OBS não é dependência;
+- nenhuma importação dos módulos legados do BotLive.
+
+Os testes da fase cobrem migrações, biblioteca, autorização de mídia, roteiros, ordem/duração e permissões da extensão.

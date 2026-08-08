@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from .auth import require_http_auth, require_websocket_auth
 from .database import SessionLocal, get_db
-from .models import AuditEvent, LiveSession, Product
-from .schemas import ProductIn, SessionIn, SimulationControl
+from .models import AuditEvent, LiveSession, MediaAsset, Product, ScriptBlock, SessionMaterial
+from .schemas import MediaAssetIn, ProductIn, ScriptBlockIn, SessionIn, SessionMaterialIn, SimulationControl
 from .simulator import scenario, stream
 import os
 
 def allowed_origins() -> list[str]:
     return [x.strip() for x in os.getenv("SHOP_LIVE_ALLOWED_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
+
+def allowed_websocket_origin(origin: str | None) -> bool:
+    return bool(origin in allowed_origins() or (origin and re.fullmatch(r"chrome-extension://[a-p]{32}", origin)))
 
 app = FastAPI(title="BotLive Shop Local Agent", version="0.3.0", docs_url="/shop-live/docs")
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins(), allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-Shop-Live-Token"])
@@ -77,9 +82,55 @@ def audit(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), db
 @app.get("/shop-live/v1/simulation/{seed}", dependencies=AUTH)
 def simulation(seed: int): return scenario(seed)
 
+@app.post("/shop-live/v1/media", status_code=201, dependencies=AUTH)
+def create_media(payload: MediaAssetIn, db: Session = Depends(get_db)):
+    if payload.product_id and not db.get(Product, payload.product_id): raise HTTPException(422, "Produto inexistente")
+    if payload.authorized and not payload.authorization_source.strip(): raise HTTPException(422, "Informe a origem da autorização")
+    item = MediaAsset(**payload.model_dump()); db.add(item); db.commit(); db.refresh(item)
+    record(db, "media.created", {"media_id":item.id,"kind":item.kind,"authorized":item.authorized}); return serialize(item)
+
+@app.get("/shop-live/v1/media", dependencies=AUTH)
+def list_media(kind: str | None = None, product_id: str | None = None, db: Session = Depends(get_db)):
+    query = select(MediaAsset).order_by(MediaAsset.created_at)
+    if kind: query = query.where(MediaAsset.kind == kind)
+    if product_id: query = query.where(MediaAsset.product_id == product_id)
+    return [serialize(row) for row in db.scalars(query).all()]
+
+@app.post("/shop-live/v1/scripts", status_code=201, dependencies=AUTH)
+def create_script_block(payload: ScriptBlockIn, db: Session = Depends(get_db)):
+    if not db.get(Product, payload.product_id): raise HTTPException(422, "Produto inexistente")
+    item = ScriptBlock(**payload.model_dump()); db.add(item); db.commit(); db.refresh(item)
+    record(db, "script.created", {"script_id":item.id,"product_id":item.product_id}); return serialize(item)
+
+@app.get("/shop-live/v1/products/{product_id}/scripts", dependencies=AUTH)
+def list_script_blocks(product_id: str, db: Session = Depends(get_db)):
+    rows = db.scalars(select(ScriptBlock).where(ScriptBlock.product_id == product_id).order_by(ScriptBlock.position)).all()
+    return [serialize(row) for row in rows]
+
+@app.put("/shop-live/v1/sessions/{session_id}/materials", dependencies=AUTH)
+def set_session_materials(session_id: str, payload: list[SessionMaterialIn], db: Session = Depends(get_db)):
+    if not db.get(LiveSession, session_id): raise HTTPException(404, "Sessão inexistente")
+    ids = [item.media_id for item in payload]
+    media = db.scalars(select(MediaAsset).where(MediaAsset.id.in_(ids))).all() if ids else []
+    if set(ids) != {item.id for item in media}: raise HTTPException(422, "Mídia inexistente")
+    if any(not item.authorized for item in media): raise HTTPException(422, "Somente mídia autorizada pode entrar na sessão")
+    db.query(SessionMaterial).filter(SessionMaterial.session_id == session_id).delete()
+    db.add_all([SessionMaterial(session_id=session_id, **item.model_dump()) for item in payload]); db.commit()
+    record(db, "session.materials_updated", {"count":len(payload)}, session_id)
+    return {"items":[item.model_dump() for item in sorted(payload,key=lambda x:x.position)]}
+
+@app.get("/shop-live/v1/sessions/{session_id}/materials", dependencies=AUTH)
+def list_session_materials(session_id: str, db: Session = Depends(get_db)):
+    rows = db.scalars(select(SessionMaterial).where(SessionMaterial.session_id == session_id).order_by(SessionMaterial.position)).all()
+    return {"items":[serialize(row) for row in rows]}
+
+@app.get("/shop-live/simulator-page", response_class=HTMLResponse)
+def simulator_page():
+    return """<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'><title>Shop LIVE Simulator</title></head><body data-shop-live-simulator='true'><main><h1>Página simulada TikTok Shop LIVE</h1><p>Nenhuma conta real é acessada.</p><section data-current-product='Produto simulado A'>Produto atual: Produto simulado A</section><section data-next-product='Produto simulado B'>Próximo: Produto simulado B</section><section data-comment-count='3'>3 comentários simulados</section><div role='alert' data-alert-level='attention'>Áudio baixo (simulado)</div></main></body></html>"""
+
 @app.websocket("/shop-live/v1/events")
 async def events(socket: WebSocket):
-    if socket.headers.get("origin") not in allowed_origins() or not await require_websocket_auth(socket):
+    if not allowed_websocket_origin(socket.headers.get("origin")) or not await require_websocket_auth(socket):
         await socket.close(code=1008); return
     await socket.accept()
     await socket.send_json({"type": "simulation.ready", "payload": {"seed": 42, "state": "ready"}})

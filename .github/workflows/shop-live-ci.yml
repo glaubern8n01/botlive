@@ -30,6 +30,9 @@ jobs:
       - name: TypeScript
         working-directory: dashboard
         run: npm run lint
+      - name: Validate Chrome extension scripts
+        working-directory: botlive-shop/apps/extension
+        run: node --check service-worker.js && node --check content-script.js && node --check sidepanel.js
       - name: Build with Shop LIVE disabled
         working-directory: dashboard
         env: {VITE_SHOP_LIVE_ENABLED: "false"}

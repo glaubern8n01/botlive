@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from uuid import uuid4
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, JSON, String, Table
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Table, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
@@ -46,3 +46,32 @@ class AuditEvent(Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     correlation_id: Mapped[str] = mapped_column(String(36), default=uid)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+class MediaAsset(Base):
+    __tablename__ = "shop_live_media_assets"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    product_id: Mapped[str | None] = mapped_column(ForeignKey("shop_live_products.id"), nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    name: Mapped[str] = mapped_column(String(160))
+    local_path: Mapped[str] = mapped_column(Text)
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    authorized: Mapped[bool] = mapped_column(Boolean, default=False)
+    authorization_source: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+class ScriptBlock(Base):
+    __tablename__ = "shop_live_script_blocks"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    product_id: Mapped[str] = mapped_column(ForeignKey("shop_live_products.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    position: Mapped[int] = mapped_column(Integer)
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=60)
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+class SessionMaterial(Base):
+    __tablename__ = "shop_live_session_materials"
+    session_id: Mapped[str] = mapped_column(ForeignKey("shop_live_sessions.id", ondelete="CASCADE"), primary_key=True)
+    media_id: Mapped[str] = mapped_column(ForeignKey("shop_live_media_assets.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer)
+    planned_duration_seconds: Mapped[int] = mapped_column(Integer)

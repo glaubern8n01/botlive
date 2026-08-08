@@ -1,13 +1,15 @@
 # BotLive Shop LIVE
 
-Módulo isolado e desabilitado por padrão para preparação e acompanhamento humano de TikTok Shop LIVE. A versão inicial opera somente com simulador determinístico; não publica, comenta, inicia LIVE nem fixa produtos em conta real.
+Módulo isolado e desabilitado por padrão para preparação e acompanhamento humano de TikTok Shop LIVE. Não publica, comenta, inicia LIVE nem fixa produtos em conta real.
 
-## Uso
+## Agente local
 
-Ative `VITE_SHOP_LIVE_ENABLED=true` no dashboard e rode `npm run dev`. Para testar o núcleo: `python -m unittest discover botlive-shop/tests -v`.
+Configure um `SHOP_LIVE_LOCAL_TOKEN` longo, instale `apps/local-agent/requirements-dev.txt`, execute `alembic upgrade head` e rode `uvicorn app.main:app --reload --port 8765`. O dashboard solicita o token e o mantém apenas na sessão da aba.
 
-O agente local independente fica em `apps/local-agent`, usa a rota própria `/shop-live/v1` e porta 8765. Configure um `SHOP_LIVE_LOCAL_TOKEN` longo, instale `requirements-dev.txt` em ambiente virtual, execute `alembic upgrade head` e rode `uvicorn app.main:app --reload --port 8765`. O dashboard conecta em `VITE_SHOP_LIVE_API_URL` e solicita o token, mantido somente na sessão da aba.
+## Extensão simulada
 
-Capacidades reais de TikTok e DOM são `UNVERIFIED`, desabilitadas e exigem validação e autorização específicas. OBS também não conecta automaticamente. Nenhum cookie ou senha é armazenado.
+Carregue `apps/extension/` como extensão descompactada no Chrome. Ela possui side panel e content script somente para `http://127.0.0.1:8765/shop-live/simulator-page`; não possui acesso ao TikTok.
 
-Consulte `docs/architecture.md`, `docs/research.md`, `docs/security.md` e `docs/compatibility.md`.
+Capacidades reais de TikTok e DOM são `UNVERIFIED` e desabilitadas. OBS é futuro, opcional e não faz parte do fluxo principal. Nenhum cookie ou senha é armazenado.
+
+Consulte `docs/architecture.md`, `docs/roadmap.md`, `docs/research.md`, `docs/security.md` e `docs/compatibility.md`.

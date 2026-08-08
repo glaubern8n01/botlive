@@ -1,9 +1,15 @@
 # Arquitetura e isolamento
 
-Data: 2026-08-08. O módulo vive em `botlive-shop/`. O BotLive atual segue o fluxo captura/replay → cortes → fila → adapters e seu dashboard Vite consulta Supabase/servidor local. Nada desse fluxo foi acoplado ao novo backend.
+Data: 2026-08-08. O módulo vive em `botlive-shop/`. O BotLive existente mantém seu fluxo captura/replay → cortes → fila → adapters. Nenhum serviço legado é importado ou alterado pelo Shop LIVE.
 
-A única integração é uma rota e aba React condicionadas por `VITE_SHOP_LIVE_ENABLED=true`. O agente FastAPI usa processo, prefixo `/shop-live/v1`, armazenamento, WebSocket e dependências próprios. Dashboard → simulador seed 42 → eventos tipados → compliance → alertas/métricas. TikTok e OBS reais permanecem desligados.
+A integração visível é uma aba React condicionada por `VITE_SHOP_LIVE_ENABLED=true`. O agente FastAPI usa processo, prefixo `/shop-live/v1`, SQLite, Alembic, WebSocket e autenticação próprios. A Fase 1 permanece: simulador seed 42 → eventos tipados → compliance → auditoria e dashboard.
 
-Código existente estudado para evolução: feature flags, contratos de publicação, fila append-only, entrega de mídia e identidade visual. Não foi reutilizado diretamente para evitar regressão.
+## Fluxo principal corrigido
 
-Na Fase 1, o dashboard abre um WebSocket somente quando a aba protegida pela flag é carregada. O agente gera o cenário seed 42, avalia sinais no único compliance engine, transmite cada evento e persiste produtos, sessões, relações com produtos e auditoria append-only em tabelas `shop_live_*`. Alembic é a única fonte do schema; o processo normal nunca cria tabelas implicitamente.
+Biblioteca local autorizada → produto → roteiro/blocos → ordem e duração da sessão → agente local autenticado → extensão MV3/side panel → checklist humano no TikTok LIVE Studio.
+
+A extensão inicia limitada à página simulada local e não possui host permission para TikTok. Ações sem API oficial são instruções manuais assistidas. Nenhuma ação real ocorre sem autorização explícita.
+
+OBS não pertence ao fluxo principal. Um possível `ObsWebSocketAdapter` fica fora das próximas prioridades, opcional, desabilitado e sem dependência para instalação ou operação.
+
+As tabelas usam exclusivamente o prefixo `shop_live_`; Alembic é a única fonte do schema. A biblioteca registra caminhos locais, duração e evidência de autorização, mas não publica nem reproduz mídia automaticamente.
