@@ -1,3 +1,4 @@
+from typing import Literal
 from pydantic import BaseModel, Field
 
 class ProductIn(BaseModel):
@@ -14,4 +15,5 @@ class SessionIn(BaseModel):
     seed: int = 42
 
 class SimulationControl(BaseModel):
+    action: Literal["start", "pause", "resume", "stop"]
     speed: float = Field(default=1.0, ge=0.05, le=20)

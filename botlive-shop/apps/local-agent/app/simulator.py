@@ -32,8 +32,12 @@ def scenario(seed: int = 42) -> list[dict]:
     events.append({"type": "session.ended", "payload": {"reason": "scenario_complete"}})
     return events
 
-async def stream(seed: int = 42, speed: float = 1.0) -> AsyncIterator[dict]:
+async def stream(seed: int = 42, speed: float = 1.0, paused: asyncio.Event | None = None, stopped: asyncio.Event | None = None) -> AsyncIterator[dict]:
     for sequence, event in enumerate(scenario(seed), 1):
+        if stopped and stopped.is_set(): return
+        while paused and paused.is_set():
+            if stopped and stopped.is_set(): return
+            await asyncio.sleep(.05)
         event = {**event, "sequence": sequence}
         signal_value = event.get("payload", {}).get("value")
         alerts = evaluate_signal(event["type"], signal_value) if signal_value is not None else []

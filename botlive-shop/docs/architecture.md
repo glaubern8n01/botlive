@@ -6,4 +6,4 @@ A única integração é uma rota e aba React condicionadas por `VITE_SHOP_LIVE_
 
 Código existente estudado para evolução: feature flags, contratos de publicação, fila append-only, entrega de mídia e identidade visual. Não foi reutilizado diretamente para evitar regressão.
 
-Na Fase 1, o dashboard abre um WebSocket somente quando a aba protegida pela flag é carregada. O agente gera o cenário seed 42, avalia sinais no compliance engine, transmite cada evento e persiste produtos, sessões e auditoria append-only em tabelas `shop_live_*`. Alembic é a fonte de migração; `create_all` existe apenas para conveniência segura de desenvolvimento local.
+Na Fase 1, o dashboard abre um WebSocket somente quando a aba protegida pela flag é carregada. O agente gera o cenário seed 42, avalia sinais no único compliance engine, transmite cada evento e persiste produtos, sessões, relações com produtos e auditoria append-only em tabelas `shop_live_*`. Alembic é a única fonte do schema; o processo normal nunca cria tabelas implicitamente.

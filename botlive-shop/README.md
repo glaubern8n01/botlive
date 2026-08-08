@@ -6,7 +6,7 @@ Módulo isolado e desabilitado por padrão para preparação e acompanhamento hu
 
 Ative `VITE_SHOP_LIVE_ENABLED=true` no dashboard e rode `npm run dev`. Para testar o núcleo: `python -m unittest discover botlive-shop/tests -v`.
 
-O agente local independente fica em `apps/local-agent`, usa a rota própria `/shop-live/v1` e porta 8765. Instale `requirements-dev.txt` em ambiente virtual, execute `alembic upgrade head` e rode `uvicorn app.main:app --reload --port 8765`. O dashboard conecta em `VITE_SHOP_LIVE_API_URL`.
+O agente local independente fica em `apps/local-agent`, usa a rota própria `/shop-live/v1` e porta 8765. Configure um `SHOP_LIVE_LOCAL_TOKEN` longo, instale `requirements-dev.txt` em ambiente virtual, execute `alembic upgrade head` e rode `uvicorn app.main:app --reload --port 8765`. O dashboard conecta em `VITE_SHOP_LIVE_API_URL` e solicita o token, mantido somente na sessão da aba.
 
 Capacidades reais de TikTok e DOM são `UNVERIFIED`, desabilitadas e exigem validação e autorização específicas. OBS também não conecta automaticamente. Nenhum cookie ou senha é armazenado.
 

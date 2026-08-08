@@ -1,0 +1,40 @@
+name: Shop LIVE CI
+on:
+  push:
+    branches: [codex/shop-live-phase1-clean]
+    paths: ["botlive-shop/**", "dashboard/**", ".github/workflows/shop-live-ci.yml"]
+  pull_request:
+    paths: ["botlive-shop/**", "dashboard/**", ".github/workflows/shop-live-ci.yml"]
+jobs:
+  shop-live-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - name: Install backend dependencies
+        working-directory: botlive-shop/apps/local-agent
+        run: pip install -r requirements-dev.txt
+      - name: Test Alembic on a clean database
+        working-directory: botlive-shop/apps/local-agent
+        env: {SHOP_LIVE_DATABASE_URL: "sqlite:////tmp/shop-live-ci.db"}
+        run: alembic upgrade head
+      - name: Run Shop LIVE tests
+        working-directory: botlive-shop
+        run: python -m unittest discover -s tests -t . -v
+      - uses: actions/setup-node@v4
+        with: {node-version: "20", cache: npm, cache-dependency-path: dashboard/package-lock.json}
+      - name: Install dashboard dependencies
+        working-directory: dashboard
+        run: npm ci
+      - name: TypeScript
+        working-directory: dashboard
+        run: npm run lint
+      - name: Build with Shop LIVE disabled
+        working-directory: dashboard
+        env: {VITE_SHOP_LIVE_ENABLED: "false"}
+        run: npm run build
+      - name: Build with Shop LIVE enabled
+        working-directory: dashboard
+        env: {VITE_SHOP_LIVE_ENABLED: "true"}
+        run: npm run build
