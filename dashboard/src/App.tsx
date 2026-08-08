@@ -6,6 +6,7 @@ import { Configuracao } from "./pages/Configuracao";
 import { Canais } from "./pages/Canais";
 import { Historico } from "./pages/Historico";
 import { Cortes } from "./pages/Cortes";
+import { ShopLive } from "./pages/ShopLive";
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
             <Route path="canais" element={<Canais />} />
             <Route path="historico" element={<Historico />} />
             <Route path="cortes" element={<Cortes />} />
+            {import.meta.env.VITE_SHOP_LIVE_ENABLED === "true" && <Route path="shop-live" element={<ShopLive />} />}
           </Route>
         </Routes>
       </AuthWrapper>
