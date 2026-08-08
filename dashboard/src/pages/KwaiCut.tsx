@@ -375,8 +375,6 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
   markPublished: (jobId: string, assetId: string, externalId: string, publishedAt: string) => Promise<boolean>;
   busy: boolean;
 }) {
-  const [externalId, setExternalId] = useState(job.external_id || '');
-  const [publishedAt, setPublishedAt] = useState(job.published_at ? toLocalInput(job.published_at) : toLocalInput(new Date().toISOString()));
   const [description, setDescription] = useState(String(job.metadata?.description || job.caption || ''));
   const [hashtags, setHashtags] = useState(normalizeHashtags(job.metadata?.hashtags || activity.required_hashtags));
   const [credits, setCredits] = useState(String(job.metadata?.credits || ''));
@@ -452,16 +450,14 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
         </div>
       </div>}
       <div className="rounded-lg border border-zinc-800 p-3">
-        <p className="mb-3 text-sm font-semibold">Registrar publicação manual</p>
+        <p className="mb-3 text-sm font-semibold">Já postei no Kwai</p>
         <div className="space-y-2">
-          <Input aria-label="URL ou ID da publicação" placeholder="URL ou ID da publicação" value={externalId} onChange={(event) => setExternalId(event.target.value)} disabled={published} />
-          <Input aria-label="Horário da publicação" type="datetime-local" value={publishedAt} onChange={(event) => setPublishedAt(event.target.value)} disabled={published} />
-          <Button className="w-full" disabled={busy || published || !publishedAt || !externalId.trim()} onClick={() => {
-            if (window.confirm('Confirmar publicação? O vídeo sairá da lista de prontos e ficará no histórico. A mídia será preservada pelo período de retenção.')) {
-              void markPublished(job.job_id, job.asset_id, externalId, publishedAt);
+          <Button className="w-full" disabled={busy || published} onClick={() => {
+            if (window.confirm('Confirmar? O vídeo sai da lista de prontos e é apagado da VPS.')) {
+              void markPublished(job.job_id, job.asset_id, '', new Date().toISOString());
             }
           }}>
-            <CheckCircle2 className="mr-2 h-4 w-4" />{published ? 'Publicação registrada' : 'Marcar como publicado'}
+            <CheckCircle2 className="mr-2 h-4 w-4" />{published ? 'Publicação registrada' : 'Marcar como postado'}
           </Button>
         </div>
       </div>

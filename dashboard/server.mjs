@@ -295,12 +295,32 @@ async function kwaiPublishRoute(request, response, url) {
   if (!adminKey) return json(response, 503, { error: 'Backend administrativo não configurado' }), true;
   const body = await readJsonBody(request);
   if (!uuidPattern.test(String(body.job_id || ''))) return json(response, 400, { error: 'job_id inválido' }), true;
+  // Link/URL do Kwai é OPCIONAL. Se o operador não colar nada, usamos um marcador
+  // interno (a RPC de produção exige valor não-vazio). Um clique já tira o vídeo
+  // do painel e da VPS — sem precisar de link.
+  const externalId = String(body.external_id || '').trim() || `postado-manual-${Date.now()}`;
   const rpc = await callAdminRpc('mark_manual_publication', {
     p_job_id: body.job_id,
-    p_external_id: String(body.external_id || '') || null,
+    p_external_id: externalId,
     p_published_at: body.published_at || new Date().toISOString(),
   });
-  return json(response, rpc.ok ? 200 : 422, rpc.ok ? { ok: true } : { error: 'Não foi possível registrar a publicação' }), true;
+  if (!rpc.ok) return json(response, 422, { error: 'Não foi possível registrar a publicação' }), true;
+  // Sai da VPS NA HORA (o janitor a cada 15min também cobre, mas isto é imediato).
+  let removidos = 0;
+  try {
+    const job = await querySupabase('publication_jobs', 'job_id', body.job_id, 'asset_id,cover_path');
+    const paths = [];
+    if (job?.cover_path) paths.push(job.cover_path);
+    if (job?.asset_id) {
+      const asset = await querySupabase('media_assets', 'asset_id', job.asset_id, 'path');
+      if (asset?.path) { paths.push(asset.path); paths.push(asset.path.replace(/\.mp4$/, '-capa.jpg')); }
+    }
+    for (const raw of [...new Set(paths)]) {
+      try { await unlink(await verifiedMediaPath(raw)); removidos += 1; }
+      catch { /* arquivo já sumiu ou fora da raiz: o janitor cobre */ }
+    }
+  } catch { /* deleção é best-effort */ }
+  return json(response, 200, { ok: true, removidos }), true;
 }
 
 // Salvar/aprovar o texto da publicação. Mesmo motivo: anon revogado da RPC.

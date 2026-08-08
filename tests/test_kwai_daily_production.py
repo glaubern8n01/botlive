@@ -13,11 +13,15 @@ def test_daily_production_migration_keeps_prepare_only_and_retention() -> None:
     assert "interval '30 days'" in sql
 
 
-def test_manual_publication_no_longer_deletes_media_immediately() -> None:
+def test_manual_publication_deletes_media_immediately() -> None:
+    # Regra nova (pedido do operador): marcar como postado = 1 clique, sem link,
+    # e o vídeo sai do painel E é apagado da VPS na hora (backend), sem esperar
+    # a retenção. O janitor a cada 15min é a rede de segurança.
     page = Path("dashboard/src/pages/KwaiCut.tsx").read_text(encoding="utf-8")
-    assert "/cleanup" not in page
+    server = Path("dashboard/server.mjs").read_text(encoding="utf-8")
     assert "Histórico" in page
-    assert "período de retenção" in page
+    assert "apagado da VPS" in page
+    assert "unlink(await verifiedMediaPath" in server
 
 
 def test_volume_migration_preserves_daily_production_and_manual_history() -> None:
@@ -40,5 +44,9 @@ def test_dashboard_supports_platform_text_and_optional_external_id() -> None:
     # os endpoints do backend, que usam a service key.
     assert "/api/kwai/update-text" in page and "update_publication_text" in server
     assert "/api/kwai/mark-published" in page and "mark_manual_publication" in server
-    # A RPC em produção exige a URL/ID do Kwai -> o botão fica travado sem ela.
-    assert "!externalId.trim()" in page
+    # Marcar como postado é 1 clique, SEM link obrigatório: o backend usa um
+    # marcador interno quando o link vem vazio (a RPC de produção exige valor).
+    assert "Marcar como postado" in page
+    assert "postado-manual-" in server
+    # E apaga a mídia da VPS na hora (o janitor a cada 15min também cobre).
+    assert "unlink(await verifiedMediaPath" in server
