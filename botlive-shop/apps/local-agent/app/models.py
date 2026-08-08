@@ -33,6 +33,7 @@ class LiveSession(Base):
     estimated_minutes: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32), default="rascunho")
     seed: Mapped[int] = mapped_column(Integer, default=42)
+    product_order: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     products: Mapped[list[Product]] = relationship(secondary=session_products, back_populates="sessions")
 

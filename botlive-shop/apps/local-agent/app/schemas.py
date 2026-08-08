@@ -17,6 +17,7 @@ class SessionIn(BaseModel):
 class SimulationControl(BaseModel):
     action: Literal["start", "pause", "resume", "stop"]
     speed: float = Field(default=1.0, ge=0.05, le=20)
+    session_id: str | None = None
 
 class MediaAssetIn(BaseModel):
     product_id: str | None = None

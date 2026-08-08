@@ -6,6 +6,7 @@ TEMP = tempfile.TemporaryDirectory()
 LOCAL_AGENT = Path(__file__).parents[1] / "apps" / "local-agent"
 os.environ["SHOP_LIVE_DATABASE_URL"] = f"sqlite:///{Path(TEMP.name, 'test.db').as_posix()}"
 os.environ["SHOP_LIVE_ALLOWED_ORIGINS"] = "http://localhost:3000"
+os.environ["SHOP_LIVE_ALLOWED_EXTENSION_IDS"] = "abcdefghijklmnopabcdefghijklmnop"
 os.environ["SHOP_LIVE_AUTH_DISABLED"] = "true"
 sys.path.insert(0, str(LOCAL_AGENT))
 subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=LOCAL_AGENT, check=True, capture_output=True)
@@ -53,6 +54,24 @@ class ApiTests(unittest.TestCase):
         planned=self.client.put(f'/shop-live/v1/sessions/{session["id"]}/materials',json=[{"media_id":media["id"],"position":1,"planned_duration_seconds":75}])
         self.assertEqual(planned.status_code,200)
         self.assertEqual(self.client.get(f'/shop-live/v1/sessions/{session["id"]}/materials').json()["items"][0]["planned_duration_seconds"],75)
+        duplicate=self.client.put(f'/shop-live/v1/sessions/{session["id"]}/materials',json=[{"media_id":media["id"],"position":1,"planned_duration_seconds":30},{"media_id":media["id"],"position":2,"planned_duration_seconds":30}])
+        self.assertEqual(duplicate.status_code,422)
+
+    def test_crud_audit_and_operation_context(self):
+        first=self.product(); second=self.client.post("/shop-live/v1/products",json={"name":"Produto seguinte","price":20}).json()
+        updated=self.client.put(f'/shop-live/v1/products/{first["id"]}',json={"name":"Produto editado","price":12}).json(); self.assertEqual(updated["name"],"Produto editado")
+        block=self.client.post("/shop-live/v1/scripts",json={"product_id":first["id"],"kind":"apresentacao","position":0,"duration_seconds":30,"text":"Roteiro real cadastrado"}).json()
+        live=self.client.post("/shop-live/v1/sessions",json={"title":"Sessão montada","estimated_minutes":30,"product_ids":[first["id"],second["id"]]}).json()
+        context=self.client.get(f'/shop-live/v1/sessions/{live["id"]}/operation').json()
+        self.assertEqual(context["current_product"]["id"],first["id"]); self.assertEqual(context["next_product"]["id"],second["id"]); self.assertEqual(context["scripts"][0]["id"],block["id"])
+        self.assertEqual(self.client.delete(f'/shop-live/v1/scripts/{block["id"]}').status_code,204)
+        audit=self.client.get("/shop-live/v1/audit?limit=100").json()["items"]
+        self.assertTrue(any(row["type"]=="product.updated" for row in audit)); self.assertTrue(any(row["type"]=="script.deleted" for row in audit))
+
+    def test_extension_allowlist_is_exact(self):
+        from app.main import allowed_websocket_origin
+        self.assertTrue(allowed_websocket_origin("chrome-extension://abcdefghijklmnopabcdefghijklmnop"))
+        self.assertFalse(allowed_websocket_origin("chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
 
     def test_websocket_start_pause_resume_stop(self):
         with self.client.websocket_connect("/shop-live/v1/events",headers={"origin":"http://localhost:3000"}) as ws:
@@ -95,9 +114,8 @@ class ApiTests(unittest.TestCase):
         self.fail(f"Evento {expected} não recebido")
 
 class DashboardContractTests(unittest.TestCase):
-    def test_dashboard_separates_persisted_and_transient_events(self):
+    def test_dashboard_has_real_crud_session_builder_and_controls(self):
         source=(Path(__file__).parents[2]/"dashboard"/"src"/"pages"/"ShopLive.tsx").read_text(encoding="utf-8")
-        self.assertIn("/shop-live/v1/audit?limit=40&offset=0",source)
         self.assertIn('command("pause")',source); self.assertIn('command("resume")',source); self.assertIn('command("stop")',source)
-        self.assertIn("Eventos persistidos · auditoria",source)
-        self.assertNotIn("164 audiência",source)
+        self.assertIn('method:"PUT"',source); self.assertIn('method:"DELETE"',source)
+        self.assertIn("MaterialForm",source)

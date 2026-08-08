@@ -26,3 +26,8 @@ class ExtensionTests(unittest.TestCase):
         script=(ROOT/"sidepanel.js").read_text(encoding="utf-8")
         self.assertIn("chrome.storage.session",script)
         self.assertIn("127.0.0.1:8765",script)
+        self.assertIn("MAX_RECONNECTS = 5",script)
+        self.assertIn("operation.context",script)
+        self.assertIn("data-command=\"pause\"",panel)
+        worker=(ROOT/"service-worker.js").read_text(encoding="utf-8")
+        self.assertIn("simulator.snapshot.forwarded",worker)

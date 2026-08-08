@@ -33,6 +33,16 @@ jobs:
       - name: Validate Chrome extension scripts
         working-directory: botlive-shop/apps/extension
         run: node --check service-worker.js && node --check content-script.js && node --check sidepanel.js
+      - name: Install extension browser test
+        working-directory: botlive-shop/apps/extension
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Run extension in Chromium
+        working-directory: botlive-shop/apps/extension
+        env: {SHOP_LIVE_TEST_PYTHON: python}
+        run: xvfb-run --auto-servernum npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: shop-live-sidepanel, path: botlive-shop/apps/extension/test-results/sidepanel-operando.png, if-no-files-found: warn}
       - name: Build with Shop LIVE disabled
         working-directory: dashboard
         env: {VITE_SHOP_LIVE_ENABLED: "false"}
