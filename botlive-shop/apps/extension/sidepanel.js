@@ -43,6 +43,7 @@ function command(action) {
 $('auth').addEventListener('submit', event => { event.preventDefault(); token=$('token').value.trim(); if(!token)return; chrome.storage.session.set({shopLiveToken:token}); socket?.close(); connect(); });
 for (const button of document.querySelectorAll('[data-command]')) button.addEventListener('click',()=>command(button.dataset.command));
 $('stop').addEventListener('click',()=>command('stop'));
-chrome.runtime.onMessage.addListener(message => { if(message.type==='simulator.snapshot.forwarded') { $('comments').textContent=String(message.payload.comments||0); if(message.payload.alert)$('alert').textContent=message.payload.alert; } });
-chrome.runtime.sendMessage({type:'simulator.snapshot.request'}, snapshot => { if(snapshot) { $('comments').textContent=String(snapshot.comments||0); $('alert').textContent=snapshot.alert||'Nenhum alerta recebido.'; } });
+function renderSnapshot(snapshot){$('snapshot-id').textContent=snapshot.snapshotId||'snapshot ausente';$('comments').textContent=String(snapshot.comments||0);if(snapshot.alert)$('alert').textContent=snapshot.alert;}
+chrome.runtime.onMessage.addListener(message => { if(message.type==='simulator.snapshot.forwarded') renderSnapshot(message.payload); });
+chrome.runtime.sendMessage({type:'simulator.snapshot.request'}, snapshot => { if(snapshot) renderSnapshot(snapshot); });
 chrome.storage.session.get('shopLiveToken').then(saved => { token=saved.shopLiveToken||''; if(token){$('token').value=token;connect();} });

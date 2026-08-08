@@ -3,27 +3,43 @@ import {spawn,spawnSync} from 'node:child_process';
 import {mkdtempSync,rmSync,mkdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
-const extensionPath=resolve(import.meta.dirname,'..');
-const agentPath=resolve(extensionPath,'../local-agent');
+const extensionPath=resolve(import.meta.dirname,'..'),agentPath=resolve(extensionPath,'../local-agent'),dashboardPath=resolve(extensionPath,'../../../dashboard');
 const python=process.env.SHOP_LIVE_TEST_PYTHON||join(agentPath,'.venv',process.platform==='win32'?'Scripts/python.exe':'bin/python');
-test('extensão carregada integra simulador, worker, painel, WebSocket e agente',async()=>{
- const profile=mkdtempSync(join(tmpdir(),'shop-live-chrome-')); const database=join(profile,'e2e.db').replaceAll('\\','/'); const databaseUrl=`sqlite:///${database}`;
- const context=await chromium.launchPersistentContext(profile,{headless:false,executablePath:process.env.SHOP_LIVE_BROWSER_EXECUTABLE||undefined,args:['--window-position=-32000,-32000',`--disable-extensions-except=${extensionPath}`,`--load-extension=${extensionPath}`]});
- const extensionId='phbbbphbmomahkggbabhfcepgnhlajnj';
- const env={...process.env,SHOP_LIVE_DATABASE_URL:databaseUrl,SHOP_LIVE_AUTH_DISABLED:'true',SHOP_LIVE_ALLOWED_EXTENSION_IDS:extensionId};
+const extensionId='phbbbphbmomahkggbabhfcepgnhlajnj',token='playwright-token-correto';
+async function environment(prefix){
+ const root=mkdtempSync(join(tmpdir(),prefix)),database=join(root,'e2e.db').replaceAll('\\','/');
+ const env={...process.env,SHOP_LIVE_DATABASE_URL:`sqlite:///${database}`,SHOP_LIVE_AUTH_DISABLED:'false',SHOP_LIVE_LOCAL_TOKEN:token,SHOP_LIVE_ALLOWED_EXTENSION_IDS:extensionId,SHOP_LIVE_ALLOWED_ORIGINS:'http://127.0.0.1:3017,http://localhost:3017'};
  expect(spawnSync(python,['-m','alembic','upgrade','head'],{cwd:agentPath,env}).status).toBe(0);
  const agent=spawn(python,['-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8765'],{cwd:agentPath,env,stdio:'inherit'});
+ await expect.poll(()=>fetch('http://127.0.0.1:8765/shop-live/v1/health',{headers:{'X-Shop-Live-Token':token}}).then(r=>r.ok).catch(()=>false),{timeout:15000}).toBe(true);
+ const api=async(path,init={})=>{const response=await fetch(`http://127.0.0.1:8765${path}`,{...init,headers:{'content-type':'application/json','X-Shop-Live-Token':token,...init.headers}});return response.status===204?null:response.json()};
+ return {root,agent,api,close(){agent.kill();try{rmSync(root,{recursive:true,force:true})}catch{}}};
+}
+test('autenticação, snapshot exclusivo e comandos percorrem a extensão real',async()=>{
+ const env=await environment('shop-live-extension-'); const context=await chromium.launchPersistentContext(join(env.root,'chrome'),{headless:false,executablePath:process.env.SHOP_LIVE_BROWSER_EXECUTABLE||undefined,args:['--window-position=-32000,-32000',`--disable-extensions-except=${extensionPath}`,`--load-extension=${extensionPath}`]});
  try{
-  await expect.poll(async()=>fetch('http://127.0.0.1:8765/shop-live/v1/health').then(r=>r.ok).catch(()=>false),{timeout:15000}).toBe(true);
-  const post=(path,body)=>fetch(`http://127.0.0.1:8765${path}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
-  const a=await post('/shop-live/v1/products',{name:'Cafeteira autorizada',price:199}); const b=await post('/shop-live/v1/products',{name:'Próximo produto',price:49});
-  await post('/shop-live/v1/scripts',{product_id:a.id,kind:'apresentacao',position:0,duration_seconds:45,text:'Apresente a cafeteira e confirme as informações aprovadas.'});
-  const session=await post('/shop-live/v1/sessions',{title:'Sessão Playwright',estimated_minutes:30,seed:42,product_ids:[a.id,b.id]});
-  const simulator=await context.newPage(); await simulator.goto('http://127.0.0.1:8765/shop-live/simulator-page');
-  const panel=await context.newPage(); await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`); await panel.fill('#token','token-e2e'); await panel.fill('#session',session.id); await panel.click('#auth button');
-  await expect(panel.locator('#status')).toHaveText('pronto'); await panel.click('[data-command=start]');
-  await expect(panel.locator('#product')).toHaveText('Cafeteira autorizada'); await expect(panel.locator('#next')).toContainText('Próximo produto'); await expect(panel.locator('#script')).toContainText('Apresente a cafeteira');
-  await expect(panel.locator('#comments')).not.toHaveText('0'); await expect(panel.locator('#alert')).toContainText('simulado');
-  mkdirSync(resolve(extensionPath,'test-results'),{recursive:true}); await panel.screenshot({path:resolve(extensionPath,'test-results/sidepanel-operando.png'),fullPage:true});
- }finally{agent.kill();await context.close();rmSync(profile,{recursive:true,force:true})}
+  const a=await env.api('/shop-live/v1/products',{method:'POST',body:JSON.stringify({name:'Cafeteira autorizada',price:199})}),b=await env.api('/shop-live/v1/products',{method:'POST',body:JSON.stringify({name:'Próximo produto',price:49})});
+  await env.api('/shop-live/v1/scripts',{method:'POST',body:JSON.stringify({product_id:a.id,kind:'apresentacao',position:0,duration_seconds:45,text:'Apresente a cafeteira e confirme as informações aprovadas.'})});
+  const session=await env.api('/shop-live/v1/sessions',{method:'POST',body:JSON.stringify({title:'Sessão autenticada',estimated_minutes:30,seed:42,product_ids:[a.id,b.id]})});
+  const simulator=await context.newPage();await simulator.goto('http://127.0.0.1:8765/shop-live/simulator-page');const snapshotId=await simulator.locator('body').getAttribute('data-snapshot-id');expect(snapshotId).toMatch(/^snapshot-/);
+  const panel=await context.newPage();await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);await panel.fill('#session',session.id);await panel.fill('#token','token-incorreto');await panel.click('#auth button');await expect(panel.locator('#status')).toHaveText('offline');
+  await panel.fill('#token',token);await panel.click('#auth button');await expect(panel.locator('#status')).toHaveText('pronto');await expect(panel.locator('#snapshot-id')).toHaveText(snapshotId);
+  await panel.click('[data-command=start]');await expect(panel.locator('#status')).toHaveText('executando');await expect.poll(async()=>((await env.api('/shop-live/v1/sessions')).find(row=>row.id===session.id).status)).toBe('ao-vivo');
+  await panel.click('[data-command=pause]');await expect(panel.locator('#status')).toHaveText('pausada');await expect.poll(async()=>((await env.api('/shop-live/v1/sessions')).find(row=>row.id===session.id).status)).toBe('pausada');
+  await panel.click('[data-command=resume]');await expect(panel.locator('#status')).toHaveText('executando');await expect.poll(async()=>((await env.api('/shop-live/v1/sessions')).find(row=>row.id===session.id).status)).toBe('ao-vivo');
+  await panel.click('#stop');await expect(panel.locator('#status')).toHaveText('pronto');await expect.poll(async()=>((await env.api('/shop-live/v1/sessions')).find(row=>row.id===session.id).status)).toBe('encerrada');
+  await expect(panel.locator('#comments')).not.toHaveText('0');await expect(panel.locator('#alert')).toContainText('simulado');mkdirSync(resolve(extensionPath,'test-results'),{recursive:true});await panel.screenshot({path:resolve(extensionPath,'test-results/sidepanel-operando.png'),fullPage:true});
+ }finally{await context.close();env.close()}
+});
+test('dashboard executa CRUD e monta sessão com materiais ordenados',async({page})=>{
+ const env=await environment('shop-live-dashboard-');const vite=spawn(process.execPath,[join(dashboardPath,'node_modules/vite/bin/vite.js'),'--host','127.0.0.1','--port','3017','--strictPort'],{cwd:dashboardPath,env:{...process.env,VITE_SHOP_LIVE_ENABLED:'true'},stdio:'inherit'});
+ try{
+  await expect.poll(()=>fetch('http://127.0.0.1:3017/shop-live').then(r=>r.ok).catch(()=>false),{timeout:15000}).toBe(true);await page.addInitScript(()=>localStorage.setItem('botlive_auth','true'));await page.goto('http://127.0.0.1:3017/shop-live');await page.fill('input[type=password]',token);await page.getByRole('button',{name:'Conectar'}).click();
+  const products=page.locator('section').filter({has:page.getByRole('heading',{name:'Produtos'})}).first();await products.getByPlaceholder('Produto').fill('Produto descartável');await products.locator('input[type=number]').fill('10');await products.getByRole('button',{name:'Cadastrar'}).click();await expect(products).toContainText('Produto descartável');await products.getByRole('button',{name:'Editar'}).click();await products.getByPlaceholder('Produto').fill('Produto editado');await products.getByRole('button',{name:'Salvar edição'}).click();await expect(products).toContainText('Produto editado');await products.getByRole('button',{name:'Excluir'}).click();await expect(products).not.toContainText('Produto editado');
+  for(const name of ['Produto principal','Produto seguinte']){await products.getByPlaceholder('Produto').fill(name);await products.locator('input[type=number]').fill('20');await products.getByRole('button',{name:'Cadastrar'}).click();await expect(products).toContainText(name)}
+  const media=page.locator('section').filter({has:page.getByRole('heading',{name:'Vídeos e áudios autorizados'})}).first();for(const [name,path] of [['Mídia descartável','media/delete.mp4'],['Vídeo A','media/a.mp4'],['Áudio B','media/b.mp3']]){await media.getByPlaceholder('Nome').fill(name);await media.getByPlaceholder('Caminho local autorizado').fill(path);await media.getByRole('button',{name:'Cadastrar'}).click();await expect(media).toContainText(name)}await media.getByText(/Mídia descartável/).locator('..').getByRole('button',{name:'Editar'}).click();await media.getByPlaceholder('Nome').fill('Mídia editada');await media.getByRole('button',{name:'Salvar'}).click();await media.getByText(/Mídia editada/).locator('..').getByRole('button',{name:'Excluir'}).click();
+  const scripts=page.locator('section').filter({has:page.getByRole('heading',{name:'Blocos de roteiro'})}).first();await scripts.locator('select').selectOption({label:'Produto principal'});await scripts.getByPlaceholder('Texto aprovado').fill('Bloco descartável');await scripts.getByRole('button',{name:'Adicionar bloco'}).click();await scripts.getByText(/Bloco descartável/).locator('..').getByRole('button',{name:'Editar'}).click();await scripts.getByPlaceholder('Texto aprovado').fill('Bloco editado');await scripts.getByRole('button',{name:'Salvar'}).click();await scripts.getByText(/Bloco editado/).locator('..').getByRole('button',{name:'Excluir'}).click();
+  const builder=page.locator('section').filter({has:page.getByRole('heading',{name:'Montagem da sessão'})}).first();await builder.getByPlaceholder('Título da sessão').fill('Sessão pelo dashboard');await builder.getByRole('checkbox',{name:'Produto principal'}).check();await builder.getByRole('checkbox',{name:'Produto seguinte'}).check();await builder.getByRole('button',{name:'Criar sessão'}).click();await builder.locator('select').first().selectOption({label:'Sessão pelo dashboard'});await builder.locator('select').last().selectOption({label:'Vídeo A'});await builder.getByRole('button',{name:'Adicionar'}).click();await expect(builder.getByText(/1\. Vídeo A/)).toBeVisible();await builder.locator('select').last().selectOption({label:'Áudio B'});await builder.getByRole('button',{name:'Adicionar'}).click();await expect(builder.getByText(/2\. Áudio B/)).toBeVisible();await builder.getByRole('button',{name:'↑'}).last().click();
+  const sessions=await env.api('/shop-live/v1/sessions'),created=sessions.find(row=>row.title==='Sessão pelo dashboard'),ordered=(await env.api(`/shop-live/v1/sessions/${created.id}/materials`)).items;expect(ordered).toHaveLength(2);expect(ordered[0].position).toBe(0);expect(ordered[1].position).toBe(1);
+ }finally{vite.kill();env.close()}
 });

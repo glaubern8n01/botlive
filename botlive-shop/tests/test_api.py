@@ -41,6 +41,9 @@ class ApiTests(unittest.TestCase):
 
     def test_session_rejects_unknown_product(self):
         self.assertEqual(self.client.post("/shop-live/v1/sessions",json={"title":"Sessão teste","estimated_minutes":30,"product_ids":["missing"]}).status_code,422)
+        product=self.product()
+        response=self.client.post("/shop-live/v1/sessions",json={"title":"Sessão duplicada","estimated_minutes":30,"product_ids":[product["id"],product["id"]]})
+        self.assertEqual(response.status_code,422)
 
     def test_authorized_media_scripts_and_session_order(self):
         product=self.product()

@@ -3,6 +3,7 @@ function snapshot() {
   chrome.runtime.sendMessage({
     type: "simulator.snapshot",
     payload: {
+      snapshotId: document.body.dataset.snapshotId || null,
       product: document.querySelector("[data-current-product]")?.getAttribute("data-current-product") || null,
       nextProduct: document.querySelector("[data-next-product]")?.getAttribute("data-next-product") || null,
       comments: Number(document.querySelector("[data-comment-count]")?.getAttribute("data-comment-count") || 0),
