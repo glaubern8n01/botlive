@@ -128,7 +128,12 @@ def download(url: str, dest: Path) -> tuple[bool, str]:
     # Highlights/"melhores momentos" ficam abaixo do teto. Configurável.
     maxdur = int(os.getenv("RELAY_MAX_DURATION_SEC", "1200"))   # 20 min
     maxsize = os.getenv("RELAY_MAX_FILESIZE", "150M")           # upload confiavel
-    cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates",
+    # O YouTube passou a bloquear ATÉ o IP residencial ("Sign in to confirm you're
+    # not a bot") quando faz muitos downloads. Cookies do navegador logado (Chrome)
+    # autenticam e liberam. Configurável por RELAY_COOKIES_BROWSER (vazio desliga).
+    browser = os.getenv("RELAY_COOKIES_BROWSER", "chrome").strip()
+    cookies = ["--cookies-from-browser", browser] if browser else []
+    cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates", *cookies,
            "--match-filter", f"duration < {maxdur}", "--max-filesize", maxsize,
            "-f", f"bv*[height<={h}][vcodec^=avc1]+ba[acodec^=mp4a]/b[height<={h}]/best",
            "--merge-output-format", "mp4", "-o", str(dest), url]
@@ -204,6 +209,15 @@ def process_one(url: str, key: str, cand: dict) -> str:
     print(f"  baixando: {title[:48]} ...", flush=True)
     ok, engine = download(vid_url, local)
     if not ok:
+        # Tira da fila o candidato que não baixa (vídeo removido, privado, região,
+        # etc.), senão o relay re-pega SEMPRE os mesmos e nunca avança. Fica
+        # registrado como bloqueado automático (dá pra reavaliar depois).
+        try:
+            _rest(url, key, f"football_source_prospects?prospect_id=eq.{cand['prospect_id']}", "PATCH",
+                  {"review_status": "blocked", "reviewed_by": "relay",
+                   "blocked_reason": "download_falhou_auto"})
+        except Exception:  # noqa: BLE001 — best-effort; no pior caso repete
+            pass
         return "download_falhou"
     print(f"  engine: {engine}", flush=True)
     if not validate(local):
