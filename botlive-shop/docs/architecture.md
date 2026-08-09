@@ -1,5 +1,5 @@
 # Arquitetura e isolamento
-
+Todos os arquivos mutáveis usam caminhos absolutos sob `botlive-shop/data/`: `shop-live.db`, `media/`, `backups/` e `run/`. Nenhum componente depende do diretório corrente.
 O módulo vive em `botlive-shop/`; apenas a rota React condicionada pela feature flag toca o dashboard existente. Nenhum serviço ou módulo do BotLive legado é importado.
 
 ```text

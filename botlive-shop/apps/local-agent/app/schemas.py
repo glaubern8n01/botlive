@@ -1,5 +1,5 @@
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 class ProductIn(BaseModel):
     name: str = Field(min_length=2, max_length=160)
@@ -30,6 +30,13 @@ class MediaAssetIn(BaseModel):
     duration_seconds: int = Field(default=0, ge=0, le=86400)
     authorized: bool = False
     authorization_source: str = Field(default="", max_length=200)
+    tags: list[str] = Field(default_factory=list)
+    notes: str = Field(default="", max_length=4000)
+
+class MediaAssetUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    product_id: str | None = None
+    name: str = Field(min_length=2, max_length=160)
     tags: list[str] = Field(default_factory=list)
     notes: str = Field(default="", max_length=4000)
 

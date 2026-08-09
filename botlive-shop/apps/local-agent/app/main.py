@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from .auth import media_ticket, require_http_auth, valid_media_ticket, valid_websocket_ticket, websocket_ticket
 from .database import SessionLocal, get_db
 from .models import AuditEvent, LiveSession, MediaAsset, MediaPlayback, Product, ScriptBlock, SessionMaterial
-from .schemas import MediaAssetIn, PlaybackControl, ProductIn, ScriptBlockIn, SessionIn, SessionMaterialIn, SimulationControl
+from .schemas import MediaAssetIn, MediaAssetUpdate, PlaybackControl, ProductIn, ScriptBlockIn, SessionIn, SessionMaterialIn, SimulationControl
 from .media_storage import inspect_media, safe_path, store_upload
 from .realtime import CLIENTS, CLIENT_LOCKS, broadcast
 from .advanced import router as advanced_router
@@ -35,6 +35,15 @@ def allowed_websocket_origin(origin: str | None) -> bool:
 app = FastAPI(title="BotLive Shop Local Agent", version="0.3.0", docs_url="/shop-live/docs")
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins(), allow_credentials=False, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Content-Type", "X-Shop-Live-Token"])
 app.include_router(advanced_router)
+
+@app.on_event("startup")
+def recover_stale_playback() -> None:
+    with SessionLocal() as db:
+        stale=db.scalars(select(MediaPlayback).where(MediaPlayback.status=="playing")).all()
+        for state in stale:
+            state.status="paused"
+            db.add(AuditEvent(type="playback.recovered_paused",session_id=state.session_id,payload={"position_seconds":state.position_seconds}))
+        db.commit()
 
 def serialize(row) -> dict:
     data = {column.name: getattr(row, column.name) for column in row.__table__.columns}
@@ -136,6 +145,7 @@ def simulation(seed: int): return scenario(seed)
 
 @app.post("/shop-live/v1/media", status_code=201, dependencies=AUTH)
 def create_media(payload: MediaAssetIn, db: Session = Depends(get_db)):
+    if os.getenv("SHOP_LIVE_AUTH_DISABLED", "false").lower() != "true": raise HTTPException(404,"Use o upload autorizado")
     if payload.product_id and not db.get(Product, payload.product_id): raise HTTPException(422, "Produto inexistente")
     if payload.authorized and not payload.authorization_source.strip(): raise HTTPException(422, "Informe a origem da autorização")
     item = MediaAsset(**payload.model_dump()); db.add(item); db.commit(); db.refresh(item)
@@ -186,11 +196,10 @@ def media_content(item_id: str, expires: int = 0, ticket: str | None = None, db:
     return FileResponse(path,media_type=item.mime_type,filename=item.name,content_disposition_type="inline",headers={"Cache-Control":"private, no-store","X-Content-Type-Options":"nosniff"})
 
 @app.put("/shop-live/v1/media/{item_id}", dependencies=AUTH)
-def update_media(item_id: str, payload: MediaAssetIn, db: Session = Depends(get_db)):
+def update_media(item_id: str, payload: MediaAssetUpdate, db: Session = Depends(get_db)):
     item=db.get(MediaAsset,item_id)
     if not item: raise HTTPException(404,"Mídia inexistente")
     if payload.product_id and not db.get(Product,payload.product_id): raise HTTPException(422,"Produto inexistente")
-    if payload.authorized and not payload.authorization_source.strip(): raise HTTPException(422,"Informe a origem da autorização")
     before=serialize(item)
     for key,value in payload.model_dump().items(): setattr(item,key,value)
     db.commit(); db.refresh(item); record(db,"media.updated",{"before":before,"after":serialize(item)}); return serialize(item)

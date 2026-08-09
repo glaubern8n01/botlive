@@ -17,7 +17,7 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Test Alembic on a clean database
         working-directory: botlive-shop/apps/local-agent
-        env: {SHOP_LIVE_DATABASE_URL: "sqlite:////tmp/shop-live-ci.db"}
+        env: {SHOP_LIVE_TESTING: "true", SHOP_LIVE_TEST_DATA_ROOT: "/tmp/shop-live-ci"}
         run: alembic upgrade head
       - name: Run Shop LIVE tests
         working-directory: botlive-shop
@@ -30,6 +30,10 @@ jobs:
       - name: TypeScript
         working-directory: dashboard
         run: npm run lint
+      - name: Build production dashboard for browser tests
+        working-directory: dashboard
+        env: {VITE_SHOP_LIVE_ENABLED: "true"}
+        run: npm run build
       - name: Validate Chrome extension scripts
         working-directory: botlive-shop/apps/extension
         run: node --check service-worker.js && node --check content-script.js && node --check sidepanel.js
@@ -62,7 +66,7 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
       - name: Alembic incremental schema
         working-directory: botlive-shop/apps/local-agent
-        env: {SHOP_LIVE_DATABASE_URL: "sqlite:///./windows-ci.db"}
+        env: {SHOP_LIVE_TESTING: "true", SHOP_LIVE_TEST_DATA_ROOT: "${{ runner.temp }}/shop-live-ci"}
         run: python -m alembic upgrade head
       - name: Python tests
         working-directory: botlive-shop
@@ -84,3 +88,8 @@ jobs:
           node --check botlive-shop/apps/extension/service-worker.js
           node --check botlive-shop/apps/extension/content-script.js
           node --check botlive-shop/apps/extension/sidepanel.js
+      - name: Clean Windows install and production smoke test
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+          botlive-shop/scripts/Test-CleanInstall-ShopLive.ps1

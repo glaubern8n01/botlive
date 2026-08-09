@@ -5,6 +5,8 @@ from pathlib import Path
 TEMP = tempfile.TemporaryDirectory()
 LOCAL_AGENT = Path(__file__).parents[1] / "apps" / "local-agent"
 os.environ["SHOP_LIVE_DATABASE_URL"] = f"sqlite:///{Path(TEMP.name, 'test.db').as_posix()}"
+os.environ["SHOP_LIVE_TESTING"] = "true"
+os.environ["SHOP_LIVE_TEST_DATA_ROOT"] = TEMP.name
 os.environ["SHOP_LIVE_ALLOWED_ORIGINS"] = "http://localhost:3000"
 os.environ["SHOP_LIVE_ALLOWED_EXTENSION_IDS"] = "abcdefghijklmnopabcdefghijklmnop"
 os.environ["SHOP_LIVE_AUTH_DISABLED"] = "true"
@@ -102,6 +104,8 @@ class ApiTests(unittest.TestCase):
     def test_upload_rejects_extension_mime_content_size_and_traversal(self):
         bad=self.client.post("/shop-live/v1/media/upload",data={"authorized":"true","authorization_source":"Teste"},files={"file":("bad.exe",b"x","application/octet-stream")});self.assertEqual(bad.status_code,422)
         mismatch=self.client.post("/shop-live/v1/media/upload",data={"authorized":"true","authorization_source":"Teste"},files={"file":("bad.wav",b"not-wave","audio/wav")});self.assertEqual(mismatch.status_code,422)
+        fake_mp4=b"\x00\x00\x00\x18ftypisom"+b"x"*64;self.assertEqual(self.client.post("/shop-live/v1/media/upload",data={"authorized":"true","authorization_source":"Teste"},files={"file":("fake.mp4",fake_mp4,"video/mp4")}).status_code,422)
+        fake_webm=b"\x1a\x45\xdf\xa3"+b"x"*64;self.assertEqual(self.client.post("/shop-live/v1/media/upload",data={"authorized":"true","authorization_source":"Teste"},files={"file":("fake.webm",fake_webm,"video/webm")}).status_code,422)
         with mock.patch.dict(os.environ,{"SHOP_LIVE_MEDIA_MAX_BYTES":"4"}):
             too_big=self.client.post("/shop-live/v1/media/upload",data={"authorized":"true","authorization_source":"Teste"},files={"file":("large.wav",b"RIFFxxxxWAVE", "audio/wav")});self.assertEqual(too_big.status_code,422)
         from app.media_storage import safe_path
@@ -115,6 +119,7 @@ class ApiTests(unittest.TestCase):
         buffer=io.BytesIO()
         with wave.open(buffer,"wb") as wav: wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(8000);wav.writeframes(b"\0\0"*4000)
         media=self.client.post("/shop-live/v1/media/upload",data={"product_id":product["id"],"authorized":"true","authorization_source":"Teste local"},files={"file":("complete.wav",buffer.getvalue(),"audio/wav")}).json()
+        immutable={"product_id":product["id"],"name":"Alterada","tags":[],"notes":"ok","stored_name":"ataque.wav"};self.assertEqual(self.client.put(f'/shop-live/v1/media/{media["id"]}',json=immutable).status_code,422)
         self.assertEqual(self.client.post(f'/shop-live/v1/media/{media["id"]}/duplicate').status_code,201)
         library=self.client.get("/shop-live/v1/library?q=completo&kind=product").json();self.assertIn(product["id"],{row["id"] for row in library["products"]})
         session=self.client.post("/shop-live/v1/sessions",json={"title":"Fluxo completo","estimated_minutes":30,"product_ids":[product["id"]]}).json()
@@ -124,7 +129,8 @@ class ApiTests(unittest.TestCase):
         tele=self.client.post(f'/shop-live/v1/sessions/{session["id"]}/runtime/control',json={"action":"teleprompter","speed":1.5,"font_size":40,"teleprompter_paused":False}).json();self.assertEqual(tele["teleprompter_font_size"],40)
         diagnostic=self.client.post(f'/shop-live/v1/sessions/{session["id"]}/diagnostics',json={"camera":"frozen","microphone":"silent","connection":"unstable","volume":0}).json();self.assertIn("camera_frozen",diagnostic["problems"])
         self.assertEqual(self.client.post(f'/shop-live/v1/sessions/{session["id"]}/comments/simulated?text=Teste').status_code,201)
-        self.assertEqual(self.client.put("/shop-live/v1/settings/hotkeys",json={"value":{"Space":"pause"}}).status_code,200);self.assertEqual(self.client.get("/shop-live/v1/settings").json()["hotkeys"]["Space"],"pause")
+        keys={"KeyP":"pause","KeyN":"next","KeyB":"previous","KeyT":"teleprompter"};self.assertEqual(self.client.put("/shop-live/v1/settings/hotkeys",json={"value":keys}).status_code,200);self.assertEqual(self.client.get("/shop-live/v1/settings").json()["hotkeys"]["KeyP"],"pause")
+        paths=self.client.get("/shop-live/v1/paths").json();self.assertTrue(all(Path(value).is_absolute() for value in paths.values()));self.assertTrue(all(value.startswith(paths["data"]) for key,value in paths.items() if key!="data"))
         report=self.client.get(f'/shop-live/v1/sessions/{session["id"]}/report').json();self.assertGreater(report["summary"]["events"],3);self.assertGreater(report["summary"]["problems"],0)
         csv_report=self.client.get(f'/shop-live/v1/sessions/{session["id"]}/report?format=csv');self.assertEqual(csv_report.status_code,200);self.assertIn("timestamp,type,result",csv_report.text)
         self.assertFalse(self.client.get("/shop-live/v1/integrations/tiktok").json()["connected"])
@@ -178,8 +184,8 @@ class ApiTests(unittest.TestCase):
 class DashboardContractTests(unittest.TestCase):
     def test_dashboard_has_real_crud_session_builder_and_controls(self):
         source=(Path(__file__).parents[2]/"dashboard"/"src"/"pages"/"ShopLive.tsx").read_text(encoding="utf-8")
-        self.assertIn('playback?.status==="playing"?"pause"',source); self.assertIn('runtimeCommand("start_rehearsal")',source); self.assertIn('runtimeCommand("stop")',source)
-        self.assertIn('method:"PUT"',source); self.assertIn('method:"DELETE"',source)
+        self.assertIn('node.currentTime = target',source); self.assertIn('runtimeCommand("start_rehearsal")',source); self.assertIn('runtimeCommand("stop")',source)
+        self.assertIn('method: "PUT"',source); self.assertIn('method: "DELETE"',source)
         self.assertIn("SessionBuilder",source);self.assertIn("draggable",source);self.assertIn("Teleprompter",source)
         self.assertIn("navigator.mediaDevices.getUserMedia",source);self.assertIn("requestFullscreen",source)
         self.assertNotIn("content?token=",source)

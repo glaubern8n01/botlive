@@ -5,9 +5,11 @@ import mimetypes
 import os
 import subprocess
 import wave
+import math
 from pathlib import Path
 from uuid import uuid4
 from fastapi import UploadFile
+from .paths import MEDIA_ROOT
 
 ALLOWED = {
     ".mp4": {"video/mp4", "application/mp4"},
@@ -18,7 +20,7 @@ ALLOWED = {
 }
 
 def storage_root() -> Path:
-    root = Path(os.getenv("SHOP_LIVE_MEDIA_ROOT", "./data/media")).expanduser().resolve()
+    root = MEDIA_ROOT
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -71,9 +73,19 @@ def inspect_media(path: Path, extension: str) -> dict:
         command=[os.getenv("SHOP_LIVE_FFPROBE","ffprobe"),"-v","error","-show_entries","format=duration,format_name:stream=codec_type,width,height","-of","json",str(path)]
         parsed=json.loads(subprocess.run(command,capture_output=True,text=True,check=True,timeout=15).stdout)
         fmt=parsed.get("format",{}); result["duration_seconds"]=round(float(fmt.get("duration") or 0),3); result["format_name"]=fmt.get("format_name") or extension
-        video=next((row for row in parsed.get("streams",[]) if row.get("codec_type")=="video"),None)
+        streams=parsed.get("streams",[])
+        compatible=[row for row in streams if row.get("codec_type") in {"audio","video"}]
+        if not compatible: raise ValueError("ffprobe não reconheceu fluxo compatível")
+        if not math.isfinite(result["duration_seconds"]) or result["duration_seconds"] <= 0: raise ValueError("Duração de mídia inválida")
+        video=next((row for row in streams if row.get("codec_type")=="video"),None)
         if video: result["width"],result["height"]=video.get("width"),video.get("height")
-    except Exception:
+    except (subprocess.SubprocessError, json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as error:
         if extension=="wav":
-            with wave.open(str(path),"rb") as wav: result["duration_seconds"]=round(wav.getnframes()/wav.getframerate(),3)
+            try:
+                with wave.open(str(path),"rb") as wav: result["duration_seconds"]=round(wav.getnframes()/wav.getframerate(),3)
+            except (wave.Error, OSError, ZeroDivisionError) as wav_error:
+                raise ValueError("Arquivo não contém mídia reproduzível") from wav_error
+            if result["duration_seconds"] <= 0: raise ValueError("Duração de mídia inválida")
+        else:
+            raise ValueError("Arquivo não contém mídia reproduzível") from error
     return result

@@ -22,6 +22,7 @@ test-results/
 botlive-shop/data/media/
 botlive-shop/data/backups/
 botlive-shop/data/run/
+botlive-shop/data/
 botlive-shop/.env.local
 .shop-live-visual/
 

@@ -1,6 +1,6 @@
 # Fase 2 — mídia local autorizada
 
-Esta fase mantém o Shop LIVE atrás de `VITE_SHOP_LIVE_ENABLED=false` por padrão e não altera o BotLive legado. O agente deve continuar ligado somente em `127.0.0.1`; a raiz de arquivos é definida por `SHOP_LIVE_MEDIA_ROOT` e não deve ficar no Git.
+Esta fase mantém o Shop LIVE atrás de `VITE_SHOP_LIVE_ENABLED=false` por padrão e não altera o BotLive legado. O agente continua ligado somente em `127.0.0.1`; os arquivos mutáveis ficam exclusivamente no caminho absoluto `botlive-shop/data/`, ignorado pelo Git.
 
 ## Fluxo implementado
 
