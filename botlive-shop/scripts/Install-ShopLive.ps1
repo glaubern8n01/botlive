@@ -5,7 +5,7 @@ $Agent=Join-Path $Root 'apps\local-agent'
 $Data=Join-Path $Root 'data';New-Item -ItemType Directory -Force -Path $Data,(Join-Path $Data 'media'),(Join-Path $Data 'backups'),(Join-Path $Data 'run')|Out-Null
 $EnvFile=Join-Path $Root '.env.local'
 if(-not (Test-Path $EnvFile)){
-  $Bytes=New-Object byte[] 32;[Security.Cryptography.RandomNumberGenerator]::Fill($Bytes);$Token=[Convert]::ToHexString($Bytes).ToLowerInvariant()
+  $Bytes=New-Object byte[] 32;$Rng=[Security.Cryptography.RandomNumberGenerator]::Create();$Rng.GetBytes($Bytes);$Rng.Dispose();$Token=($Bytes|ForEach-Object{$_.ToString('x2')}) -join ''
   @("SHOP_LIVE_LOCAL_TOKEN=$Token","SHOP_LIVE_AUTH_DISABLED=false","SHOP_LIVE_ALLOWED_ORIGINS=http://127.0.0.1:3017")|Set-Content -LiteralPath $EnvFile -Encoding UTF8
   Write-Host 'Configuracao local criada. Guarde o token exibido apenas no computador:';$Token
 }
