@@ -171,7 +171,7 @@ def cleanup_storage(db:Session=Depends(get_db)):
 
 @router.post("/backup")
 def backup(db:Session=Depends(get_db)):
-    target=BACKUP_ROOT/f"shop-live-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.zip";snapshot=Path(tempfile.mkstemp(prefix="snapshot-",suffix=".db",dir=BACKUP_ROOT)[1])
+    target=BACKUP_ROOT/f"shop-live-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.zip";descriptor,snapshot_name=tempfile.mkstemp(prefix="snapshot-",suffix=".db",dir=BACKUP_ROOT);os.close(descriptor);snapshot=Path(snapshot_name)
     try:
         with sqlite3.connect(DATABASE_PATH) as source, sqlite3.connect(snapshot) as destination: source.backup(destination)
         with zipfile.ZipFile(target,"w",zipfile.ZIP_DEFLATED) as archive:
