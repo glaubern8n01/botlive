@@ -128,11 +128,18 @@ def download(url: str, dest: Path) -> tuple[bool, str]:
     # Highlights/"melhores momentos" ficam abaixo do teto. Configurável.
     maxdur = int(os.getenv("RELAY_MAX_DURATION_SEC", "1200"))   # 20 min
     maxsize = os.getenv("RELAY_MAX_FILESIZE", "150M")           # upload confiavel
-    # O YouTube passou a bloquear ATÉ o IP residencial ("Sign in to confirm you're
-    # not a bot") quando faz muitos downloads. Cookies do navegador logado (Chrome)
-    # autenticam e liberam. Configurável por RELAY_COOKIES_BROWSER (vazio desliga).
-    browser = os.getenv("RELAY_COOKIES_BROWSER", "chrome").strip()
-    cookies = ["--cookies-from-browser", browser] if browser else []
+    # O YouTube bloqueia o IP residencial ("Sign in to confirm you're not a bot").
+    # Cookies do YouTube logado autenticam e liberam. Preferimos um ARQUIVO
+    # cookies.txt (RELAY_COOKIES_FILE) — o --cookies-from-browser do Chrome novo
+    # falha por criptografia (DPAPI/App-Bound). Vazio nos dois = sem cookies.
+    cookies_file = os.getenv("RELAY_COOKIES_FILE", "").strip()
+    browser = os.getenv("RELAY_COOKIES_BROWSER", "").strip()
+    if cookies_file and Path(cookies_file).is_file():
+        cookies = ["--cookies", cookies_file]
+    elif browser:
+        cookies = ["--cookies-from-browser", browser]
+    else:
+        cookies = []
     cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates", *cookies,
            "--match-filter", f"duration < {maxdur}", "--max-filesize", maxsize,
            "-f", f"bv*[height<={h}][vcodec^=avc1]+ba[acodec^=mp4a]/b[height<={h}]/best",
