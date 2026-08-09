@@ -140,9 +140,12 @@ def download(url: str, dest: Path) -> tuple[bool, str]:
         cookies = ["--cookies-from-browser", browser]
     else:
         cookies = []
+    # Formato TOLERANTE: prioriza combinado (b*, ex.: format 18 do client tv que o
+    # yt-dlp novo usa com cookies), depois streams separados, depois qualquer best.
+    # O seletor estrito avc1+mp4a falhava quando só havia formato combinado.
     cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates", *cookies,
            "--match-filter", f"duration < {maxdur}", "--max-filesize", maxsize,
-           "-f", f"bv*[height<={h}][vcodec^=avc1]+ba[acodec^=mp4a]/b[height<={h}]/best",
+           "-f", f"b*[height<={h}]/bv*[height<={h}]+ba/best[height<={h}]/best",
            "--merge-output-format", "mp4", "-o", str(dest), url]
     if subprocess.run(cmd, capture_output=True, text=True, timeout=3600).returncode == 0 and dest.exists():
         return True, "yt-dlp"
