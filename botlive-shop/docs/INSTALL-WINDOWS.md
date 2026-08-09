@@ -1,6 +1,6 @@
 # Instalação local no Windows
 
-Requisitos: Windows 10/11, Python 3.12+, Node 20+, npm, Chrome/Chromium e FFmpeg com `ffprobe`. Execute PowerShell como usuário comum na raiz do repositório:
+Requisitos: Windows 10/11, Python 3.12+, Node 22+, npm, Chrome/Chromium e FFmpeg com `ffprobe`. Execute PowerShell como usuário comum na raiz do repositório:
 
 ```powershell
 .\botlive-shop\scripts\Install-ShopLive.ps1 -InstallFFmpeg
