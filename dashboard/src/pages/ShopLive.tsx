@@ -226,7 +226,7 @@ else
     await request(`/shop-live/v1/sessions/${sessionId}/comments/simulated?text=${encodeURIComponent(comment)}`, { method: "POST" });
     setComment("");
 } }}>Adicionar simulado</button></div></Section></div>; }
-function Teleprompter({ text, paused, speed, fontSize }: { text: string; paused: boolean; speed: number; fontSize: number }) { const box=useRef<HTMLDivElement|null>(null); useEffect(()=>{if(paused)return;let frame=0,last=performance.now();const tick=(now:number)=>{const node=box.current;if(node)node.scrollTop+=(now-last)*speed*.025;last=now;frame=requestAnimationFrame(tick)};frame=requestAnimationFrame(tick);return()=>cancelAnimationFrame(frame)},[paused,speed]);return <div data-testid="teleprompter" ref={box} className="mt-4 max-h-72 overflow-y-auto rounded-xl bg-black p-6 leading-relaxed" style={{fontSize}} tabIndex={0}>{text}<div className="h-96"/></div>}
+function Teleprompter({ text, paused, speed, fontSize }: { text: string; paused: boolean; speed: number; fontSize: number }) { const box=useRef<HTMLDivElement|null>(null),position=useRef(0); useEffect(()=>{if(paused)return;let frame=0,last=performance.now();const tick=(now:number)=>{const node=box.current;position.current+=(now-last)*speed*.025;if(node)node.scrollTop=position.current;last=now;frame=requestAnimationFrame(tick)};frame=requestAnimationFrame(tick);return()=>cancelAnimationFrame(frame)},[paused,speed]);return <div data-testid="teleprompter" ref={box} className="mt-4 max-h-72 overflow-y-auto rounded-xl bg-black p-6 leading-relaxed" style={{fontSize}} tabIndex={0}>{text}<div className="h-96"/></div>}
 function Devices({ sessionId, request, run }: {
     sessionId: string;
     request: any;
