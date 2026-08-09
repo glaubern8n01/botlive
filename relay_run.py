@@ -101,8 +101,10 @@ def _scp(local: Path, remote: str) -> bool:
         r = subprocess.run(["scp", "-o", "BatchMode=yes", "-i", SSH_KEY, str(local), f"{VPS_HOST}:{remote}"],
                            capture_output=True, text=True, timeout=1800)
         return r.returncode == 0
-    chunk = 15 * 1024 * 1024
+    chunk = 10 * 1024 * 1024
     parts = (size + chunk - 1) // chunk
+    # Keepalive evita o "Connection reset" quando o AVG/rede segura o stream.
+    keep = ["-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=6", "-o", "TCPKeepAlive=yes"]
     _ssh(f"rm -f {remote} {remote}.part_*")
     with local.open("rb") as fh:
         for i in range(parts):
@@ -110,14 +112,14 @@ def _scp(local: Path, remote: str) -> bool:
             tmp = local.with_name(local.name + f".part_{i:04d}")
             tmp.write_bytes(block)
             ok = False
-            for _ in range(4):
-                r = subprocess.run(["scp", "-o", "BatchMode=yes", "-l", "20000", "-i", SSH_KEY,
+            for tent in range(8):
+                r = subprocess.run(["scp", "-o", "BatchMode=yes", *keep, "-i", SSH_KEY,
                                     str(tmp), f"{VPS_HOST}:{remote}.part_{i:04d}"],
                                    capture_output=True, text=True, timeout=1800)
                 if r.returncode == 0:
                     ok = True
                     break
-                time.sleep(2)
+                time.sleep(min(2 + tent * 2, 12))
             tmp.unlink(missing_ok=True)
             if not ok:
                 _ssh(f"rm -f {remote}.part_*")
@@ -140,8 +142,8 @@ def download(url: str, dest: Path) -> tuple[bool, str]:
     # Pula PARTIDAS COMPLETAS (90min ~ vários GB): só o corte de 35s importa e o
     # upload de GBs pra VPS é inviável. Checagem por metadados (não baixa o gigante).
     # Highlights/"melhores momentos" ficam abaixo do teto. Configurável.
-    maxdur = int(os.getenv("RELAY_MAX_DURATION_SEC", "1500"))   # 25 min
-    maxsize = os.getenv("RELAY_MAX_FILESIZE", "500M")
+    maxdur = int(os.getenv("RELAY_MAX_DURATION_SEC", "1200"))   # 20 min
+    maxsize = os.getenv("RELAY_MAX_FILESIZE", "150M")           # upload confiavel
     cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates",
            "--match-filter", f"duration < {maxdur}", "--max-filesize", maxsize,
            "-f", f"bv*[height<={h}][vcodec^=avc1]+ba[acodec^=mp4a]/b[height<={h}]/best",
