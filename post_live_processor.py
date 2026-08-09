@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,6 +84,12 @@ def _registrar_e_renderizar(
             if post_roll_seconds is not None
             else max(1, int(clip_duration) - seconds_before)
         )
+    # Instagram Reels via API rejeita vídeos > 60s (ProcessingFailedError). O
+    # corte de 60s virava 60,07s (overshoot de frames) e o Reel falhava. Cap o
+    # total em 58s: o MESMO vertical serve YouTube Short E Reel sem estourar.
+    _ig_max = int(os.getenv("VERTICAL_MAX_SECONDS", "58"))
+    if seconds_before + seconds_after > _ig_max:
+        seconds_after = max(1, _ig_max - seconds_before)
     metadata = {
         "mode": "post_live",
         "score": candidate.score,
