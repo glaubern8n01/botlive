@@ -137,7 +137,13 @@ def download(url: str, dest: Path) -> tuple[bool, str]:
     # 1080-largura, então 720p de fonte basta e economiza MUITA banda/tempo/disco
     # (essencial pra rodar 30-100/dia sem estourar internet).
     h = max(360, min(1080, int(os.getenv("RELAY_MAX_HEIGHT", "720"))))
+    # Pula PARTIDAS COMPLETAS (90min ~ vários GB): só o corte de 35s importa e o
+    # upload de GBs pra VPS é inviável. Checagem por metadados (não baixa o gigante).
+    # Highlights/"melhores momentos" ficam abaixo do teto. Configurável.
+    maxdur = int(os.getenv("RELAY_MAX_DURATION_SEC", "1500"))   # 25 min
+    maxsize = os.getenv("RELAY_MAX_FILESIZE", "500M")
     cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates",
+           "--match-filter", f"duration < {maxdur}", "--max-filesize", maxsize,
            "-f", f"bv*[height<={h}][vcodec^=avc1]+ba[acodec^=mp4a]/b[height<={h}]/best",
            "--merge-output-format", "mp4", "-o", str(dest), url]
     if subprocess.run(cmd, capture_output=True, text=True, timeout=3600).returncode == 0 and dest.exists():
