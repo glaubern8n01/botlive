@@ -92,41 +92,25 @@ def _ssh(cmd: str, timeout: int = 120) -> subprocess.CompletedProcess:
 
 
 def _scp(local: Path, remote: str) -> bool:
-    """Envia o arquivo pra VPS de forma resiliente. Transferências grandes num
-    scp único caem ("Connection reset by peer" — AVG/rede cortam streams longos);
-    por isso quebra em pedaços de 15MB, envia cada um com retry e remonta na VPS.
-    Arquivos pequenos vão em scp direto."""
+    """Envia o arquivo pra VPS numa ÚNICA conexão SSH (stream via `cat`), com
+    keepalive e compressão. O scp em pedaços abria dezenas de conexões e o AVG/
+    rede saturava e cortava (uploads intermitentes). Uma conexão só é rápida e
+    estável; verifica o tamanho no destino e re-tenta o arquivo inteiro se cair."""
     size = local.stat().st_size
-    if size <= 30 * 1024 * 1024:
-        r = subprocess.run(["scp", "-o", "BatchMode=yes", "-i", SSH_KEY, str(local), f"{VPS_HOST}:{remote}"],
-                           capture_output=True, text=True, timeout=1800)
-        return r.returncode == 0
-    chunk = 10 * 1024 * 1024
-    parts = (size + chunk - 1) // chunk
-    # Keepalive evita o "Connection reset" quando o AVG/rede segura o stream.
-    keep = ["-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=6", "-o", "TCPKeepAlive=yes"]
-    _ssh(f"rm -f {remote} {remote}.part_*")
-    with local.open("rb") as fh:
-        for i in range(parts):
-            block = fh.read(chunk)
-            tmp = local.with_name(local.name + f".part_{i:04d}")
-            tmp.write_bytes(block)
-            ok = False
-            for tent in range(8):
-                r = subprocess.run(["scp", "-o", "BatchMode=yes", *keep, "-i", SSH_KEY,
-                                    str(tmp), f"{VPS_HOST}:{remote}.part_{i:04d}"],
-                                   capture_output=True, text=True, timeout=1800)
-                if r.returncode == 0:
-                    ok = True
-                    break
-                time.sleep(min(2 + tent * 2, 12))
-            tmp.unlink(missing_ok=True)
-            if not ok:
-                _ssh(f"rm -f {remote}.part_*")
-                return False
-    r = _ssh(f"cat {remote}.part_* > {remote} && rm -f {remote}.part_* && "
-             f"test $(stat -c %s {remote}) -eq {size}")
-    return r.returncode == 0
+    opts = ["-o", "BatchMode=yes", "-o", "ServerAliveInterval=10",
+            "-o", "ServerAliveCountMax=6", "-o", "TCPKeepAlive=yes", "-C", "-i", SSH_KEY]
+    for tent in range(5):
+        _ssh(f"rm -f {remote}")
+        try:
+            with local.open("rb") as fh:
+                r = subprocess.run(["ssh", *opts, VPS_HOST, f"cat > {remote}"],
+                                   stdin=fh, capture_output=True, text=True, timeout=1800)
+        except (subprocess.SubprocessError, OSError):
+            time.sleep(3); continue
+        if r.returncode == 0 and _ssh(f"test $(stat -c %s {remote}) -eq {size}").returncode == 0:
+            return True
+        time.sleep(min(3 + tent * 3, 15))
+    return False
 
 
 def download(url: str, dest: Path) -> tuple[bool, str]:
