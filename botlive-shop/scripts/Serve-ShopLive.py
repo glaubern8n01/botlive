@@ -10,7 +10,7 @@ class SpaHandler(SimpleHTTPRequestHandler):
 
     def send_head(self):
         path = Path(self.translate_path(self.path.split("?", 1)[0]))
-        if not path.exists() and "text/html" in self.headers.get("Accept", "text/html"):
+        if not path.exists():
             self.path = "/index.html"
         return super().send_head()
 
