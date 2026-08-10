@@ -145,7 +145,9 @@ def download(url: str, dest: Path) -> tuple[bool, str]:
     # O seletor estrito avc1+mp4a falhava quando só havia formato combinado.
     cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates", *cookies,
            "--match-filter", f"duration < {maxdur}", "--max-filesize", maxsize,
-           "-f", f"b*[height<={h}]/bv*[height<={h}]+ba/best[height<={h}]/best",
+           # GARANTE ÁUDIO: bv*+ba (junta vídeo+áudio) primeiro; b* sozinho pegava
+           # formato só-vídeo (ex.: 398 AV1) e o corte saía "invalido" (sem áudio).
+           "-f", f"bv*[height<={h}]+ba/b[height<={h}]/best[height<={h}]/best",
            "--merge-output-format", "mp4", "-o", str(dest), url]
     if subprocess.run(cmd, capture_output=True, text=True, timeout=3600).returncode == 0 and dest.exists():
         return True, "yt-dlp"
