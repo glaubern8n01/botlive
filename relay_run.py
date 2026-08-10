@@ -97,14 +97,16 @@ def _scp(local: Path, remote: str) -> bool:
     rede saturava e cortava (uploads intermitentes). Uma conexão só é rápida e
     estável; verifica o tamanho no destino e re-tenta o arquivo inteiro se cair."""
     size = local.stat().st_size
-    opts = ["-o", "BatchMode=yes", "-o", "ServerAliveInterval=10",
+    # Usa o binário `scp` (confiável no Windows/cmd E Git Bash). O `ssh cat >` via
+    # stdin caía no Git Bash; scp com keepalive + retry é estável. Verifica o
+    # tamanho no destino e re-tenta o arquivo inteiro se cair.
+    opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=10",
             "-o", "ServerAliveCountMax=6", "-o", "TCPKeepAlive=yes", "-C", "-i", SSH_KEY]
     for tent in range(5):
         _ssh(f"rm -f {remote}")
         try:
-            with local.open("rb") as fh:
-                r = subprocess.run(["ssh", *opts, VPS_HOST, f"cat > {remote}"],
-                                   stdin=fh, capture_output=True, text=True, timeout=1800)
+            r = subprocess.run(["scp", *opts, str(local), f"{VPS_HOST}:{remote}"],
+                               capture_output=True, text=True, timeout=1800)
         except (subprocess.SubprocessError, OSError):
             time.sleep(3); continue
         if r.returncode == 0 and _ssh(f"test $(stat -c %s {remote}) -eq {size}").returncode == 0:
