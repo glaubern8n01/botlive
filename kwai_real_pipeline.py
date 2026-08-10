@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -141,9 +142,12 @@ class KwaiRealPipeline:
         # "original" mantém o corte 16:9; o renderizar_vertical_meme faz o
         # crop-to-fill 9:16 (tela toda) + banners. (vertical-fit letterboxava e
         # deixava o vídeo pequeno.)
+        # Duração >= 60s (mínimo EXIGIDO pela agência Kwai; <60s reprova). Alvo ~78s.
+        _pre = int(os.getenv("KWAI_SECONDS_BEFORE", "30"))
+        _post = int(os.getenv("KWAI_SECONDS_AFTER", "48"))
         raw = criar_corte_vertical_de_arquivo(
             source, candidate.timestamp_seconds, f"kwai-real-{token}",
-            seconds_before=12, seconds_after=23, output_layout="original",
+            seconds_before=_pre, seconds_after=_post, output_layout="original",
         )
         title, description, hashtags = action_metadata(str(row.get("title") or ""))
         final = run_dir / f"kwai-real-{token}-aprovado.mp4"

@@ -373,15 +373,17 @@ def renderizar_vertical_meme(
     overlay_png = output_path.with_name(output_path.stem + "_overlay.png")
     gerar_texto_overlay(texts, top_center, bottom_center).save(overlay_png)
 
-    # Best-effort para tirar marca d'água/logo do canal original: apara borda.
-    b = max(0.0, min(0.12, float(_os.getenv("KWAI_LOGO_CROP", "0.045"))))
+    # Corta a borda pra TIRAR marca d'água/logo/nome do canal-fonte (a agência
+    # Kwai reprova "reproduzido/marca d'água de outras redes"). Padrão maior (8%).
+    b = max(0.0, min(0.18, float(_os.getenv("KWAI_LOGO_CROP", "0.08"))))
     crop_mn = f"crop=iw*{1-2*b:.3f}:ih*{1-2*b:.3f}:iw*{b:.3f}:ih*{b:.3f}," if b > 0 else ""
+    # Fundo VERMELHO (padrão dos cortes aprovados na agência, tipo Futebol Respira),
+    # não preto. Configurável por KWAI_BG_COLOR (hex RRGGBB).
+    bg = (_os.getenv("KWAI_BG_COLOR", "ED1C24") or "ED1C24").lstrip("#")[:6] or "ED1C24"
     filtro = (
-        # vídeo grande: preenche a largura (1080) e altura video_h (crop central),
-        # centralizado sobre canvas PRETO; bandas pretas em cima/baixo p/ o texto.
         f"[0:v]{crop_mn}scale=1080:{video_h}:force_original_aspect_ratio=increase:flags=lanczos,"
         f"crop=1080:{video_h},setsar=1,"
-        f"pad=1080:1920:0:{vtop}:black[base];"
+        f"pad=1080:1920:0:{vtop}:0x{bg}[base];"
         "[base][1:v]overlay=0:0[vout]"
     )
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
