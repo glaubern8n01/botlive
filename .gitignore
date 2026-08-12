@@ -27,6 +27,14 @@ botlive-shop/.env.local
 .shop-live-visual/
 botlive-campaigns/data/
 botlive-campaigns/.env.local
+botlive-campaigns/.quarantine/
+botlive-campaigns/test-results/
+botlive-campaigns/rendered-tests/
+botlive-campaigns/*.pid
+
+# Artefatos locais comprovadamente gerados (não ocultar código ou fixtures legítimos).
+.codex-pytest-manual-mobile/
+relay.pid
 
 *.mp4
 *.mov
