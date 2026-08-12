@@ -157,14 +157,23 @@ def download(url: str, dest: Path) -> tuple[bool, str]:
     # Formato TOLERANTE: prioriza combinado (b*, ex.: format 18 do client tv que o
     # yt-dlp novo usa com cookies), depois streams separados, depois qualquer best.
     # O seletor estrito avc1+mp4a falhava quando só havia formato combinado.
+    # Clientes alternativos (tv/ios/web_safari) furam o bot-block do YouTube em
+    # bloqueios LEVES (não usam o PO token do web). Em bloqueio pesado de IP nada
+    # fura — aí o loop RECUA (backoff) pro IP desflagrar. Configurável.
+    clients = os.getenv("RELAY_YT_CLIENTS", "default,tv,web_safari,ios").strip()
     cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates", *cookies,
+           "--extractor-args", f"youtube:player_client={clients}",
            "--match-filter", f"duration < {maxdur}", "--max-filesize", maxsize,
            # GARANTE ÁUDIO: bv*+ba (junta vídeo+áudio) primeiro; b* sozinho pegava
            # formato só-vídeo (ex.: 398 AV1) e o corte saía "invalido" (sem áudio).
            "-f", f"bv*[height<={h}]+ba/b[height<={h}]/best[height<={h}]/best",
            "--merge-output-format", "mp4", "-o", str(dest), url]
-    if subprocess.run(cmd, capture_output=True, text=True, timeout=3600).returncode == 0 and dest.exists():
+    _r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    if _r.returncode == 0 and dest.exists():
         return True, "yt-dlp"
+    # Detecta bot-block (bloqueio de IP, TRANSITÓRIO) vs link morto (removido/privado).
+    _err = ((_r.stderr or "") + (_r.stdout or "")).lower()
+    _botblock = ("confirm you" in _err and "bot" in _err) or "sign in to confirm" in _err
     # B. pytubefix — engine independente (não usa yt-dlp). ssl-off = mesma postura
     # do nocheckcertificate; rede de casa confiável, vídeo público.
     import ssl
@@ -187,7 +196,8 @@ def download(url: str, dest: Path) -> tuple[bool, str]:
         pass
     finally:
         ssl._create_default_https_context = _prev
-    return False, "none"
+    # Bot-block = transitório (não é culpa do vídeo); "dead" = link morto de verdade.
+    return (False, "botblock") if _botblock else (False, "dead")
 
 
 def validate(path: Path) -> bool:
@@ -235,9 +245,14 @@ def process_one(url: str, key: str, cand: dict) -> str:
     print(f"  baixando: {title[:48]} ...", flush=True)
     ok, engine = download(vid_url, local)
     if not ok:
-        # Tira da fila o candidato que não baixa (vídeo removido, privado, região,
-        # etc.), senão o relay re-pega SEMPRE os mesmos e nunca avança. Fica
-        # registrado como bloqueado automático (dá pra reavaliar depois).
+        if engine == "botblock":
+            # Bot-block é bloqueio de IP TRANSITÓRIO — o vídeo é bom. NÃO marca o
+            # candidato como bloqueado (senão a fila de vídeos bons é destruída);
+            # deixa em review_required pra re-tentar. Sinaliza o loop pra RECUAR.
+            local.unlink(missing_ok=True)
+            return "botblock"
+        # Falha REAL (vídeo removido, privado, região): tira da fila, senão o relay
+        # re-pega SEMPRE os mesmos e nunca avança. Fica registrado (reavaliável).
         try:
             _rest(url, key, f"football_source_prospects?prospect_id=eq.{cand['prospect_id']}", "PATCH",
                   {"review_status": "blocked", "reviewed_by": "relay",
@@ -292,6 +307,7 @@ def main() -> None:
     args = ap.parse_args()
     url, key = _env(); WORK.mkdir(parents=True, exist_ok=True)
     done = 0
+    botblocks = 0   # bot-blocks consecutivos do YouTube (controla o recuo)
     while True:
         ok, why = _guard_ok()
         if not ok:
@@ -315,7 +331,20 @@ def main() -> None:
             print(f"[relay] {done+1}: {c['source_url']}")
             r = process_one(url, key, c)
             print(f"[relay] -> {r}")
-            if r == "ready": done += 1
+            if r == "ready":
+                done += 1; botblocks = 0
+            if r == "botblock":
+                # O YouTube flagrou o IP. Martelar mantém o flag e não produz nada.
+                # RECUA (5, 10, 20 min... teto 30) pro IP desflagrar; sai do lote e
+                # re-avalia. O candidato fica intacto na fila pra re-tentar depois.
+                botblocks += 1
+                back = min(300 * (2 ** (botblocks - 1)), 1800)
+                print(f"[relay] BOT-BLOCK do YouTube (x{botblocks}): IP flagrado. "
+                      f"Recuando {back // 60}min pro IP recuperar (candidato preservado).", flush=True)
+                if not args.loop:
+                    break
+                time.sleep(back)
+                break
         if not args.loop:
             break
     print(f"[relay] concluído. novos cortes prontos nesta execução: {done}")
