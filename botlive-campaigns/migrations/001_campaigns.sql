@@ -1,1 +1,4 @@
--- Migração incremental e exclusiva do campaigns.db; schema em local-agent/app/store.py.
+-- Schema version 2. Applied idempotently by migrations/manage.py using app.store.SCHEMA.
+-- All objects use the campaign_ prefix and the isolated campaigns.db database.
+-- Rollback is available with: python migrations/manage.py downgrade --confirm
+-- The confirmation prevents accidental removal; never point CAMPAIGNS_DATABASE_PATH at a legacy database.
