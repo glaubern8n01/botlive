@@ -168,7 +168,18 @@ def download(url: str, dest: Path) -> tuple[bool, str]:
     # limpo, sem depender do IP de casa desflagrar. Vazio = usa o IP de casa.
     proxy = os.getenv("RELAY_PROXY", "").strip()
     proxy_args = ["--proxy", proxy] if proxy else []
-    cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates", *cookies, *proxy_args,
+    # Respiro entre requisições: rajada de downloads re-dispara o bot-block do
+    # YouTube no IP residencial. Espalhar as requisições faz o IP durar mais.
+    # Sem proxy: aplica o respiro; com proxy limpo: dispensa (mais throughput).
+    _sr = os.getenv("RELAY_SLEEP_REQUESTS", "0" if proxy else "1")
+    _si = os.getenv("RELAY_SLEEP_INTERVAL", "0" if proxy else "3")
+    _sm = os.getenv("RELAY_MAX_SLEEP", "0" if proxy else "8")
+    sleep_args = []
+    if _sr != "0":
+        sleep_args += ["--sleep-requests", _sr]
+    if _si != "0":
+        sleep_args += ["--sleep-interval", _si, "--max-sleep-interval", _sm]
+    cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates", *cookies, *proxy_args, *sleep_args,
            "--extractor-args", f"youtube:player_client={clients}",
            "--match-filter", f"duration < {maxdur}", "--max-filesize", maxsize,
            # GARANTE ÁUDIO: bv*+ba (junta vídeo+áudio) primeiro; b* sozinho pegava
