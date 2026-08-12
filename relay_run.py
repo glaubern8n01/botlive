@@ -115,10 +115,13 @@ def _scp(local: Path, remote: str) -> bool:
             "-o", "ServerAliveCountMax=6", "-o", "TCPKeepAlive=yes", "-i", SSH_KEY]
     # Sem `rm -f` antes: o scp SOBRESCREVE o destino sozinho, e aquele rm era mais
     # uma conexão SSH que pendurava 120s e derrubava o relay. Menos conexões = estável.
-    for tent in range(5):
+    # timeout 300s (não 1800): um upload de ~100-450MB leva segundos; se pendurar,
+    # falha em 5min e re-tenta, em vez de congelar o relay por HORAS (5x1800=2.5h).
+    # O ServerAliveInterval mata conexão morta em ~60s; 300s é a rede de segurança.
+    for tent in range(4):
         try:
             r = subprocess.run(["scp", *opts, str(local), f"{VPS_HOST}:{remote}"],
-                               capture_output=True, text=True, timeout=1800)
+                               capture_output=True, text=True, timeout=300)
         except (subprocess.SubprocessError, OSError):
             time.sleep(5); continue
         if r.returncode == 0 and _ssh(f"test $(stat -c %s {remote}) -eq {size}").returncode == 0:
