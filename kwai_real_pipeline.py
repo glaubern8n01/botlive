@@ -145,9 +145,28 @@ class KwaiRealPipeline:
         # Duração >= 60s (mínimo EXIGIDO pela agência Kwai; <60s reprova). Alvo ~78s.
         _pre = int(os.getenv("KWAI_SECONDS_BEFORE", "30"))
         _post = int(os.getenv("KWAI_SECONDS_AFTER", "48"))
+        target = _pre + _post                       # janela alvo (~78s)
+        _min_total = int(os.getenv("KWAI_MIN_SECONDS", "62"))   # margem sobre 60
+        # Duração real da fonte: sem isso o corte trunca quando o PICO está perto do
+        # fim (o `after` não tem espaço) e sai <60s -> reprova. Aqui a janela DESLIZA
+        # pra caber os 78s cheios dentro da fonte, rebalanceando nas bordas.
+        try:
+            with VideoFileClip(str(source), audio=False) as _probe:
+                src_dur = float(_probe.duration or 0)
+        except Exception:
+            src_dur = 0.0
+        if src_dur < _min_total:
+            # Fonte curta demais pra gerar um corte >=60s conforme a agência.
+            return self._reject(row, f"source_too_short:{src_dur:.0f}s<{_min_total}s")
+        peak = int(candidate.timestamp_seconds)
+        hi = max(0, int(src_dur) - target)          # ultimo start que ainda cabe a janela cheia
+        start = min(max(0, peak - _pre), hi)
+        end = min(src_dur, start + target)
+        _pre_eff = max(1, peak - start)             # before/after efetivos p/ o cortador
+        _post_eff = max(1, int(round(end - peak)))
         raw = criar_corte_vertical_de_arquivo(
-            source, candidate.timestamp_seconds, f"kwai-real-{token}",
-            seconds_before=_pre, seconds_after=_post, output_layout="original",
+            source, peak, f"kwai-real-{token}",
+            seconds_before=_pre_eff, seconds_after=_post_eff, output_layout="original",
         )
         title, description, hashtags = action_metadata(str(row.get("title") or ""))
         final = run_dir / f"kwai-real-{token}-aprovado.mp4"
@@ -159,7 +178,10 @@ class KwaiRealPipeline:
             legenda=legenda_contextual(str(row.get("title") or ""), title, seed=seed),
             subtexto=subtexto_aleatorio(title, seed=seed),      # subtexto do vídeo no rodapé (sem canal)
         ))
-        validation = validar_video_final(final, require_audio=True, min_duration_seconds=10, min_size_bytes=100_000)
+        # Piso RÍGIDO de 60s: a agência Kwai reprova qualquer corte com menos de 60s.
+        # Mesmo com a janela deslizante acima, se por qualquer motivo sair <60s, rejeita
+        # (nunca publica corte fora de conformidade).
+        validation = validar_video_final(final, require_audio=True, min_duration_seconds=60, min_size_bytes=100_000)
         if not validation.valid:
             return self._reject(row, f"invalid_render:{validation.reason}")
 

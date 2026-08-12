@@ -86,9 +86,18 @@ def _rest(url: str, key: str, path: str, method: str = "GET", body=None):
         return json.loads(raw) if raw else []
 
 
-def _ssh(cmd: str, timeout: int = 120) -> subprocess.CompletedProcess:
-    return subprocess.run(["ssh", "-o", "BatchMode=yes", "-i", SSH_KEY, VPS_HOST, cmd],
-                          capture_output=True, text=True, timeout=timeout)
+# Windows OpenSSH NÃO suporta ControlMaster (multiplexação usa Unix sockets), então
+# cada chamada é uma conexão nova. Para não pendurar/crashar quando a VPS reseta ou
+# satura: ConnectTimeout curto (falha em ~20s) + captura de TimeoutExpired (o relay
+# segue vivo em vez de morrer no loop). Poucas conexões por arquivo pra não saturar.
+def _ssh(cmd: str, timeout: int = 45) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
+                               "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3",
+                               "-i", SSH_KEY, VPS_HOST, cmd],
+                              capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(["ssh"], 124, "", "ssh timeout")
 
 
 def _scp(local: Path, remote: str) -> bool:
@@ -104,16 +113,17 @@ def _scp(local: Path, remote: str) -> bool:
     # é comprimido, e a compressão SSH saturava/cortava). scp puro é rápido/estável.
     opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=10",
             "-o", "ServerAliveCountMax=6", "-o", "TCPKeepAlive=yes", "-i", SSH_KEY]
+    # Sem `rm -f` antes: o scp SOBRESCREVE o destino sozinho, e aquele rm era mais
+    # uma conexão SSH que pendurava 120s e derrubava o relay. Menos conexões = estável.
     for tent in range(5):
-        _ssh(f"rm -f {remote}")
         try:
             r = subprocess.run(["scp", *opts, str(local), f"{VPS_HOST}:{remote}"],
                                capture_output=True, text=True, timeout=1800)
         except (subprocess.SubprocessError, OSError):
-            time.sleep(3); continue
+            time.sleep(5); continue
         if r.returncode == 0 and _ssh(f"test $(stat -c %s {remote}) -eq {size}").returncode == 0:
             return True
-        time.sleep(min(3 + tent * 3, 15))
+        time.sleep(min(5 + tent * 5, 25))
     return False
 
 
