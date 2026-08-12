@@ -2,6 +2,10 @@
 
 Sistema autonomo para detectar momentos fortes pelo conteudo do video, sem depender de chat.
 
+## Módulo opcional de campanhas
+
+O MVP isolado `botlive-campaigns/` organiza campanhas remuneradas, materiais autorizados, produção, revisão, exportação manual e resultados. Ele permanece desativado por padrão, usa banco e rotas próprios e não publica externamente; consulte `botlive-campaigns/README.md`.
+
 ## Modos principais
 
 - `live-clips`: para live ao vivo. Captura blocos, detecta eventos, salva timestamps e gera previews rapidos em `D:/robo-cortes-dark/cortes/live_preview`.

@@ -1,0 +1,12 @@
+{
+    "postagens": {
+        "youtube": {
+            "erro": null,
+            "external_id": "123",
+            "conta": "principal",
+            "dry_run": false,
+            "tempo_s": 0.0,
+            "registrado_em": "2026-07-30T20:58:58+00:00"
+        }
+    }
+}

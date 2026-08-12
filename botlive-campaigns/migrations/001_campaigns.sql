@@ -1,0 +1,1 @@
+-- Migração incremental e exclusiva do campaigns.db; schema em local-agent/app/store.py.

@@ -25,6 +25,8 @@ botlive-shop/data/run/
 botlive-shop/data/
 botlive-shop/.env.local
 .shop-live-visual/
+botlive-campaigns/data/
+botlive-campaigns/.env.local
 
 *.mp4
 *.mov

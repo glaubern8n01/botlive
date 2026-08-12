@@ -1,0 +1,31 @@
+{
+    "corte": "corte_demo.mp4",
+    "horizontal": "G:\\botlive\\.codex-pytest-manual-mobile\\test_manifest_generation_keeps0\\corte_demo.mp4",
+    "vertical": "G:\\botlive\\.codex-pytest-manual-mobile\\test_manifest_generation_keeps0\\corte_demo_vertical.mp4",
+    "vertical_erro": null,
+    "nicho": "gta",
+    "credito_streamer": null,
+    "credito_canal": "@GTA6brasilcortesoficial",
+    "legenda": "LEGENDA TESTE",
+    "hashtags": [
+        "#teste"
+    ],
+    "legenda_fonte": "mock",
+    "legenda_fraca": false,
+    "legenda_modelo": null,
+    "legenda_erro": null,
+    "tokens": {
+        "entrada": 0,
+        "saida": 0
+    },
+    "custo_usd": null,
+    "transcricao": "fala teste",
+    "transcricao_erro": null,
+    "tempos_s": {
+        "transcricao": 0.0,
+        "ia": 0.0,
+        "render_vertical": 0.0,
+        "total": 0.0
+    },
+    "gerado_em": "2026-07-30T20:58:58+00:00"
+}
