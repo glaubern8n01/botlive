@@ -19,4 +19,3 @@ ADAPTERS = {
 
 def public_adapters():
     return [asdict(item) for item in ADAPTERS.values()]
-

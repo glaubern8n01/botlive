@@ -1,2 +1,1 @@
 """Isolated BotLive campaign agent."""
-
