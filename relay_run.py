@@ -161,7 +161,11 @@ def download(url: str, dest: Path) -> tuple[bool, str]:
     # bloqueios LEVES (não usam o PO token do web). Em bloqueio pesado de IP nada
     # fura — aí o loop RECUA (backoff) pro IP desflagrar. Configurável.
     clients = os.getenv("RELAY_YT_CLIENTS", "default,tv,web_safari,ios").strip()
-    cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates", *cookies,
+    # Proxy (ex.: iproyal residencial): fura o bloqueio de IP na hora usando um IP
+    # limpo, sem depender do IP de casa desflagrar. Vazio = usa o IP de casa.
+    proxy = os.getenv("RELAY_PROXY", "").strip()
+    proxy_args = ["--proxy", proxy] if proxy else []
+    cmd = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-check-certificates", *cookies, *proxy_args,
            "--extractor-args", f"youtube:player_client={clients}",
            "--match-filter", f"duration < {maxdur}", "--max-filesize", maxsize,
            # GARANTE ÁUDIO: bv*+ba (junta vídeo+áudio) primeiro; b* sozinho pegava
