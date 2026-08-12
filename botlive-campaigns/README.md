@@ -1,28 +1,76 @@
 # BotLive Campanhas de Cortes
 
-MVP local, isolado e desativado por padrão para organizar campanhas remuneradas de cortes. O módulo não publica conteúdo, não acessa contas externas, não faz scraping e não compartilha fila ou banco com o BotLive legado.
+Módulo local isolado para campanhas remuneradas. Ele reutiliza o detector e o renderizador do BotLive por adaptador, mas mantém banco, mídia, fila, worker, rotas, limites e pausa próprios. A feature flag nasce desligada e não existe publicação automática.
 
-## Ativação segura
+## Capacidades
 
-1. Copie `.env.example` para seu gerenciador local de ambiente.
-2. Defina `CAMPAIGNS_ENABLED=true`, `CAMPAIGNS_DRY_RUN=true` e um `CAMPAIGNS_LOCAL_TOKEN` longo.
-3. Inicie o agente em `127.0.0.1:8775` com `uvicorn app.main:app --app-dir botlive-campaigns/local-agent`.
-4. No dashboard, defina `VITE_CAMPAIGNS_ENABLED=true` e, se necessário, `VITE_CAMPAIGNS_API_URL`.
+- campanhas e regras estruturadas;
+- upload autorizado em quarentena com extensão/MIME/assinatura, SHA-256, deduplicação e `ffprobe` com timeout;
+- fila SQLite com claim atômico, heartbeat, retries, backoff, cancelamento e recuperação de órfãos;
+- detecção pelo `highlight_detector.py` e render 1080×1920 pelo `clipper.py` legado;
+- texto/gancho/marca autorizada queimados no vídeo e arquivo SRT acompanhante;
+- checklist crítico, revisão humana e comparação original/corte;
+- canais, exportação manual para celular por link temporário, métricas, pagamentos, CSV e auditoria;
+- papéis `admin`, `operator` e `reviewer`, autorização backend e rate limit de endpoints sensíveis.
 
-Sem a flag, nenhuma rota operacional é liberada e a aba não aparece. Networking Club, ViewX e todas as demais plataformas usam entrada manual: nenhuma API pública oficial foi assumida.
+## Execução local segura
 
-## Limites do MVP
+Use Python 3.12+ com FFmpeg e FFprobe no PATH. Instale `local-agent/requirements.txt`. Configure os valores de `.env.example` em seu gerenciador de ambiente e mantenha:
 
-- Cadastro, materiais autorizados, candidatos, revisão, contas, publicações manuais, resultados e auditoria.
-- Importação por upload local; URL externa é apenas referência até existir integração oficial revisada.
-- O worker apenas prepara jobs em dry-run. Publicação real é bloqueada.
-- O motor legado é referenciado por comando/arquivo de entrada, sem importá-lo no processo do agente.
+```env
+CAMPAIGNS_ENABLED=true
+CAMPAIGNS_DRY_RUN=true
+CAMPAIGNS_PAUSED=false
+```
 
-## Rollback
+Migre e inicie apenas os componentes novos:
 
-Desative `VITE_CAMPAIGNS_ENABLED` e `CAMPAIGNS_ENABLED`. Para rollback de dados, pare somente o agente de campanhas e restaure `botlive-campaigns/data/backups/`; nunca mexa no banco/fila legados.
+```powershell
+python botlive-campaigns/migrations/manage.py upgrade
+uvicorn app.main:app --app-dir botlive-campaigns/local-agent --host 127.0.0.1 --port 8775
+python -m app.worker  # executar a partir de botlive-campaigns/local-agent
+```
+
+No dashboard:
+
+```env
+VITE_CAMPAIGNS_ENABLED=true
+VITE_CAMPAIGNS_API_URL=http://127.0.0.1:8775
+```
+
+Os tokens ficam somente em `sessionStorage`. O backend não usa cookie/sessão, portanto CSRF baseado em cookie não se aplica; CORS é limitado às origens configuradas. Nenhuma senha social é armazenada.
+
+## Fluxo dry-run
+
+1. Cadastre campanha e regras.
+2. Faça upload apenas de arquivo autorizado.
+3. Enfileire detecção e execute o worker.
+4. Renderize o candidato e confira os dois players/checklist.
+5. Aprove manualmente.
+6. Gere pacote ZIP com vídeo, texto e manifesto. O link móvel expira em 15 minutos.
+7. Publique manualmente fora do BotLive e registre depois a URL/métricas.
+
+TikTok não é descrito como “rascunho automático”: o MVP fornece `ready_for_manual_publication`. APIs das plataformas externas não são chamadas.
 
 ## Testes
 
-`python -m unittest discover -s botlive-campaigns/tests -v`
+```powershell
+python -m unittest discover -s botlive-campaigns/tests -v
+npm run lint --prefix dashboard
+npm run build --prefix dashboard
+```
 
+O smoke real usa um vídeo sintético local, produz saída 1080×1920 H.264/AAC e a valida novamente com o motor legado. Artefatos ficam em `botlive-campaigns/rendered-tests/`, ignorados pelo Git.
+
+## Migração e rollback
+
+`manage.py upgrade` é idempotente. Para testar rollback em um banco temporário, use `downgrade --confirm`. Em operação, prefira backup/restauração do `campaigns.db`; nunca aponte `CAMPAIGNS_DATABASE_PATH` para banco legado.
+
+Rollback de aplicação: desligue `VITE_CAMPAIGNS_ENABLED` e `CAMPAIGNS_ENABLED`. Isso remove a aba e bloqueia as rotas sem tocar no dashboard, filas ou serviços do BotLive original.
+
+## Limitações honestas
+
+- transcrição automática do motor legado ainda é um stub; o módulo gera SRT/texto a partir dos metadados aprovados, sem alegar transcrição por IA;
+- integrações externas permanecem manuais até API, escopos e termos oficiais serem aprovados;
+- controle rígido de CPU/memória deve ser aplicado pelo serviço/container; internamente a concorrência padrão é um worker;
+- HTTPS para link móvel depende do proxy local/VPS e não é ativado por este módulo.

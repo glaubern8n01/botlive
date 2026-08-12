@@ -14,7 +14,7 @@ class Tests(unittest.TestCase):
   self.assertEqual({"networking-club","viewx","manual"},set(ADAPTERS));self.assertTrue(all(not x.official_api_verified for x in ADAPTERS.values()))
  def test_schema_idempotent(self): store.migrate();self.assertEqual([],store.rows("campaign_campaigns"))
  def test_candidate_idempotency(self):
-  c=store.insert("campaign_campaigns",{"platform":"manual","name":"Teste","created_at":store.now()});p={"campaign_id":c["id"],"idempotency_key":"same-key"};store.insert("campaign_candidates",p)
+  stamp=store.now();c=store.insert("campaign_campaigns",{"platform":"manual","name":"Teste","created_at":stamp,"updated_at":stamp});p={"campaign_id":c["id"],"idempotency_key":"same-key","created_at":stamp,"updated_at":stamp};store.insert("campaign_candidates",p)
   with self.assertRaises(Exception): store.insert("campaign_candidates",p)
  def test_path_confinement(self):
   root=Path(tempfile.mkdtemp());self.assertEqual(root.resolve()/"passwd",confined_path(root,"../../passwd"))
