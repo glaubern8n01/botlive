@@ -100,8 +100,10 @@ def _scp(local: Path, remote: str) -> bool:
     # Usa o binário `scp` (confiável no Windows/cmd E Git Bash). O `ssh cat >` via
     # stdin caía no Git Bash; scp com keepalive + retry é estável. Verifica o
     # tamanho no destino e re-tenta o arquivo inteiro se cair.
+    # SEM -C (compressão): o -C causava falhas intermitentes de upload (vídeo já
+    # é comprimido, e a compressão SSH saturava/cortava). scp puro é rápido/estável.
     opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=10",
-            "-o", "ServerAliveCountMax=6", "-o", "TCPKeepAlive=yes", "-C", "-i", SSH_KEY]
+            "-o", "ServerAliveCountMax=6", "-o", "TCPKeepAlive=yes", "-i", SSH_KEY]
     for tent in range(5):
         _ssh(f"rm -f {remote}")
         try:
