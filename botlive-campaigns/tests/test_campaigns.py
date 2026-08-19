@@ -11,7 +11,9 @@ class Tests(unittest.TestCase):
   with store.connect() as db:
    for table in ("campaign_candidates","campaign_campaigns"):db.execute(f"DELETE FROM {table}")
  def test_manual_adapters(self):
-  self.assertEqual({"networking-club","viewx","manual"},set(ADAPTERS));self.assertTrue(all(not x.official_api_verified for x in ADAPTERS.values()))
+  from app.platform_catalog import PLATFORMS
+  self.assertEqual({x["id"] for x in PLATFORMS}|{"manual"},set(ADAPTERS));self.assertEqual(11,len(ADAPTERS))
+  self.assertTrue(all(not x.official_api_verified for x in ADAPTERS.values()));self.assertTrue(all(x.mode=="manual" for x in ADAPTERS.values()))
  def test_schema_idempotent(self): store.migrate();self.assertEqual([],store.rows("campaign_campaigns"))
  def test_candidate_idempotency(self):
   stamp=store.now();c=store.insert("campaign_campaigns",{"platform":"manual","name":"Teste","created_at":stamp,"updated_at":stamp});p={"campaign_id":c["id"],"idempotency_key":"same-key","created_at":stamp,"updated_at":stamp};store.insert("campaign_candidates",p)

@@ -7,6 +7,25 @@ from .queue import claim,heartbeat,recover_orphans,transition
 from .rules import evaluate,summary
 from .store import ROOT,audit,connect,get,insert,now,uid,update
 
+def duplicado(candidate,output_sha256):
+    """Procura outro candidato que ja represente o mesmo corte.
+
+    Duas formas contam como duplicidade: arquivo final identico (mesmo sha256)
+    ou trecho sobreposto em mais de 50% do mesmo material de origem.
+    """
+    inicio=float(candidate.get("source_start") or 0)
+    fim=float(candidate.get("source_end") or 0)
+    duracao=max(fim-inicio,0.001)
+    with connect() as db:
+        if output_sha256:
+            igual=db.execute("SELECT id FROM campaign_candidates WHERE campaign_id=? AND output_sha256=? AND id<>? LIMIT 1",(candidate["campaign_id"],output_sha256,candidate["id"])).fetchone()
+            if igual:return igual["id"]
+        vizinhos=db.execute("SELECT id,source_start,source_end FROM campaign_candidates WHERE campaign_id=? AND material_id=? AND id<>? AND status<>'rejected'",(candidate["campaign_id"],candidate["material_id"],candidate["id"])).fetchall()
+    for vizinho in vizinhos:
+        sobreposicao=min(fim,float(vizinho["source_end"] or 0))-max(inicio,float(vizinho["source_start"] or 0))
+        if sobreposicao/duracao>0.5:return vizinho["id"]
+    return None
+
 def process(job,worker_id):
  payload=json.loads(job["payload"]);transition(job["id"],"running",heartbeat_at=now());heartbeat(job["id"],worker_id,.05)
  if job["kind"]=="detect":
@@ -16,7 +35,7 @@ def process(job,worker_id):
    candidate=insert("campaign_candidates",{"campaign_id":campaign["id"],"material_id":material["id"],"source_start":start,"source_end":end,"score":item["score"],"algorithm_version":engine.ALGORITHM_VERSION,"parameters":json.dumps(payload),"version":1,"caption":" ".join(json.loads(campaign["hashtags"]) + json.loads(campaign["mentions"])),"hook":"","layout":payload.get("layout","vertical-fit"),"status":"detected","checklist_status":"pending","idempotency_key":key,"created_at":now(),"updated_at":now()});heartbeat(job["id"],worker_id,.1+.8*(index+1)/max(len(items),1));audit("candidate.detected","candidate",candidate["id"],item)
   return {"candidates":len(items)}
  if job["kind"]=="render":
-  candidate=get("campaign_candidates",job["entity_id"]);material=get("campaign_materials",candidate["material_id"]);campaign=get("campaign_campaigns",candidate["campaign_id"]);out=ROOT/"data"/"outputs"/campaign["id"]/f"{candidate['id']}.mp4";mentions=json.loads(campaign["mentions"]);rules=json.loads(campaign["rules"]);result=engine.render(material["local_path"],out,candidate["source_start"],candidate["source_end"],candidate["layout"],candidate["caption"],candidate["hook"]," ".join(mentions),rules.get("cta", ""));update("campaign_candidates",candidate["id"],{"output_path":result["path"],"output_sha256":result["sha256"],"status":"review","updated_at":now()});candidate=get("campaign_candidates",candidate["id"]);campaign["rules"]=rules;campaign["hashtags"]=json.loads(campaign["hashtags"]);campaign["mentions"]=mentions;checks=evaluate(campaign,candidate,{**result,"authorized":bool(material["authorized"])});state=summary(checks)
+  candidate=get("campaign_candidates",job["entity_id"]);material=get("campaign_materials",candidate["material_id"]);campaign=get("campaign_campaigns",candidate["campaign_id"]);out=ROOT/"data"/"outputs"/campaign["id"]/f"{candidate['id']}.mp4";mentions=json.loads(campaign["mentions"]);rules=json.loads(campaign["rules"]);result=engine.render(material["local_path"],out,candidate["source_start"],candidate["source_end"],candidate["layout"],candidate["caption"],candidate["hook"]," ".join(mentions),rules.get("cta", ""));update("campaign_candidates",candidate["id"],{"output_path":result["path"],"output_sha256":result["sha256"],"status":"review","updated_at":now()});candidate=get("campaign_candidates",candidate["id"]);campaign["rules"]=rules;campaign["hashtags"]=json.loads(campaign["hashtags"]);campaign["mentions"]=mentions;checks=evaluate(campaign,candidate,{**result,"authorized":bool(material["authorized"]),"duplicate_of":duplicado(candidate,result["sha256"])});state=summary(checks)
   with connect() as db:
    for check in checks:db.execute("INSERT OR REPLACE INTO campaign_rule_checks(id,candidate_id,rule_key,status,severity,reason,evidence,checked_at) VALUES(?,?,?,?,?,?,?,?)",(uid(),candidate["id"],check["rule_key"],check["status"],check["severity"],check["reason"],json.dumps(check["evidence"]),check["checked_at"]))
   update("campaign_candidates",candidate["id"],{"checklist_status":state,"updated_at":now()});return result

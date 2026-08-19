@@ -12,6 +12,7 @@ from .auth import require,rate_limit,token_hash
 from .media import accepted_root,safe_path,validate_upload
 from .platform_catalog import PLATFORMS
 from .queue import cancel,enqueue,recover_orphans
+from . import vexbridge
 from .store import ROOT,audit,connect,get,insert,migrate,now,rows,uid,update
 
 @asynccontextmanager
@@ -29,13 +30,14 @@ class RenderIn(BaseModel):idempotency_key:str
 class PublicationIn(BaseModel):campaign_id:str;candidate_id:str;channel_id:str|None=None;description:str="";hashtags:list[str]=[];idempotency_key:str
 class ResultIn(BaseModel):campaign_id:str;publication_id:str|None=None;reported_views:int=0;validated_views:int=0;ranking:int|None=None;estimated_revenue:float=0;confirmed_revenue:float=0;processing_cost:float=0;payment_status:str="pending";notes:str=""
 class PublishedIn(BaseModel):published_url:str=Field(pattern=r"^https://");status:str="published_manual"
+class MetricIn(BaseModel):publication_id:str;reported_views:int=Field(0,ge=0);validated_views:int=Field(0,ge=0);source:str="manual"
 class SettingIn(BaseModel):value:dict
 
 def page(table,limit,offset):return {"items":rows(table,limit,offset),"limit":limit,"offset":offset}
 def encoded_campaign(value):
  data=value.model_dump();data.update(networks=json.dumps(data["networks"]),rules=json.dumps(data["rules"]),hashtags=json.dumps(data["hashtags"]),mentions=json.dumps(data["mentions"]));return data
 @app.get("/campaigns/v1/health")
-def health():return {"ok":True,"enabled":os.getenv("CAMPAIGNS_ENABLED","false").lower()=="true","dry_run":os.getenv("CAMPAIGNS_DRY_RUN","true").lower()=="true","paused":os.getenv("CAMPAIGNS_PAUSED","false").lower()=="true","legacy_untouched":True,"schema_version":2}
+def health():return {"ok":True,"enabled":os.getenv("CAMPAIGNS_ENABLED","false").lower()=="true","dry_run":os.getenv("CAMPAIGNS_DRY_RUN","true").lower()=="true","paused":os.getenv("CAMPAIGNS_PAUSED","false").lower()=="true","vexpublish_bridge":vexbridge.habilitada(),"legacy_untouched":True,"schema_version":2}
 @app.get("/campaigns/v1/adapters",dependencies=[Depends(require("read"))])
 def adapters():return public_adapters()
 @app.get("/campaigns/v1/platforms",dependencies=[Depends(require("read"))])
@@ -130,6 +132,27 @@ def confirm_published(item_id:str,value:PublishedIn,user=Depends(require("export
  try:result=update("campaign_publications",item_id,{"published_url":value.published_url,"status":value.status,"updated_at":now()})
  except KeyError:raise HTTPException(404,"Publicação inexistente")
  audit("publication.confirmed_manual","publication",item_id,{"url":value.published_url},actor=user["actor"],role=user["role"]);return result
+@app.post("/campaigns/v1/publications/{item_id}/queue")
+def queue_publication(item_id:str,user=Depends(require("export"))):
+ publication=get("campaign_publications",item_id)
+ if not publication:raise HTTPException(404,"Publicação inexistente")
+ candidate=get("campaign_candidates",publication["candidate_id"]);campaign=get("campaign_campaigns",publication["campaign_id"]);channel=get("campaign_channels",publication["channel_id"]) if publication["channel_id"] else None
+ try:result=vexbridge.enfileirar(publication,candidate or {},campaign or {},channel)
+ except vexbridge.BridgeError as exc:
+  audit("publication.queue_refused","publication",item_id,{"reason":str(exc)},result="blocked",actor=user["actor"],role=user["role"]);raise HTTPException(422,str(exc))
+ update("campaign_publications",item_id,{"mode":"vexpublish","status":"queued_vexpublish","error":"","updated_at":now()});audit("publication.queued_vexpublish","publication",item_id,result,actor=user["actor"],role=user["role"]);return result
+@app.get("/campaigns/v1/metrics",dependencies=[Depends(require("read"))])
+def metrics(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0)):return page("campaign_metrics",limit,offset)
+@app.post("/campaigns/v1/metrics",status_code=201)
+def create_metric(value:MetricIn,user=Depends(require("write"))):
+ if not get("campaign_publications",value.publication_id):raise HTTPException(404,"Publicação inexistente")
+ if value.validated_views>value.reported_views:raise HTTPException(422,"Views validadas não podem superar as informadas")
+ data=value.model_dump();data.update(id=uid(),recorded_at=now());insert("campaign_metrics",data);audit("metric.recorded","metric",data["id"],{"publication_id":value.publication_id},actor=user["actor"],role=user["role"]);return data
+@app.get("/campaigns/v1/publications/{item_id}/metrics",dependencies=[Depends(require("read"))])
+def publication_metrics(item_id:str):
+ if not get("campaign_publications",item_id):raise HTTPException(404,"Publicação inexistente")
+ items=rows("campaign_metrics",200,0,"publication_id=?",(item_id,));latest=items[0] if items else None
+ return {"items":items,"latest_validated_views":latest["validated_views"] if latest else 0,"samples":len(items)}
 @app.post("/campaigns/v1/publications/{item_id}/export")
 def export_package(request:Request,item_id:str,user=Depends(require("export"))):
  rate_limit(request,"export",10,60);publication=get("campaign_publications",item_id);candidate=get("campaign_candidates",publication["candidate_id"]) if publication else None
