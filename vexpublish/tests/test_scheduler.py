@@ -10,8 +10,12 @@ from vexpublish.queue import jobs
 from vexpublish.scheduler import planner
 
 
-def _publicado(conta, midia, quando, sufixo):
-    """Cria um job ja concluido para alimentar os contadores da conta."""
+def _publicado(conta, midia, quando, sufixo, dry_run=0):
+    """Cria um job ja concluido para alimentar os contadores da conta.
+
+    dry_run=0 por padrao: estes testes tratam de limite de publicacao real.
+    Ensaio a seco tem teste proprio no fim do arquivo.
+    """
     registro = models.PublishJob(
         channel_id=conta["channel_id"],
         platform=conta["platform"],
@@ -22,7 +26,7 @@ def _publicado(conta, midia, quando, sufixo):
     store.atualizar(
         "vexpublish_jobs",
         registro["id"],
-        {"status": "posted", "posted_at": quando.isoformat()},
+        {"status": "posted", "posted_at": quando.isoformat(), "dry_run": dry_run},
     )
     return registro
 
@@ -120,3 +124,43 @@ def test_job_bloqueado_por_limite_e_adiado_sem_gastar_tentativa(job, conta, midi
     assert adiado["status"] == "pending"
     assert adiado["attempts"] == 0
     assert adiado["run_after"] is not None
+
+
+def test_ensaio_em_dry_run_nao_gasta_a_cota_da_conta(conta, midia):
+    """Job dry-run termina como posted, mas nao publicou nada: nao pode
+    bloquear a fila real por intervalo minimo nem por teto diario."""
+    registry.definir_limites(conta["id"], minimum_interval_minutes=60, max_posts_per_day=1)
+    seco = models.PublishJob(
+        channel_id=conta["channel_id"],
+        platform=conta["platform"],
+        account=conta["id"],
+        media_path=f"{midia}-seco",
+        requires_approval=False,
+    ).criar()
+    store.atualizar(
+        "vexpublish_jobs",
+        seco["id"],
+        {"status": "posted", "posted_at": store.agora(), "dry_run": 1},
+    )
+    ajustada = store.obter("vexpublish_accounts", conta["id"])
+    assert planner.pode_publicar_agora(ajustada)[0] is True
+
+
+def test_publicacao_real_gasta_a_cota(conta, midia):
+    registry.definir_limites(conta["id"], minimum_interval_minutes=60)
+    real = models.PublishJob(
+        channel_id=conta["channel_id"],
+        platform=conta["platform"],
+        account=conta["id"],
+        media_path=f"{midia}-real",
+        requires_approval=False,
+    ).criar()
+    store.atualizar(
+        "vexpublish_jobs",
+        real["id"],
+        {"status": "posted", "posted_at": store.agora(), "dry_run": 0},
+    )
+    ajustada = store.obter("vexpublish_accounts", conta["id"])
+    permitido, motivo = planner.pode_publicar_agora(ajustada)
+    assert permitido is False
+    assert motivo == "intervalo_minimo"

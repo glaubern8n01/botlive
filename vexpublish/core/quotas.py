@@ -52,11 +52,12 @@ def disco_livre_gb(caminho=None) -> float:
 
 
 def publicados_na_ultima_hora() -> int:
+    """So publicacao real conta para o teto por hora."""
     corte = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     with store.conectar() as db:
         linha = db.execute(
             "SELECT COUNT(*) AS total FROM vexpublish_jobs "
-            "WHERE status='posted' AND posted_at>=?",
+            "WHERE status='posted' AND posted_at>=? AND dry_run=0",
             (corte,),
         ).fetchone()
     return int(linha["total"]) if linha else 0

@@ -39,10 +39,12 @@ def _horas_permitidas(conta: dict) -> list:
 
 
 def _ultima_publicacao(account_id: str) -> datetime | None:
+    """Ultima publicacao REAL. Ensaio em dry-run nao publicou nada e nao pode
+    gastar a cota da conta - senao um teste a seco trava a fila de verdade."""
     with store.conectar() as db:
         linha = db.execute(
             "SELECT posted_at FROM vexpublish_jobs "
-            "WHERE account=? AND status='posted' AND posted_at IS NOT NULL "
+            "WHERE account=? AND status='posted' AND posted_at IS NOT NULL AND dry_run=0 "
             "ORDER BY posted_at DESC LIMIT 1",
             (account_id,),
         ).fetchone()
@@ -55,7 +57,7 @@ def _publicados_no_dia(account_id: str, inicio: datetime) -> int:
     with store.conectar() as db:
         linha = db.execute(
             "SELECT COUNT(*) AS total FROM vexpublish_jobs "
-            "WHERE account=? AND status='posted' AND posted_at>=?",
+            "WHERE account=? AND status='posted' AND posted_at>=? AND dry_run=0",
             (account_id, inicio.isoformat()),
         ).fetchone()
     return int(linha["total"]) if linha else 0

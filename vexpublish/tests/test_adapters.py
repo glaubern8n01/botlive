@@ -38,12 +38,51 @@ def test_nenhum_adapter_publica_de_verdade():
     assert all(x != "SIM" for x in adapters.compatibilidade().values())
 
 
-@pytest.mark.parametrize("plataforma", PLATAFORMAS)
+@pytest.mark.parametrize("plataforma", ("tiktok", "instagram", "kwai"))
 def test_publish_real_ainda_nao_existe(plataforma, job, conta):
     adapter = adapters.obter(plataforma)
     with pytest.raises(VexPublishError) as erro:
         adapter.publish(job, conta, {})
     assert erro.value.codigo == CodigoErro.MANUAL_ACTION_REQUIRED
+
+
+def test_youtube_recusa_envio_sem_arquivo(job, conta):
+    """Unico adapter com publish real: falha antes de tocar a rede."""
+    adapter = adapters.obter("youtube")
+    with pytest.raises(VexPublishError) as erro:
+        adapter.publish(job, conta, {"video_path": "nao-existe.mp4"})
+    assert erro.value.codigo == CodigoErro.VALIDATION_ERROR
+
+
+def test_youtube_nasce_private():
+    from vexpublish.adapters import youtube
+
+    assert youtube._visibilidade(None) == "private"
+    assert youtube._visibilidade("unlisted") == "unlisted"
+
+
+def test_youtube_publico_exige_opt_in(monkeypatch):
+    from vexpublish.adapters import youtube
+
+    with pytest.raises(VexPublishError) as erro:
+        youtube._visibilidade("public")
+    assert "ALLOW_PUBLIC" in erro.value.mensagem
+    monkeypatch.setenv("VEXPUBLISH_YOUTUBE_ALLOW_PUBLIC", "true")
+    assert youtube._visibilidade("public") == "public"
+
+
+def test_youtube_visibilidade_invalida_e_recusada():
+    from vexpublish.adapters import youtube
+
+    with pytest.raises(VexPublishError):
+        youtube._visibilidade("secreto")
+
+
+def test_youtube_tags_aceitam_json_e_respeitam_teto():
+    from vexpublish.adapters import youtube
+
+    assert youtube._tags('["#gta6", "#shorts", "#gta6"]') == ["gta6", "shorts"]
+    assert youtube._tags(["x" * 500, "gta"]) == []
 
 
 def test_adapter_desconhecido_e_recusado():

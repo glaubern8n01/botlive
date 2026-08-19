@@ -74,11 +74,24 @@ def test_teto_por_hora_bloqueia(canal, conta, midia, monkeypatch):
     for sufixo in range(2):
         registro = _job(canal, conta, midia, f"h{sufixo}", pronto=False)
         store.atualizar(
-            "vexpublish_jobs", registro["id"], {"status": "posted", "posted_at": store.agora()}
+            "vexpublish_jobs",
+            registro["id"],
+            {"status": "posted", "posted_at": store.agora(), "dry_run": 0},
         )
     permitido, motivo = quotas.verificar()
     assert permitido is False
     assert motivo == "teto_por_hora"
+
+
+def test_ensaio_em_dry_run_nao_gasta_o_teto_por_hora(canal, conta, midia, monkeypatch):
+    monkeypatch.setenv("VEXPUBLISH_MAX_JOBS_PER_HOUR", "1")
+    registro = _job(canal, conta, midia, "seco", pronto=False)
+    store.atualizar(
+        "vexpublish_jobs",
+        registro["id"],
+        {"status": "posted", "posted_at": store.agora(), "dry_run": 1},
+    )
+    assert quotas.verificar()[0] is True
 
 
 def test_publicacao_antiga_nao_conta_no_teto_por_hora(canal, conta, midia, monkeypatch):
