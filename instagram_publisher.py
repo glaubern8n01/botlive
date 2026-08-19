@@ -309,6 +309,12 @@ RUPLOAD_BASE = "https://rupload.facebook.com/ig-api-upload"
 _PUBLISH_POLL_SECONDS = 10
 _PUBLISH_POLL_MAX = 60  # ate 10min de processamento do Reel
 
+# Retry do upload dentro do proprio job. Antes disso, uma falha do rupload
+# custava um ciclo inteiro do vigia; producao gastava ~5 ciclos por Reel.
+_UPLOAD_TENTATIVAS = int(os.getenv("BOTLIVE_IG_UPLOAD_TENTATIVAS", "5"))
+_UPLOAD_ESPERA_BASE = int(os.getenv("BOTLIVE_IG_UPLOAD_ESPERA", "15"))
+_UPLOAD_ESPERA_MAX = int(os.getenv("BOTLIVE_IG_UPLOAD_ESPERA_MAX", "120"))
+
 
 def _post_form(url: str, params: dict) -> dict:
     corpo = urllib.parse.urlencode(params).encode("utf-8")
@@ -350,12 +356,35 @@ def _publicar_reel(registro: dict, video_path: Path, conta: str) -> dict:
     ig_user_id = dados["ig_user_id"]
 
     payload = montar_post(registro)
-    container = _post_form(
-        f"{base}/{ig_user_id}/media", {**payload, "access_token": token}
-    )
-    container_id = str(container["id"])
-    print(f"[ig-upload] container {container_id} criado; subindo binario...")
-    _upload_binario(container_id, video_path, token)
+
+    # O rupload do Meta devolve ProcessingFailedError com retriable=false, mas
+    # a mesma midia sobe numa tentativa seguinte - o log de producao mostrou 3
+    # cortes precisando de 16 tentativas, e os 3 publicaram. Sem retry aqui,
+    # cada falha queimava um ciclo inteiro do vigia.
+    #
+    # Cada tentativa cria um container NOVO de proposito: e o caminho que a
+    # producao ja comprovava entre ciclos. Reaproveitar container que falhou
+    # nao esta validado.
+    container_id = None
+    for tentativa in range(1, _UPLOAD_TENTATIVAS + 1):
+        container = _post_form(
+            f"{base}/{ig_user_id}/media", {**payload, "access_token": token}
+        )
+        container_id = str(container["id"])
+        print(
+            f"[ig-upload] container {container_id} criado; subindo binario "
+            f"(tentativa {tentativa}/{_UPLOAD_TENTATIVAS})..."
+        )
+        try:
+            _upload_binario(container_id, video_path, token)
+            break
+        except RuntimeError as exc:
+            if tentativa >= _UPLOAD_TENTATIVAS:
+                raise
+            espera = min(_UPLOAD_ESPERA_BASE * 2 ** (tentativa - 1), _UPLOAD_ESPERA_MAX)
+            print(f"[ig-upload] falha na tentativa {tentativa}: {exc}")
+            print(f"[ig-upload] novo container em {espera}s")
+            time.sleep(espera)
 
     for tentativa in range(_PUBLISH_POLL_MAX):
         status = _get(
