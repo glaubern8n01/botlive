@@ -38,6 +38,8 @@ CHAVES_PROIBIDAS = (
 )
 
 CAMPOS_DO_PLANO = {
+    "capa",
+    "narracao",
     "layout",
     "focus_x",
     "title",
@@ -95,6 +97,11 @@ def validar_plano(plano: dict) -> dict:
         raise ImportError_("keep_credit=false nao e permitido: o credito da origem fica")
 
     return {
+        # Capa e narracao sao desta operacao, nao do pipeline de cortes de
+        # live: la o audio do streamer e o conteudo e a capa ja e outra
+        # coisa. Aqui, em material importado, os dois fazem sentido.
+        "capa": bool(plano.get("capa", True)),
+        "narracao": bool(plano.get("narracao", False)),
         "layout": layout,
         "focus_x": foco,
         "title": (plano.get("title") or "")[:120],
@@ -147,6 +154,75 @@ def _saida(adaptation_id: str) -> Path:
     raiz = Path(REPO_ROOT) / "botlive-import" / "data" / "outputs"
     raiz.mkdir(parents=True, exist_ok=True)
     return raiz / f"{adaptation_id}.mp4"
+
+
+def _media_local():
+    """Carrega os executores locais de imagem/voz (Pillow e Piper).
+
+    Import tardio e por caminho: o modulo de midia vive em botlive-media/ e
+    nao pode virar dependencia dura da importacao. Sem ele, capa e narracao
+    simplesmente nao saem - o resto da adaptacao continua.
+    """
+    raiz = REPO_ROOT / "botlive-media"
+    if str(raiz) not in sys.path:
+        sys.path.insert(0, str(raiz))
+    from mediastack.executors import imagem_local, voz_local
+
+    return imagem_local, voz_local
+
+
+def _gerar_extras(plano: dict, video: Path, adaptation_id: str) -> dict:
+    """Capa e narracao do material adaptado. Nenhuma das duas e obrigatoria:
+    falha aqui vira registro de erro, nunca derruba a adaptacao pronta."""
+    extras = {"cover_path": "", "narration_path": "", "extras_error": ""}
+    if not (plano.get("capa") or plano.get("narracao")):
+        return extras
+
+    try:
+        imagem_local, voz_local = _media_local()
+    except Exception as erro:
+        extras["extras_error"] = f"midia local indisponivel: {erro}"
+        return extras
+
+    pasta = Path(video).parent
+    problemas = []
+
+    if plano.get("capa"):
+        try:
+            frame = pasta / f"{adaptation_id}_frame.jpg"
+            fundo = None
+            try:
+                imagem_local.frame_do_video(video, frame, segundo=1.0)
+                fundo = frame
+            except Exception:
+                pass
+            capa = imagem_local.Capa(
+                titulo=plano.get("title") or "",
+                subtitulo=plano.get("brand") or "",
+                selo=plano.get("cta") or "",
+                formato="vertical" if plano["layout"].startswith("vertical") else "horizontal",
+                fundo=fundo,
+            ).render(pasta / f"{adaptation_id}_capa.jpg")
+            extras["cover_path"] = str(capa)
+            if fundo:
+                Path(fundo).unlink(missing_ok=True)
+        except Exception as erro:
+            problemas.append(f"capa: {erro}")
+
+    if plano.get("narracao"):
+        texto = (plano.get("description") or plano.get("title") or "").strip()
+        if not texto:
+            problemas.append("narracao: sem texto para narrar")
+        else:
+            try:
+                extras["narration_path"] = str(
+                    voz_local.Narracao(texto).render(pasta / f"{adaptation_id}_narracao.wav")
+                )
+            except Exception as erro:
+                problemas.append(f"narracao: {erro}")
+
+    extras["extras_error"] = "; ".join(problemas)
+    return extras
 
 
 def executar(adaptation_id: str) -> dict:
@@ -203,6 +279,8 @@ def executar(adaptation_id: str) -> dict:
 
     from .library import sha256
 
+    extras = _gerar_extras(plano, destino, adaptation_id)
+
     return atualizar(
         "import_adaptations",
         adaptation_id,
@@ -224,5 +302,6 @@ def executar(adaptation_id: str) -> dict:
             ),
             "error": "",
             "updated_at": agora(),
+            **extras,
         },
     )

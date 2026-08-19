@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS import_adaptations(
     status TEXT NOT NULL DEFAULT 'planned',
     validation TEXT DEFAULT '{}',
     publish_job_id TEXT DEFAULT '',
+    cover_path TEXT DEFAULT '',
+    narration_path TEXT DEFAULT '',
+    extras_error TEXT DEFAULT '',
     error TEXT DEFAULT '',
     idempotency_key TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL,
@@ -120,7 +123,7 @@ CREATE INDEX IF NOT EXISTS idx_import_items_source ON import_items(source_id, st
 CREATE INDEX IF NOT EXISTS idx_import_adaptations_item ON import_adaptations(item_id, status);
 CREATE INDEX IF NOT EXISTS idx_import_jobs_claim ON import_jobs(status, run_after, created_at);
 
-PRAGMA user_version=1;
+PRAGMA user_version=2;
 """
 
 

@@ -337,3 +337,49 @@ class RenderTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExtrasTests(Base):
+    """Capa e narracao: funcao desta operacao, nao do pipeline de cortes."""
+
+    def setUp(self):
+        super().setUp()
+        self.fonte = sources.criar(**fonte_valida(location=str(self.pasta)))
+        self.item = library.registrar(self.fonte["id"], self._video())
+
+    def test_capa_entra_no_plano_por_padrao_e_narracao_nao(self):
+        plano = adapt.validar_plano({})
+        self.assertTrue(plano["capa"])
+        self.assertFalse(plano["narracao"])
+
+    def test_da_pra_ligar_narracao(self):
+        self.assertTrue(adapt.validar_plano({"narracao": True})["narracao"])
+
+    def test_plano_sem_extras_nao_gera_arquivo(self):
+        extras = adapt._gerar_extras({"capa": False, "narracao": False},
+                                     self.pasta / "x.mp4", "ad-1")
+        self.assertEqual("", extras["cover_path"])
+        self.assertEqual("", extras["narration_path"])
+
+    def test_capa_e_gerada_a_partir_do_plano(self):
+        alvo = self.pasta / "adaptado.mp4"
+        alvo.write_bytes(b"video")
+        extras = adapt._gerar_extras(
+            {"capa": True, "narracao": False, "layout": "vertical-fit",
+             "title": "Achadinho do dia", "brand": "Loja", "cta": "Link na bio"},
+            alvo, "ad-2",
+        )
+        self.assertTrue(extras["cover_path"], extras["extras_error"])
+        self.assertTrue(Path(extras["cover_path"]).is_file())
+
+    def test_falha_de_extra_nao_derruba_a_adaptacao(self):
+        """Sem texto para narrar, registra o motivo e segue."""
+        alvo = self.pasta / "adaptado2.mp4"
+        alvo.write_bytes(b"video")
+        extras = adapt._gerar_extras(
+            {"capa": False, "narracao": True, "layout": "vertical-fit",
+             "title": "", "description": ""},
+            alvo, "ad-3",
+        )
+        self.assertEqual("", extras["narration_path"])
+        self.assertIn("sem texto", extras["extras_error"])
