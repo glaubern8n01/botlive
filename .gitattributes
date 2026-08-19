@@ -1,2 +1,4 @@
-# Shell script roda dentro do container Linux: CRLF quebra o bash.
-docker-entrypoint.sh text eol=lf
+# Scripts de shell precisam de LF mesmo vindo de checkout Windows:
+# com CRLF o shebang quebra dentro do container (exit 127).
+*.sh text eol=lf
+ops/agents/* text eol=lf

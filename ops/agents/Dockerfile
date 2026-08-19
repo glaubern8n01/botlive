@@ -24,7 +24,8 @@ ENV VEXPUBLISH_DATABASE_PATH=/data/agents/vexpublish.db \
     COMMERCE_DATABASE_PATH=/data/agents/commerce.db \
     PYTHONUNBUFFERED=1
 
-RUN chmod +x /app/ops/agents/start.sh
+# Checkout no Windows entrega CRLF; com CRLF o shebang quebra (exit 127).
+RUN sed -i "s/$//" /app/ops/agents/start.sh && chmod +x /app/ops/agents/start.sh
 
 EXPOSE 8785 8795 8805
 
