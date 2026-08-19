@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router';
-import { LayoutDashboard, Settings2, Users, History, Scissors, LogOut, ShoppingBag, BadgeDollarSign } from 'lucide-react';
+import { LayoutDashboard, Settings2, Users, History, Scissors, LogOut, ShoppingBag, BadgeDollarSign, Radio, FolderInput, Store } from 'lucide-react';
 
 export function Layout() {
   const handleLogout = () => {
@@ -13,6 +13,9 @@ export function Layout() {
     { to: "/canais", icon: Users, label: "Canais" },
     ...(import.meta.env.VITE_SHOP_LIVE_ENABLED === "true" ? [{ to: "/shop-live", icon: ShoppingBag, label: "Shop LIVE" }] : []),
     ...(import.meta.env.VITE_CAMPAIGNS_ENABLED === "true" ? [{ to: "/campanhas-cortes", icon: BadgeDollarSign, label: "Campanhas de Cortes" }] : []),
+    ...(import.meta.env.VITE_MULTICHANNEL_ENABLED === "true" ? [{ to: "/canais-publicacao", icon: Radio, label: "Canais de publicação" }] : []),
+    ...(import.meta.env.VITE_IMPORT_ENABLED === "true" ? [{ to: "/importar-adaptar", icon: FolderInput, label: "Importar / Adaptar" }] : []),
+    ...(import.meta.env.VITE_COMMERCE_ENABLED === "true" ? [{ to: "/commerce-studio", icon: Store, label: "Commerce Studio" }] : []),
     { to: "/historico", icon: History, label: "Histórico" },
     { to: "/cortes", icon: Scissors, label: "Índice de Cortes" },
   ];
