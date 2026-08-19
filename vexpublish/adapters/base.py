@@ -91,16 +91,31 @@ def executar(adapter: Adapter, job: dict, conta: dict) -> dict:
         raise VexPublishError(
             CodigoErro.MANUAL_ACTION_REQUIRED, "Sessao aguarda acao humana", {"platform": plataforma}
         )
+
+    passos = ["check_session"]
+    gravado = sessao.get("state")
     estado = adapter.check_session(conta, sessao)
     if estado == "manual_required":
         raise VexPublishError(
             CodigoErro.MANUAL_ACTION_REQUIRED, "Sessao aguarda acao humana", {"platform": plataforma}
         )
-    if estado in {"missing", "expired"}:
+    # check_session e uma opiniao barata do adapter; o cofre guarda o que ja
+    # foi provado. Sessao nunca provada passa por login mesmo que o adapter
+    # ache que esta tudo bem - senao "valid" vira palpite que ninguem testou.
+    if estado in {"missing", "expired"} or gravado in {"missing", "expired"}:
+        # login sinaliza falha levantando erro. Voltar sem erro significa
+        # sessao estabelecida, e quem decide isso e a base: nenhum adapter
+        # pode dizer "entrei" e deixar a sessao como missing.
         sessao = adapter.login(conta, sessao) or sessao
+        passos.append("login")
+        estado = "valid"
+    if estado in vault.ESTADOS and estado != gravado:
+        vault.marcar(conta["id"], plataforma, estado)
 
     adapter.validate(job, conta)
+    passos.append("validate")
     payload = adapter.prepare(job, conta)
+    passos.append("prepare")
 
     seco = bool(job.get("dry_run")) or flags.dry_run
     if seco:
@@ -111,9 +126,16 @@ def executar(adapter: Adapter, job: dict, conta: dict) -> dict:
             channel_id=job.get("channel_id"),
             platform=plataforma,
             account=conta.get("handle"),
-            passos=["check_session", "validate", "prepare"],
+            passos=passos,
         )
-        return {"dry_run": True, "url": "", "external_id": "", "payload_keys": sorted(payload)}
+        return {
+            "dry_run": True,
+            "url": "",
+            "external_id": "",
+            "payload_keys": sorted(payload),
+            "passos": passos,
+            "sessao": estado,
+        }
 
     if not flags.pode_publicar_de_verdade(plataforma):
         raise VexPublishError(

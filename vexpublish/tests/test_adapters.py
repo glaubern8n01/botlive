@@ -26,8 +26,16 @@ def test_registro_cobre_as_quatro_plataformas():
     assert set(adapters.REGISTRO) == set(PLATAFORMAS)
 
 
-def test_nenhum_adapter_esta_validado():
-    assert set(adapters.compatibilidade().values()) == {"NAO VALIDADO"}
+def test_compatibilidade_declarada_bate_com_a_realidade():
+    """YouTube tem login real ligado; os outros tres seguem sem nada testado."""
+    atual = adapters.compatibilidade()
+    assert atual["youtube"] == "PARCIAL"
+    assert atual["tiktok"] == atual["instagram"] == atual["kwai"] == "NAO VALIDADO"
+
+
+def test_nenhum_adapter_publica_de_verdade():
+    """PARCIAL vale para login. Envio real continua nao existindo em nenhum."""
+    assert all(x != "SIM" for x in adapters.compatibilidade().values())
 
 
 @pytest.mark.parametrize("plataforma", PLATAFORMAS)
@@ -121,6 +129,36 @@ def test_sessao_em_acao_manual_interrompe_execucao(job, conta, monkeypatch):
     with pytest.raises(VexPublishError) as erro:
         base.executar(MockAdapter(), job, conta)
     assert erro.value.codigo == CodigoErro.MANUAL_ACTION_REQUIRED
+
+
+def test_sessao_nunca_provada_passa_por_login(job, conta, monkeypatch):
+    """Mesmo com o adapter dizendo 'valid', sessao no cofre como missing exige prova."""
+    _ligar(monkeypatch)
+    adapter = MockAdapter()  # check_session devolve 'valid'
+    assert vault.registrar(conta["id"], "tiktok")["state"] == "missing"
+    resultado = base.executar(adapter, job, conta)
+    assert "login" in adapter.chamadas
+    assert resultado["passos"] == ["check_session", "login", "validate", "prepare"]
+    assert vault.obter(conta["id"], "tiktok")["state"] == "valid"
+
+
+def test_sessao_ja_provada_nao_refaz_login(job, conta, monkeypatch):
+    _ligar(monkeypatch)
+    vault.marcar(conta["id"], "tiktok", "valid")
+    adapter = MockAdapter()
+    resultado = base.executar(adapter, job, conta)
+    assert "login" not in adapter.chamadas
+    assert resultado["passos"] == ["check_session", "validate", "prepare"]
+
+
+def test_passos_relatados_sao_os_que_rodaram(job, conta, monkeypatch):
+    """O log nao pode declarar passo que nao aconteceu."""
+    _ligar(monkeypatch)
+    vault.marcar(conta["id"], "tiktok", "valid")
+    adapter = MockAdapter()
+    resultado = base.executar(adapter, job, conta)
+    assert resultado["passos"] == [x for x in adapter.chamadas if x in resultado["passos"]]
+    assert "publish" not in resultado["passos"]
 
 
 def test_sessao_ausente_dispara_login(job, conta, monkeypatch):
