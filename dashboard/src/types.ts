@@ -88,3 +88,147 @@ export type VigiaClipIndex = {
   corte_ref: string | null;
   created_at: string;
 };
+
+// --- Tipos das telas Kwai CUT / TikTok / Perfis ---
+// Vieram da branch codex/kwai-multichannel-discovery, que nunca foi
+// mesclada no main. Acrescentados aqui sem alterar os tipos existentes.
+
+export type ProfileSource = {
+  id: string;
+  profile_id: string;
+  source_type: string;
+  source_ref: string;
+  enabled: boolean;
+  settings: Record<string, unknown>;
+};
+
+export type PlatformAccount = {
+  id: string;
+  platform: string;
+  account_key: string;
+  display_name: string | null;
+  status: 'not_configured' | 'pending' | 'connected' | 'disconnected' | 'error';
+};
+
+export type ProfileDestination = {
+  id: string;
+  profile_id: string;
+  platform: string;
+  account_id: string | null;
+  enabled: boolean;
+  publication_mode: 'disabled' | 'manual' | 'approval' | 'prepare_only' | 'automatic' | 'upload_draft' | 'direct_post';
+  max_posts_per_day: number | null;
+  minimum_interval_seconds: number;
+  allowed_hours: number[];
+  timezone: string;
+  max_pending_jobs: number | null;
+  max_attempts: number;
+  publisher_options: Record<string, unknown>;
+  schedule: Record<string, unknown>;
+  settings: Record<string, unknown>;
+  platform_accounts: PlatformAccount | null;
+};
+
+export type ProfileRenderSettings = {
+  profile_id: string;
+  aspect_ratio: 'original' | '9:16';
+  layout: 'original' | 'vertical-fit' | 'vertical-crop';
+  min_duration_seconds: number;
+  max_duration_seconds: number;
+  target_height: number | null;
+  captions_enabled: boolean;
+  headline_enabled: boolean;
+  brand: string | null;
+  cta: string | null;
+  settings: Record<string, unknown>;
+};
+
+export type Profile = {
+  profile_id: string;
+  name: string;
+  description: string | null;
+  niche: string | null;
+  editorial_strategy: string;
+  language: string;
+  enabled: boolean;
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  profile_sources: ProfileSource[];
+  profile_destinations: ProfileDestination[];
+  profile_render_settings: ProfileRenderSettings | null;
+};
+
+export type SafePlatformAccount = PlatformAccount & {
+  secret_configured: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PublicationJobStatus =
+  | 'pending'
+  | 'validating'
+  | 'ready'
+  | 'uploading'
+  | 'processing'
+  | 'draft_available'
+  | 'sent_to_user_inbox'
+  | 'published'
+  | 'published_manual'
+  | 'retry_wait'
+  | 'rejected'
+  | 'cancelled'
+  | 'failed';
+
+export type PublicationAttempt = {
+  attempt_id: number;
+  job_id: string;
+  attempt_number: number;
+  worker_id: string | null;
+  status: string;
+  error_type: string | null;
+  error_message: string | null;
+  external_id: string | null;
+  remote_status: string | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+};
+
+export type PublicationJob = {
+  job_id: string;
+  profile_id: string;
+  event_id: string | null;
+  variant_id: string | null;
+  asset_id: string;
+  destination_id: string;
+  platform: string;
+  account_id: string | null;
+  status: PublicationJobStatus;
+  publication_key: string;
+  title: string | null;
+  caption: string | null;
+  cover_path: string | null;
+  scheduled_at: string | null;
+  next_attempt_at: string | null;
+  attempts: number;
+  max_attempts: number;
+  worker_id: string | null;
+  external_id: string | null;
+  remote_status: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  published_at: string | null;
+  media_assets: {
+    path: string;
+    width: number;
+    height: number;
+    duration: number;
+    validation_status: string;
+  } | null;
+  platform_accounts: {
+    account_key: string;
+    display_name: string | null;
+  } | null;
+};
