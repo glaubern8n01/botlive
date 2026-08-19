@@ -9,7 +9,7 @@ WORKDIR /app
 
 # ffmpeg/ffprobe: o doctor checa e o modulo de importacao le metadata.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg curl \
+    && apt-get install -y --no-install-recommends ffmpeg curl dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
 COPY ops/agents/requirements-agents.txt /tmp/requirements-agents.txt
@@ -24,8 +24,10 @@ ENV VEXPUBLISH_DATABASE_PATH=/data/agents/vexpublish.db \
     COMMERCE_DATABASE_PATH=/data/agents/commerce.db \
     PYTHONUNBUFFERED=1
 
-# Checkout no Windows entrega CRLF; com CRLF o shebang quebra (exit 127).
-RUN sed -i "s/$//" /app/ops/agents/start.sh && chmod +x /app/ops/agents/start.sh
+# Checkout no Windows entrega CRLF, e com CRLF o shebang quebra dentro do
+# container (exit 127). Normaliza na build para nao depender de como o
+# arquivo chegou ate aqui.
+RUN dos2unix /app/ops/agents/start.sh && chmod +x /app/ops/agents/start.sh
 
 EXPOSE 8785 8795 8805
 
