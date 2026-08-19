@@ -13,6 +13,7 @@ echo "[agents] migrando bancos..."
 python vexpublish/migrations/manage.py upgrade
 python botlive-import/migrations/manage.py upgrade
 python botlive-commerce/migrations/manage.py upgrade
+python -c "import sys; sys.path.insert(0,'/app/botlive-dm'); from dm.store import migrar; migrar(); print('[agents] dm.db migrado')"
 
 echo "[agents] subindo VexPublish :8785"
 uvicorn vexpublish.api:app --host 0.0.0.0 --port 8785 --no-access-log &
@@ -26,8 +27,12 @@ echo "[agents] subindo Commerce :8805"
 PYTHONPATH=/app/botlive-commerce uvicorn commerce.main:app --host 0.0.0.0 --port 8805 --no-access-log &
 PID_COM=$!
 
+echo "[agents] subindo DM :8815"
+PYTHONPATH=/app/botlive-dm uvicorn dm.main:app --host 0.0.0.0 --port 8815 --no-access-log &
+PID_DM=$!
+
 # Se qualquer um morrer, derruba o container inteiro (swarm reinicia).
-trap 'kill $PID_VEX $PID_IMP $PID_COM 2>/dev/null || true' TERM INT
-wait -n $PID_VEX $PID_IMP $PID_COM
+trap 'kill $PID_VEX $PID_IMP $PID_COM $PID_DM 2>/dev/null || true' TERM INT
+wait -n $PID_VEX $PID_IMP $PID_COM $PID_DM
 echo "[agents] um dos agentes encerrou; derrubando o container para reiniciar"
 exit 1

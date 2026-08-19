@@ -190,3 +190,74 @@ class EnvioTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApiTests(Base):
+    """Superficie HTTP: gestao por token, webhook por assinatura HMAC."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["DM_ADMIN_TOKEN"] = "admin-dm"
+        os.environ["DM_APP_SECRET"] = "segredo-do-app"
+        os.environ["DM_WEBHOOK_VERIFY_TOKEN"] = "verifica-me"
+        from fastapi.testclient import TestClient
+        from dm.main import app
+
+        self.client = TestClient(app)
+        self.admin = {"X-Dm-Token": "admin-dm"}
+
+    def _assinar(self, corpo: bytes) -> str:
+        import hashlib, hmac as h
+
+        return "sha256=" + h.new(b"segredo-do-app", corpo, hashlib.sha256).hexdigest()
+
+    def test_sem_token_nao_le_regras(self):
+        self.assertEqual(401, self.client.get("/dm/v1/regras").status_code)
+
+    def test_health_diz_a_mecanica(self):
+        dados = self.client.get("/dm/v1/health").json()
+        self.assertIn("Private Reply", dados["mecanica"])
+        self.assertTrue(dados["uma_resposta_por_comentario"])
+
+    def test_testar_mostra_resposta_sem_enviar(self):
+        self._regra()
+        r = self.client.post("/dm/v1/testar", headers=self.admin,
+                             json={"conta": CONTA, "texto": "qual o preco?"})
+        self.assertTrue(r.json()["casou"])
+        self.assertIn("loja.invalido", r.json()["resposta"])
+
+    def test_webhook_recusa_assinatura_errada(self):
+        r = self.client.post("/dm/v1/webhook", content=b"{}",
+                             headers={"X-Hub-Signature-256": "sha256=errado"})
+        self.assertEqual(403, r.status_code)
+
+    def test_webhook_sem_assinatura_e_recusado(self):
+        self.assertEqual(403, self.client.post("/dm/v1/webhook", content=b"{}").status_code)
+
+    def test_verificacao_do_webhook_devolve_challenge(self):
+        r = self.client.get("/dm/v1/webhook", params={
+            "hub.mode": "subscribe", "hub.challenge": "12345",
+            "hub.verify_token": "verifica-me"})
+        self.assertEqual("12345", r.text)
+
+    def test_verificacao_com_token_errado_e_recusada(self):
+        r = self.client.get("/dm/v1/webhook", params={
+            "hub.mode": "subscribe", "hub.challenge": "1", "hub.verify_token": "x"})
+        self.assertEqual(403, r.status_code)
+
+    def test_webhook_processa_comentario_e_nao_repete(self):
+        import json as j
+
+        self._regra()
+        os.environ["DM_ENABLED"] = "true"
+        os.environ["DM_DRY_RUN"] = "true"
+        os.environ["DM_CONTA_PADRAO"] = CONTA
+        corpo = j.dumps({"entry": [{"id": "17841", "changes": [
+            {"field": "comments", "value": {"id": "wh-1", "text": "qual o preco?",
+                                            "from": {"username": "fulano"},
+                                            "media": {"id": "m-1"}}}]}]}).encode()
+        cab = {"X-Hub-Signature-256": self._assinar(corpo)}
+        primeiro = self.client.post("/dm/v1/webhook", content=corpo, headers=cab).json()
+        segundo = self.client.post("/dm/v1/webhook", content=corpo, headers=cab).json()
+        self.assertEqual("simulado", primeiro["processados"][0]["status"])
+        self.assertEqual("ja_respondido", segundo["processados"][0]["status"])
