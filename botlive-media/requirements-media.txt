@@ -1,0 +1,15 @@
+# Geracao local de midia. NAO entra no requirements.txt do bot: o vigia nao
+# precisa disso e nao pode engordar a imagem de producao.
+#
+# Instalar no PC (G:\botlive):
+#   python -m pip install -r botlive-media/requirements-media.txt
+#
+# Voz: baixar o modelo uma vez (o MITM do AVG quebra o download do piper,
+# por isso curl -k):
+#   curl -kfsSL -o botlive-media/data/vozes/pt_BR-faber-medium.onnx \
+#     https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx
+#   curl -kfsSL -o botlive-media/data/vozes/pt_BR-faber-medium.onnx.json \
+#     https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json
+
+piper-tts==1.7.0
+# pillow e faster-whisper ja estao no requirements.txt principal
