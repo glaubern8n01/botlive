@@ -383,3 +383,96 @@ class ExtrasTests(Base):
         )
         self.assertEqual("", extras["narration_path"])
         self.assertIn("sem texto", extras["extras_error"])
+
+
+class DownloaderTests(Base):
+    """O executor de download que faltava. Continua preso as duas travas."""
+
+    def test_fonte_sem_permissao_de_download_e_recusada(self):
+        from importer import downloader
+
+        fonte = sources.criar(**fonte_valida(kind="url_list",
+                                             location="https://exemplo.invalido/perfil",
+                                             allow_download=False))
+        os.environ["IMPORT_ALLOW_DOWNLOAD"] = "true"
+        try:
+            with self.assertRaises(store.ImportError_):
+                downloader.baixar(fonte["id"])
+        finally:
+            os.environ["IMPORT_ALLOW_DOWNLOAD"] = "false"
+
+    def test_ambiente_desligado_recusa_mesmo_com_fonte_liberada(self):
+        from importer import downloader
+
+        fonte = sources.criar(**fonte_valida(kind="url_list",
+                                             location="https://exemplo.invalido/perfil",
+                                             allow_download=True))
+        os.environ["IMPORT_ALLOW_DOWNLOAD"] = "false"
+        with self.assertRaises(store.ImportError_) as erro:
+            downloader.baixar(fonte["id"])
+        self.assertIn("IMPORT_ALLOW_DOWNLOAD", str(erro.exception))
+
+    def test_fonte_arquivada_nao_baixa(self):
+        from importer import downloader
+
+        fonte = sources.criar(**fonte_valida(kind="url_list",
+                                             location="https://exemplo.invalido/x",
+                                             allow_download=True))
+        sources.arquivar(fonte["id"])
+        os.environ["IMPORT_ALLOW_DOWNLOAD"] = "true"
+        try:
+            with self.assertRaises(store.ImportError_):
+                downloader.baixar(fonte["id"])
+        finally:
+            os.environ["IMPORT_ALLOW_DOWNLOAD"] = "false"
+
+
+class VariacaoTests(Base):
+    """Cada conta recebe uma edicao diferente, de forma reproduzivel."""
+
+    def test_gera_variacoes_todas_distintas(self):
+        from importer import variacao
+
+        vs = variacao.gerar("item-1", 5)
+        self.assertEqual(5, len(vs))
+        self.assertTrue(variacao.distintas(vs), [variacao.assinatura(v) for v in vs])
+
+    def test_mesma_semente_devolve_o_mesmo_plano(self):
+        from importer import variacao
+
+        a = variacao.gerar("item-2", 4)
+        b = variacao.gerar("item-2", 4)
+        self.assertEqual([variacao.assinatura(x) for x in a],
+                         [variacao.assinatura(x) for x in b])
+
+    def test_itens_diferentes_geram_edicoes_diferentes(self):
+        from importer import variacao
+
+        a = {variacao.assinatura(x) for x in variacao.gerar("item-3", 4)}
+        b = {variacao.assinatura(x) for x in variacao.gerar("item-4", 4)}
+        self.assertNotEqual(a, b)
+
+    def test_quantidade_alem_do_possivel_e_recusada(self):
+        from importer import variacao
+
+        with self.assertRaises(store.ImportError_) as erro:
+            variacao.gerar("item-5", 999)
+        self.assertIn("se repetem", str(erro.exception))
+
+    def test_variacao_entra_no_plano_sem_apagar_o_resto(self):
+        from importer import variacao
+
+        v = variacao.gerar("item-6", 1)[0]
+        plano = v.como_plano({"title": "Achadinho", "brand": "Loja", "cta": "Link"})
+        self.assertIn("Achadinho", plano["title"])
+        self.assertEqual("Loja", plano["brand"])
+        self.assertEqual("Link", plano["cta"])
+        self.assertIn(plano["layout"], variacao.LAYOUTS)
+
+    def test_sufixo_por_conta_muda_o_titulo(self):
+        from importer import variacao
+
+        vs = variacao.gerar("item-7", 2, sufixos=["@conta_a", "@conta_b"])
+        t1 = vs[0].como_plano({"title": "Oferta"})["title"]
+        t2 = vs[1].como_plano({"title": "Oferta"})["title"]
+        self.assertNotEqual(t1, t2)

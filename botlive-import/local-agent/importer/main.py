@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import bridge, library, sources
+from . import bridge, downloader, library, sources, variacao
 from .adapt import executar, planejar, validar_plano
 from .store import ImportError_, auditar, listar, migrar, obter
 
@@ -87,6 +87,20 @@ class SourceIn(BaseModel):
 class BatchIn(BaseModel):
     source_id: str
     folder: str | None = None
+
+
+class DownloadIn(BaseModel):
+    source_id: str
+    url: str | None = None
+    # 0 = perfil inteiro
+    limite: int = Field(20, ge=0, le=2000)
+
+
+class VariacaoIn(BaseModel):
+    item_id: str
+    quantidade: int = Field(3, ge=1, le=25)
+    sufixos: list[str] = []
+    plano: dict = {}
 
 
 class ItemIn(BaseModel):
@@ -171,6 +185,56 @@ def importar_lote(value: BatchIn, user=Depends(exigir("write"))):
     auditar("batch.imported", "source", value.source_id, resultado,
             actor=user["actor"], role=user["role"])
     return resultado
+
+
+@app.post("/import/v1/download/preview")
+def previsualizar_download(value: DownloadIn, user=Depends(exigir("read"))):
+    """Lista o que existe na fonte sem baixar nada - confere o tamanho antes."""
+    try:
+        fonte = sources.exigir_ativa(value.source_id)
+        itens = downloader.listar(value.url or fonte["location"], value.limite)
+    except ImportError_ as exc:
+        raise _erro(exc)
+    return {"total": len(itens), "itens": itens[:200]}
+
+
+@app.post("/import/v1/download", status_code=201)
+def baixar_da_fonte(value: DownloadIn, user=Depends(exigir("write"))):
+    """Baixa da fonte autorizada. limite=0 traz o perfil inteiro."""
+    try:
+        return downloader.baixar(value.source_id, value.url, value.limite, user["actor"])
+    except ImportError_ as exc:
+        auditar("source.download_refused", "source", value.source_id,
+                {"reason": str(exc)}, result="blocked",
+                actor=user["actor"], role=user["role"])
+        raise _erro(exc)
+
+
+@app.post("/import/v1/variacoes")
+def gerar_variacoes(value: VariacaoIn, user=Depends(exigir("write"))):
+    """Planos de edicao distintos para o mesmo item, um por conta.
+
+    Serve para o mesmo material nao sair identico em varias contas suas -
+    conteudo repetido derruba alcance. Nao serve para disfarcar origem: a
+    fonte continua tendo que ser autorizada.
+    """
+    try:
+        variacoes = variacao.gerar(value.item_id, value.quantidade, value.sufixos)
+    except ImportError_ as exc:
+        raise _erro(exc)
+    return {
+        "item_id": value.item_id,
+        "total": len(variacoes),
+        "todas_distintas": variacao.distintas(variacoes),
+        "variacoes": [
+            {
+                "indice": v.indice,
+                "assinatura": variacao.assinatura(v),
+                "plano": v.como_plano(value.plano),
+            }
+            for v in variacoes
+        ],
+    }
 
 
 @app.get("/import/v1/adaptations", dependencies=[Depends(exigir("read"))])
