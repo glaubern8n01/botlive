@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge';
 import { Activity, ShieldAlert, CheckCircle2, Radio } from 'lucide-react';
 import { VigiaConfig } from '../types';
+import { Atalhos, OPERACAO } from '../components/Atalhos';
 
 type Stats = {
   activeChannels: number;
@@ -201,6 +202,9 @@ export function Home() {
           </CardContent>
         </Card>
       </div>
+
+      <Atalhos />
+      <Atalhos titulo="Operação e infraestrutura" destinos={OPERACAO} />
     </div>
   );
 }

@@ -1,6 +1,8 @@
 // Commerce Studio — TikTok Shop e Shopee.
 // Não publica: gera LiveAssetPackage para o Live Pilot e PublishJob em draft.
 import { FormEvent, useEffect, useState } from "react";
+import { AgenteLogin } from "../components/AgenteLogin";
+import { ComoFunciona } from "../components/ComoFunciona";
 
 type Tab = "produtos" | "provas" | "criativos" | "pacotes";
 type Row = Record<string, any>;
@@ -52,12 +54,19 @@ export function CommerceStudio() {
 
     useEffect(() => { if (token) void run(refresh); }, [token, tab]);
 
-    if (!token) return <form onSubmit={(e) => { e.preventDefault(); sessionStorage.setItem("commerce_token", draft); setToken(draft); }} className={`${panel} mx-auto max-w-md space-y-3`}>
-        <h1 className="text-2xl font-bold">Commerce Studio</h1>
-        <p className="text-sm text-zinc-400">Agente local. Nenhum claim sem evidência registrada.</p>
-        <input className={`${input} w-full`} type="password" placeholder="Token local" value={draft} onChange={e => setDraft(e.target.value)} required />
-        <button className={`${button} w-full`}>Conectar</button>
-    </form>;
+    if (!token) return <AgenteLogin
+        titulo="Commerce Studio"
+        resumo="Monta os vídeos de venda de produto (TikTok Shop e Shopee): o que pode ser dito sobre o produto, os criativos e o pacote que a live consome."
+        faz={[
+            "Cadastrar produto com link de afiliado e as provas do que ele faz",
+            "Marcar quais frases podem ser ditas — só as que têm prova",
+            "Criar os vídeos de venda e passar pelo controle de qualidade",
+            "Exportar o pacote pronto para a extensão de LIVE",
+        ]}
+        naoFaz="Nenhuma frase de venda passa sem prova registrada, e a extensão de LIVE não é alterada — ela só recebe o pacote."
+        chaveSessao="commerce_token"
+        aoEntrar={setToken}
+    />;
 
     return <main className="space-y-4" aria-busy={loading} data-testid="commerce-module">
         <header className={panel}>
@@ -79,6 +88,16 @@ export function CommerceStudio() {
             </nav>
             {selecionado && <p className="mt-3 text-sm">Produto ativo: <strong>{selecionado.title}</strong> · confiança <strong>{Number(selecionado.confidence).toFixed(2)}</strong> (teto {selecionado.confidence_teto})</p>}
         </header>
+        <ComoFunciona
+            passos={[
+                { titulo: "Produto", detalhe: "link, preço e de onde veio a informação" },
+                { titulo: "Provas", detalhe: "o que sustenta cada frase", estado: "humano" },
+                { titulo: "Criativo", detalhe: "gancho, roteiro e CTA" },
+                { titulo: "Controle", detalhe: "reprova frase sem prova", estado: "travado" },
+                { titulo: "Pacote / Fila", detalhe: "vai pra LIVE ou pra publicação" },
+            ]}
+            aviso="A regra central: frase sem prova registrada não vira fala na live nem legenda de vídeo. O controle lê o roteiro inteiro, não só o que você marcou."
+        />
         {loading && <p role="status">Carregando…</p>}
         {error && <div role="alert" className="rounded-lg border border-red-700 bg-red-950/40 p-3">{error}</div>}
         {notice && <div role="status" className="rounded-lg border border-emerald-700 bg-emerald-950/40 p-3">{notice}</div>}

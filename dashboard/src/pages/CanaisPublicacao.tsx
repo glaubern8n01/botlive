@@ -3,6 +3,8 @@
 // sendo a lista de canais Twitch de origem (vigia_channels) — são coisas
 // diferentes e o nome final ainda não foi decidido.
 import { FormEvent, useEffect, useState } from "react";
+import { AgenteLogin } from "../components/AgenteLogin";
+import { ComoFunciona } from "../components/ComoFunciona";
 
 type Tab = "canais" | "contas" | "comparacao" | "fila";
 type Row = Record<string, any>;
@@ -56,12 +58,19 @@ export function CanaisPublicacao() {
         e.preventDefault(); sessionStorage.setItem("vexpublish_token", draft); setToken(draft);
     }
 
-    if (!token) return <form onSubmit={login} className={`${panel} mx-auto max-w-md space-y-3`}>
-        <h1 className="text-2xl font-bold">Canais de publicação</h1>
-        <p className="text-sm text-zinc-400">Agente local do VexPublish. Nada é publicado por esta tela.</p>
-        <input className={`${input} w-full`} type="password" placeholder="Token local" value={draft} onChange={e => setDraft(e.target.value)} required />
-        <button className={`${button} w-full`}>Conectar</button>
-    </form>;
+    if (!token) return <AgenteLogin
+        titulo="Canais de publicação"
+        resumo="Aqui você cadastra as marcas/canais onde o bot publica: nome, nicho, quais plataformas e quais contas pertencem a cada um, com limite de posts por conta."
+        faz={[
+            "Criar um canal (a marca) e vincular as contas de TikTok, Instagram, YouTube e Kwai",
+            "Definir quantos posts por dia cada conta aceita e o intervalo mínimo entre eles",
+            "Comparar os canais por publicações, falhas, views e receita",
+            "Ver a fila e o diagnóstico de saúde do sistema",
+        ]}
+        naoFaz="Cadastrar canal e aprovar job só organiza a fila. A publicação continua desligada por flag, em dry-run."
+        chaveSessao="vexpublish_token"
+        aoEntrar={setToken}
+    />;
 
     return <main className="space-y-4" data-testid="vexpublish-module" aria-busy={loading}>
         <header className={panel}>
@@ -83,6 +92,16 @@ export function CanaisPublicacao() {
                 {tabs.map(([id, label]) => <button key={id} onClick={() => setTab(id)} className={tab === id ? button : secondary} aria-current={tab === id ? "page" : undefined}>{label}</button>)}
             </nav>
         </header>
+        <ComoFunciona
+            passos={[
+                { titulo: "Canal", detalhe: "a marca: nicho, identidade e plataformas" },
+                { titulo: "Contas", detalhe: "os perfis reais, com limite por dia" },
+                { titulo: "Job", detalhe: "cada vídeo vira um job na fila" },
+                { titulo: "Aprovação", detalhe: "você libera antes de sair", estado: "humano" },
+                { titulo: "Publicação", detalhe: "hoje em dry-run: não sai nada", estado: "travado" },
+            ]}
+            aviso="Um vídeo só chega na plataforma se: o canal tiver conta ativa, você aprovar o job, a conta estiver dentro do limite do dia e as flags de publicação estiverem ligadas. Hoje a última trava está fechada de propósito."
+        />
         {loading && <p role="status">Carregando…</p>}
         {error && <div role="alert" className="rounded-lg border border-red-700 bg-red-950/40 p-3">{error}</div>}
         {tab === "canais" && <Canais rows={canais} request={request} run={run} refresh={refresh} />}

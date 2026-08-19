@@ -1,6 +1,8 @@
 // Aba Importar / Adaptar / Publicar.
 // Nada aqui publica: a saída é PublishJob em draft no VexPublish.
 import { FormEvent, useEffect, useState } from "react";
+import { AgenteLogin } from "../components/AgenteLogin";
+import { ComoFunciona } from "../components/ComoFunciona";
 
 type Tab = "fontes" | "biblioteca" | "adaptacao" | "auditoria";
 type Row = Record<string, any>;
@@ -48,12 +50,19 @@ export function ImportarAdaptar() {
 
     useEffect(() => { if (token) void run(refresh); }, [token, tab]);
 
-    if (!token) return <form onSubmit={(e) => { e.preventDefault(); sessionStorage.setItem("import_token", draft); setToken(draft); }} className={`${panel} mx-auto max-w-md space-y-3`}>
-        <h1 className="text-2xl font-bold">Importar / Adaptar / Publicar</h1>
-        <p className="text-sm text-zinc-400">Agente local. Só entra material com autorização declarada.</p>
-        <input className={`${input} w-full`} type="password" placeholder="Token local" value={draft} onChange={e => setDraft(e.target.value)} required />
-        <button className={`${button} w-full`}>Conectar</button>
-    </form>;
+    if (!token) return <AgenteLogin
+        titulo="Importar / Adaptar"
+        resumo="Traz vídeos que você tem direito de usar, adapta pro formato do canal (9:16, tarja, título, marca) e manda pra fila de publicação."
+        faz={[
+            "Cadastrar de onde o material vem e quem autorizou o uso",
+            "Importar uma pasta inteira de uma vez, sem repetir arquivo",
+            "Transformar em vertical com título, marca e CTA",
+            "Mandar o resultado pra fila do canal escolhido",
+        ]}
+        naoFaz="Ele não remove marca d'água nem crédito de ninguém — o plano de adaptação recusa esse tipo de opção. E o download automático vem desligado."
+        chaveSessao="import_token"
+        aoEntrar={setToken}
+    />;
 
     return <main className="space-y-4" aria-busy={loading} data-testid="import-module">
         <header className={panel}>
@@ -73,6 +82,16 @@ export function ImportarAdaptar() {
                 {tabs.map(([id, label]) => <button key={id} onClick={() => setTab(id)} className={tab === id ? button : secondary} aria-current={tab === id ? "page" : undefined}>{label}</button>)}
             </nav>
         </header>
+        <ComoFunciona
+            passos={[
+                { titulo: "Fonte", detalhe: "de onde vem e quem autorizou", estado: "humano" },
+                { titulo: "Biblioteca", detalhe: "importa em lote, sem repetir" },
+                { titulo: "Adaptação", detalhe: "vertical, tarja, marca, CTA" },
+                { titulo: "Fila do canal", detalhe: "vira job de publicação" },
+                { titulo: "Aprovação", detalhe: "você libera antes de sair", estado: "travado" },
+            ]}
+            aviso="O crédito da origem é sempre mantido. Arquivo repetido é detectado pelo conteúdo, não pelo nome — o mesmo vídeo com outro nome não entra duas vezes."
+        />
         {loading && <p role="status">Carregando…</p>}
         {error && <div role="alert" className="rounded-lg border border-red-700 bg-red-950/40 p-3">{error}</div>}
         {notice && <div role="status" className="rounded-lg border border-emerald-700 bg-emerald-950/40 p-3">{notice}</div>}
