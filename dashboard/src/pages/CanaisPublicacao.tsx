@@ -23,6 +23,7 @@ export function CanaisPublicacao() {
     const [contas, setContas] = useState<Row[]>([]);
     const [comparacao, setComparacao] = useState<Row | null>(null);
     const [fila, setFila] = useState<Row | null>(null);
+    const [doutor, setDoutor] = useState<Row | null>(null);
     const [saude, setSaude] = useState<Row | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
@@ -43,7 +44,10 @@ export function CanaisPublicacao() {
         if (tab === "canais" || tab === "contas") setCanais((await request("/vexpublish/v1/channels")).items || []);
         if (tab === "contas") setContas((await request("/vexpublish/v1/accounts")).items || []);
         if (tab === "comparacao") setComparacao(await request("/vexpublish/v1/compare"));
-        if (tab === "fila") setFila(await request("/vexpublish/v1/queue"));
+        if (tab === "fila") {
+            setFila(await request("/vexpublish/v1/queue"));
+            setDoutor(await request("/vexpublish/v1/doctor"));
+        }
     }
 
     useEffect(() => { if (token) void run(refresh); }, [token, tab]);
@@ -73,7 +77,7 @@ export function CanaisPublicacao() {
                 Publicação: <strong className={saude.enabled ? "text-amber-400" : "text-emerald-400"}>{saude.enabled ? "módulo ligado" : "módulo desligado"}</strong>
                 {" · "}dry-run <strong className={saude.dry_run ? "text-emerald-400" : "text-amber-400"}>{saude.dry_run ? "ligado" : "desligado"}</strong>
                 {" · "}aprovação obrigatória <strong>{saude.require_approval ? "sim" : "não"}</strong>
-                {" · "}nenhum adapter validado
+                {" · "}adapters: {Object.entries(saude.adapters || {}).map(([k, v]) => `${k} ${v}`).join(" · ")}
             </p>}
             <nav className="mt-4 flex gap-2 overflow-x-auto" aria-label="Áreas de canais">
                 {tabs.map(([id, label]) => <button key={id} onClick={() => setTab(id)} className={tab === id ? button : secondary} aria-current={tab === id ? "page" : undefined}>{label}</button>)}
@@ -84,7 +88,7 @@ export function CanaisPublicacao() {
         {tab === "canais" && <Canais rows={canais} request={request} run={run} refresh={refresh} />}
         {tab === "contas" && <Contas rows={contas} canais={canais} request={request} run={run} refresh={refresh} />}
         {tab === "comparacao" && <Comparacao dados={comparacao} />}
-        {tab === "fila" && <Fila dados={fila} />}
+        {tab === "fila" && <Fila dados={fila} doutor={doutor} />}
     </main>;
 }
 
@@ -186,24 +190,61 @@ function Comparacao({ dados }: { dados: Row | null }) {
     </section>;
 }
 
-function Fila({ dados }: { dados: Row | null }) {
-    if (!dados) return <section className={panel}><p>Sem dados de fila.</p></section>;
-    return <section className={`${panel} space-y-3`}>
-        <h2 className="text-lg font-bold">Fila e saúde</h2>
-        <div className="grid gap-3 md:grid-cols-3">
-            <div className="rounded-xl border border-zinc-800 p-3">
-                <h3 className="font-bold">Jobs por status</h3>
-                {Object.entries(dados.por_status || {}).map(([k, v]) => <p key={k} className="text-sm">{k}: <strong>{String(v)}</strong></p>)}
-                {!Object.keys(dados.por_status || {}).length && <p className="text-sm text-zinc-400">Nenhum job.</p>}
+function Fila({ dados, doutor }: { dados: Row | null; doutor: Row | null }) {
+    const cor = (status: string) => status === "erro" ? "text-red-400" : status === "alerta" ? "text-amber-400" : "text-emerald-400";
+    return <section className="space-y-4">
+        {doutor && <div className={`${panel} space-y-3`}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-lg font-bold">Diagnóstico</h2>
+                <span className={`font-bold ${doutor.ok ? "text-emerald-400" : "text-red-400"}`}>
+                    {doutor.ok ? "sem erros" : `${doutor.resumo.erros.length} erro(s)`}
+                    {doutor.resumo.alertas.length ? ` · ${doutor.resumo.alertas.length} alerta(s)` : ""}
+                </span>
             </div>
-            <div className="rounded-xl border border-zinc-800 p-3">
-                <h3 className="font-bold">Contas por plataforma</h3>
-                {Object.entries(dados.contas || {}).map(([k, v]) => <p key={k} className="text-sm">{k}: {Object.entries(v as Row).map(([s, n]) => `${s} ${n}`).join(" · ") || "nenhuma"}</p>)}
+            <div className="grid gap-2 md:grid-cols-2">
+                {(doutor.checagens || []).map((c: Row) => <article key={c.check} className="rounded-xl border border-zinc-800 p-3">
+                    <div className="flex justify-between">
+                        <strong>{c.check}</strong>
+                        <span className={cor(c.status)}>{c.status}</span>
+                    </div>
+                    <p className="text-sm text-zinc-400">{c.mensagem}</p>
+                </article>)}
             </div>
-            <div className="rounded-xl border border-zinc-800 p-3">
-                <h3 className="font-bold">Adapters</h3>
-                {Object.entries(dados.adapters || {}).map(([k, v]) => <p key={k} className="text-sm">{k}: <span className="text-amber-400">{String(v)}</span></p>)}
+        </div>}
+
+        {doutor?.quotas && <div className={`${panel} space-y-2`}>
+            <h2 className="text-lg font-bold">Quotas globais</h2>
+            <p className="text-sm text-zinc-400">
+                Disco livre <strong>{doutor.quotas.uso.disco_livre_gb} GB</strong> (mínimo {doutor.quotas.limites.min_free_disk_gb} GB)
+                {" · "}publicados na última hora <strong>{doutor.quotas.uso.publicados_ultima_hora}</strong>
+                {doutor.quotas.limites.max_jobs_per_hour ? ` de ${doutor.quotas.limites.max_jobs_per_hour}` : " (sem teto)"}
+                {" · "}fila com <strong>{doutor.quotas.uso.profundidade_da_fila}</strong>
+                {" · "}publicando agora <strong>{doutor.quotas.uso.publicando_agora}</strong>
+            </p>
+            {doutor.quotas.bloqueios?.length
+                ? <p className="text-sm text-red-300">Bloqueado por: {doutor.quotas.bloqueios.join(", ")}</p>
+                : <p className="text-sm text-emerald-400">Nenhum bloqueio de quota.</p>}
+        </div>}
+
+        {!dados ? <div className={panel}><p>Sem dados de fila.</p></div> : <div className={`${panel} space-y-3`}>
+            <h2 className="text-lg font-bold">Fila</h2>
+            <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-xl border border-zinc-800 p-3">
+                    <h3 className="font-bold">Jobs por status</h3>
+                    {Object.entries(dados.por_status || {}).map(([k, v]) => <p key={k} className="text-sm">{k}: <strong>{String(v)}</strong></p>)}
+                    {!Object.keys(dados.por_status || {}).length && <p className="text-sm text-zinc-400">Nenhum job.</p>}
+                </div>
+                <div className="rounded-xl border border-zinc-800 p-3">
+                    <h3 className="font-bold">Contas por plataforma</h3>
+                    {Object.entries(dados.contas || {}).map(([k, v]) => <p key={k} className="text-sm">{k}: {Object.entries(v as Row).map(([s, n]) => `${s} ${n}`).join(" · ") || "nenhuma"}</p>)}
+                </div>
+                <div className="rounded-xl border border-zinc-800 p-3">
+                    <h3 className="font-bold">Adapters</h3>
+                    {Object.entries(dados.adapters || {}).map(([k, v]) => <p key={k} className="text-sm">
+                        {k}: <span className={v === "PARCIAL" ? "text-cyan-400" : "text-amber-400"}>{String(v)}</span>
+                    </p>)}
+                </div>
             </div>
-        </div>
+        </div>}
     </section>;
 }
