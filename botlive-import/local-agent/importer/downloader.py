@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,13 +34,23 @@ TUDO = 0
 TIMEOUT = int(os.getenv("IMPORT_DOWNLOAD_TIMEOUT", "600"))
 
 
-def ferramenta() -> str:
+def ferramenta() -> list:
+    """Comando do yt-dlp, como lista de argumentos.
+
+    O pacote esta no requirements do BotLive, mas nem sempre coloca o
+    executavel no PATH (foi o caso no Windows do Glauber). Cair para
+    "python -m yt_dlp" evita depender de como o pip instalou.
+    """
     caminho = shutil.which("yt-dlp")
-    if not caminho:
-        raise ImportError_(
-            "yt-dlp nao encontrado. Instale com: python -m pip install yt-dlp"
-        )
-    return caminho
+    if caminho:
+        return [caminho]
+    import importlib.util
+
+    if importlib.util.find_spec("yt_dlp"):
+        return [sys.executable, "-m", "yt_dlp"]
+    raise ImportError_(
+        "yt-dlp nao encontrado. Instale com: python -m pip install yt-dlp"
+    )
 
 
 def _cookies() -> list:
@@ -60,7 +71,7 @@ def listar(url: str, limite: int = LIMITE_PADRAO) -> list:
     limite=0 lista o perfil inteiro. Util para conferir o tamanho antes de
     mandar baixar tudo.
     """
-    comando = [ferramenta(), "--flat-playlist", "--dump-json"]
+    comando = [*ferramenta(), "--flat-playlist", "--dump-json"]
     if limite and limite > 0:
         comando += ["--playlist-end", str(limite)]
     comando += [*_cookies(), url]
@@ -121,7 +132,7 @@ def baixar(source_id: str, url: str | None = None, limite: int = LIMITE_PADRAO,
     destino.mkdir(parents=True, exist_ok=True)
 
     comando = [
-        ferramenta(),
+        *ferramenta(),
         "--no-playlist-reverse",
         "--no-overwrites",
         # Perfil inteiro pode ser centenas de itens: sem arquivo de historico
