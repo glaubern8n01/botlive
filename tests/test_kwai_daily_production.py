@@ -58,3 +58,11 @@ def test_dashboard_only_finishes_batch_after_both_kwai_accounts_are_confirmed() 
     assert "Publiquei todos no Kwai clone" in page
     assert "!principalConfirmed || !cloneConfirmed" in page
     assert "Marcar lote como publicado e liberar espaço" in page
+
+
+def test_dashboard_busts_stale_media_cache_and_shows_job_timestamp() -> None:
+    page = Path("dashboard/src/pages/KwaiCut.tsx").read_text(encoding="utf-8")
+    assert "const cacheBuster = 'v=3'" in page
+    assert "playsInline" in page
+    assert "Enviado ao painel:" in page
+    assert "dateStyle: 'short', timeStyle: 'medium'" in page

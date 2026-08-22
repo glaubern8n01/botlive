@@ -419,17 +419,22 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
   const slug = String(job.content_events?.event_type || 'lance').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'lance';
   const filename = String(job.metadata?.download_filename || `kwai-futebol-${slug}-${date}-${String(index + 1).padStart(3, '0')}.mp4`);
   const coverName = filename.replace(/\.mp4$/, '-capa.jpg');
-  const videoUrl = `/api/assets/${job.asset_id}/video?name=${encodeURIComponent(filename)}`;
-  const coverUrl = `/api/assets/${job.asset_id}/cover?name=${encodeURIComponent(coverName)}`;
+  // Troca a chave de cache. Uma implantação antiga respondeu HTML nesta rota e
+  // alguns navegadores continuaram usando essa resposta no lugar do MP4.
+  const cacheBuster = 'v=3';
+  const videoUrl = `/api/assets/${job.asset_id}/video?${cacheBuster}&name=${encodeURIComponent(filename)}`;
+  const coverUrl = `/api/assets/${job.asset_id}/cover?${cacheBuster}&name=${encodeURIComponent(coverName)}`;
   const allText = composePublicationText(description, credits, hashtags);
   const gates = (job.metadata?.gates || {}) as Record<string, unknown>;
   const published = ['published', 'published_manual'].includes(job.status);
   const variant = job.editorial_variants?.variant_signature || 'CUT vertical';
   const event = job.content_events?.event_type || 'Evento de futebol';
+  const sentAt = created.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' });
 
   return <Card className={published ? 'border-emerald-800' : 'border-zinc-700'}>
-    <div className="aspect-video overflow-hidden rounded-t-xl bg-black">
-      <video className="h-full w-full object-contain" controls preload="metadata" poster={job.cover_path ? coverUrl : undefined}>
+    <div className="mx-auto overflow-hidden rounded-t-xl bg-black"
+      style={{ aspectRatio: `${job.media_assets?.width || 9} / ${job.media_assets?.height || 16}`, maxHeight: '70vh' }}>
+      <video className="h-full w-full object-contain" controls playsInline preload="metadata" poster={job.cover_path ? coverUrl : undefined}>
         <source src={videoUrl} type="video/mp4" />
       </video>
     </div>
@@ -442,10 +447,11 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
         <span>Formato: <b className="text-zinc-200">{job.media_assets?.width}×{job.media_assets?.height}</b></span>
         <span>Evento: <b className="text-zinc-200">{event}</b></span>
         <span>Variante: <b className="text-zinc-200">{variant}</b></span>
+        <span className="col-span-2">Enviado ao painel: <b className="text-zinc-200">{sentAt}</b></span>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
-        <a className="inline-flex h-9 items-center justify-center rounded-md bg-zinc-50 px-3 text-sm font-medium text-zinc-900" href={`${videoUrl}&download=1`} download={filename}><Download className="mr-2 h-4 w-4" />Baixar vídeo</a>
-        <a className={`inline-flex h-9 items-center justify-center rounded-md border border-zinc-700 px-3 text-sm ${job.cover_path ? '' : 'pointer-events-none opacity-40'}`} href={`${coverUrl}&download=1`} download={coverName}><Download className="mr-2 h-4 w-4" />Baixar capa</a>
+        <a className="inline-flex h-11 items-center justify-center rounded-md bg-zinc-50 px-3 text-sm font-medium text-zinc-900" href={`${videoUrl}&download=1`} download={filename}><Download className="mr-2 h-4 w-4" />Baixar vídeo</a>
+        <a className={`inline-flex h-11 items-center justify-center rounded-md border border-zinc-700 px-3 text-sm ${job.cover_path ? '' : 'pointer-events-none opacity-40'}`} href={`${coverUrl}&download=1`} download={coverName}><Download className="mr-2 h-4 w-4" />Baixar capa</a>
         <CopyButton label="Copiar descrição" value={description} />
         <CopyButton label="Copiar hashtags" value={hashtags} />
         <CopyButton label="Copiar créditos" value={credits} />
