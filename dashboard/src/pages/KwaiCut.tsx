@@ -183,6 +183,25 @@ export function KwaiCut() {
     setBusy(false);
     return true;
   };
+  const markAllPublished = async (jobIds: string[]) => {
+    if (busy || !jobIds.length) return false;
+    setBusy(true); setError(null); setNotice(null);
+    let completed = 0;
+    for (const jobId of jobIds) {
+      const response = await fetch('/api/kwai/mark-published', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId, external_id: '', published_at: new Date().toISOString() }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        setError(`${completed} de ${jobIds.length} registrados. ${payload.error || 'Falha ao finalizar o lote.'}`);
+        await load(); setBusy(false); return false;
+      }
+      completed += 1;
+    }
+    setNotice(`${completed} vídeos marcados como publicados nas duas contas. Arquivos removidos da VPS.`);
+    await load(); setBusy(false); return true;
+  };
 
   return <div className="space-y-6">
     <div className="flex items-start justify-between gap-4">
@@ -216,7 +235,7 @@ export function KwaiCut() {
     <div className="flex gap-1 overflow-x-auto border-b border-zinc-800">{TABS.map((item) => <button key={item} onClick={() => setTab(item)} className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === item ? 'border-orange-400 text-white' : 'border-transparent text-zinc-400'}`}>{item}</button>)}</div>
     {loading ? <div className="py-16 text-center text-zinc-500">Carregando dados reais...</div> : <>
       {tab === 'Visão geral' && <Overview metrics={metrics} sources={sources} events={events} jobs={jobs} deficit={deficit} />}
-      {tab === 'Publicar pelo celular' && <ManualPublishing jobs={jobs} activity={activity} markPublished={markPublished} busy={busy} reviewRequired={reviewRequired} />}
+      {tab === 'Publicar pelo celular' && <ManualPublishing jobs={jobs} activity={activity} markPublished={markPublished} markAllPublished={markAllPublished} busy={busy} reviewRequired={reviewRequired} />}
       {tab === 'Histórico' && <Jobs jobs={jobs.filter((job) => ['published','published_manual','rejected','cancelled'].includes(job.status))} cancel={cancelJob} busy={busy} videos />}
       {tab === 'Fontes' && <div className="space-y-4"><ProspectReview prospects={prospects} value={bulkLinks} setValue={setBulkLinks} add={addBulkLinks} busy={busy} reload={load} setError={setError} /><Sources sources={sources} form={sourceForm} setForm={setSourceForm} add={addSource} toggle={toggleSource} busy={busy} /></div>}
       {tab === 'Diagnóstico' && <Diagnostics checks={checks} discovered={discovered} sources={sources} />}
@@ -345,13 +364,16 @@ function AccountPanel({ account }: { account: Account | null }) {
   </div>;
 }
 
-function ManualPublishing({ jobs, activity, markPublished, busy, reviewRequired }: {
+function ManualPublishing({ jobs, activity, markPublished, markAllPublished, busy, reviewRequired }: {
   jobs: JobRow[];
   activity: Activity;
   markPublished: (jobId: string, assetId: string, externalId: string, publishedAt: string) => Promise<boolean>;
+  markAllPublished: (jobIds: string[]) => Promise<boolean>;
   busy: boolean;
   reviewRequired: number;
 }) {
+  const [principalConfirmed, setPrincipalConfirmed] = useState(false);
+  const [cloneConfirmed, setCloneConfirmed] = useState(false);
   const readyJobs = jobs.filter((job) => job.status === 'ready' && job.media_assets?.validation_status === 'valid');
   return <div className="space-y-5">
     <details className="rounded-xl border border-orange-800 bg-orange-950/20 p-4">
@@ -364,6 +386,19 @@ function ManualPublishing({ jobs, activity, markPublished, busy, reviewRequired 
       </ol>
     </details>
     <div className="flex items-center gap-2 text-sm text-zinc-400"><Smartphone className="h-5 w-5 text-orange-400" />Arquivos protegidos pelo mesmo acesso do dashboard. Nenhuma sessão do Kwai é usada.</div>
+    {readyJobs.length > 0 && <Card className="border-amber-700">
+      <CardHeader><CardTitle>Finalizar lote nas duas contas</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-amber-200">Use somente depois que os {readyJobs.length} vídeos estiverem publicados no Kwai principal e no Kwai clone. A confirmação remove os arquivos da VPS para receber o próximo lote.</p>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={principalConfirmed} onChange={(event) => setPrincipalConfirmed(event.target.checked)} />Publiquei todos no Kwai principal</label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={cloneConfirmed} onChange={(event) => setCloneConfirmed(event.target.checked)} />Publiquei todos no Kwai clone</label>
+        <Button className="w-full" disabled={busy || !principalConfirmed || !cloneConfirmed} onClick={() => {
+          if (window.confirm(`Confirmar ${readyJobs.length} vídeos? Eles serão marcados como publicados e apagados da VPS.`)) {
+            void markAllPublished(readyJobs.map((job) => job.job_id));
+          }
+        }}><CheckCircle2 className="mr-2 h-4 w-4" />Marcar lote como publicado e liberar espaço</Button>
+      </CardContent>
+    </Card>}
     {readyJobs.length ? <div className="grid gap-5 xl:grid-cols-2">
       {readyJobs.map((job, index) => <div key={job.job_id}><ManualVideoCard job={job} index={index} activity={activity} markPublished={markPublished} busy={busy} /></div>)}
     </div> : <Empty icon={<Smartphone />} title="Nenhum vídeo pronto" text={`Existem ${reviewRequired} fontes aguardando revisão. Os vídeos aparecerão após autorização, geração e validação em prepare_only.`} />}

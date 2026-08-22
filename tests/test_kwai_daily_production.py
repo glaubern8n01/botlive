@@ -50,3 +50,11 @@ def test_dashboard_supports_platform_text_and_optional_external_id() -> None:
     assert "postado-manual-" in server
     # E apaga a mídia da VPS na hora (o janitor a cada 15min também cobre).
     assert "unlink(await verifiedMediaPath" in server
+
+
+def test_dashboard_only_finishes_batch_after_both_kwai_accounts_are_confirmed() -> None:
+    page = Path("dashboard/src/pages/KwaiCut.tsx").read_text(encoding="utf-8")
+    assert "Publiquei todos no Kwai principal" in page
+    assert "Publiquei todos no Kwai clone" in page
+    assert "!principalConfirmed || !cloneConfirmed" in page
+    assert "Marcar lote como publicado e liberar espaço" in page
