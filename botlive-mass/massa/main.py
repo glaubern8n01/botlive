@@ -105,6 +105,15 @@ class EditarIn(BaseModel):
     template_id: str
     entradas: list[str] = []
     usar_baixados: bool = True
+    # pasta local: editar videos que o operador ja tem, sem passar pelo
+    # downloader. Tem prioridade sobre usar_baixados quando vem preenchida.
+    pasta: str = ""
+    recursivo: bool = False
+
+
+class PastaIn(BaseModel):
+    caminho: str
+    recursivo: bool = False
 
 
 class PreviaIn(BaseModel):
@@ -138,6 +147,9 @@ def health():
         "formatos": sorted(templates.FORMATOS),
         "workers_editor": editor.WORKERS,
         "processamento": "100% local (FFmpeg + yt-dlp)",
+        "entradas_aceitas": list(editor.VIDEO_EXT),
+        "mockup_aceito": list(templates.MOCKUP_ACEITOS),
+        "ensaio_no_navegador": postador.ligado("MASS_DRY_RUN_NAVEGADOR"),
     }
 
 
@@ -237,11 +249,24 @@ def criar_template(value: TemplateIn, user=Depends(exigir("write"))):
 @app.post("/mass/v1/projetos/{projeto_id}/edicoes", status_code=201)
 def enfileirar_edicoes(projeto_id: str, value: EditarIn, user=Depends(exigir("write"))):
     try:
+        if value.pasta:
+            return editor.enfileirar_pasta(projeto_id, value.template_id,
+                                           value.pasta, value.recursivo)
         if value.usar_baixados and not value.entradas:
             return editor.enfileirar_baixados(projeto_id, value.template_id)
         return editor.enfileirar(projeto_id, value.template_id, value.entradas)
     except MassaError as exc:
         raise _erro(exc)
+
+
+@app.post("/mass/v1/pasta/listar")
+def listar_pasta(value: PastaIn, user=Depends(exigir("read"))):
+    """Mostra os videos de uma pasta local antes de enfileirar."""
+    try:
+        itens = editor.varrer_pasta(value.caminho, value.recursivo)
+    except MassaError as exc:
+        raise _erro(exc)
+    return {"total": len(itens), "itens": itens, "pasta": value.caminho}
 
 
 @app.get("/mass/v1/projetos/{projeto_id}/edicoes", dependencies=[Depends(exigir("read"))])
@@ -370,11 +395,29 @@ def ajuda():
                     "Escreva o CTA", "Salve: o template vale para o lote todo"]},
         {"titulo": "Como gerar ZIP",
          "passos": ["Termine a fila de edicao",
-                    "Chame export/zip", "O ZIP fica em exports/ do projeto"]},
+                    "Va na aba Postador e aperte Gerar ZIP",
+                    "O ZIP fica em exports/ do projeto"]},
         {"titulo": "Como configurar o Instagram",
          "passos": ["Modo api: usa o token que o BotLive ja tem (recomendado)",
                     "Modo local: rode o login manual e a sessao e salva",
                     "Modo local vai contra os termos do Instagram e arrisca a conta"]},
+        {"titulo": "Como editar uma pasta que eu ja tenho",
+         "passos": ["Va na aba Editor e escolha o template",
+                    "Cole o caminho da pasta (ex: C:\BotLive\Downloads)",
+                    "Marque 'subpastas' se os videos estiverem em varias pastas",
+                    "Confira quantos apareceram e mande para o editor",
+                    "A saida vai para editados/ - o original nao e tocado"]},
+        {"titulo": "Como usar mockup em video",
+         "passos": ["Exporte o mockup em .webm (VP9 com alpha) ou .mov (ProRes 4444)",
+                    "Aponte o arquivo no campo Mockup do template",
+                    "Mockup curto entra em loop e termina junto com o video",
+                    "Gere a previa de 3s antes de rodar o lote"]},
+        {"titulo": "Como instalar no Windows",
+         "passos": ["Build: powershell -File ops\build-instalador-massa.ps1",
+                    "Sai BotLive-Massa.exe (portatil) e BotLive-Setup-Test.exe",
+                    "No outro PC: instale o setup + FFmpeg + yt-dlp",
+                    "Abra o programa: a janela mostra o token de acesso",
+                    "Nenhum segredo vai no instalador - o token nasce na maquina"]},
         {"titulo": "Como usar o postador",
          "passos": ["Enfileire os editados", "Deixe o dry-run ligado primeiro",
                     "Confira a fila", "So entao desligue o dry-run"]},

@@ -23,6 +23,14 @@ from . import projetos, templates
 from .store import MassaError, agora, atualizar, conectar, contar, inserir, listar, obter
 
 
+# Extensoes que o editor aceita como entrada ao varrer uma pasta local.
+VIDEO_EXT = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg")
+
+# Mockup pode ser imagem ou video com transparencia (webm/vp9 alpha, mov
+# prores 4444). Video precisa de tratamento diferente: entra em loop e o
+# overlay termina junto com o video de base, senao a saida ficaria infinita.
+MOCKUP_VIDEO_EXT = (".webm", ".mov", ".mp4", ".mkv")
+
 FFMPEG = os.getenv("MASS_FFMPEG", "ffmpeg")
 TIMEOUT = int(os.getenv("MASS_EDIT_TIMEOUT", "1800"))
 WORKERS = int(os.getenv("MASS_EDITOR_WORKERS", "2"))
@@ -71,6 +79,11 @@ def _partes_enquadramento(modo: str, entrada_rotulo: str, largura: int, altura: 
     ]
 
 
+def mockup_e_video(caminho: str) -> bool:
+    """Mockup em video (com alpha) x imagem estatica - muda o comando."""
+    return Path(caminho or "").suffix.lower() in MOCKUP_VIDEO_EXT
+
+
 def _escapar_texto(texto: str) -> str:
     """drawtext trata dois-pontos, aspa simples e barra invertida como sintaxe."""
     return (texto.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'"))
@@ -108,7 +121,12 @@ def montar_comando(entrada: Path, saida: Path, template: dict,
 
     indice = 1
     idx_mockup = idx_logo = None
+    mock_video = bool(template.get("mockup_path")) and mockup_e_video(template["mockup_path"])
     if template.get("mockup_path"):
+        # -stream_loop vale para a entrada seguinte: o mockup repete ate o
+        # video de base acabar. Sem isso um mockup de 2s cobriria so o comeco.
+        if mock_video:
+            comando += ["-stream_loop", "-1"]
         comando += ["-i", str(template["mockup_path"])]
         idx_mockup = indice
         indice += 1
@@ -133,7 +151,10 @@ def montar_comando(entrada: Path, saida: Path, template: dict,
         opacidade = float(template.get("mockup_opacidade") or 1.0)
         partes.append(f"[{idx_mockup}:v]scale={largura}:{altura},format=rgba,"
                       f"colorchannelmixer=aa={opacidade}[mock]")
-        partes.append(f"[{atual}][mock]overlay=0:0[comock]")
+        # shortest=1 so no video: com a entrada em loop infinito, sem isso a
+        # saida nunca terminaria. Imagem estatica nao precisa.
+        fim_overlay = ":shortest=1" if mock_video else ""
+        partes.append(f"[{atual}][mock]overlay=0:0{fim_overlay}[comock]")
         atual = "comock"
 
     if idx_logo is not None:
@@ -227,6 +248,43 @@ def enfileirar_baixados(projeto_id: str, template_id: str) -> dict:
     # liga cada edicao ao download de origem, para o historico fechar
     for edicao_id, download in zip(resultado["ids"], baixados):
         atualizar("mass_edicoes", edicao_id, {"download_id": download["id"]})
+    return resultado
+
+
+def varrer_pasta(caminho: str, recursivo: bool = False) -> list:
+    """Lista os videos de uma pasta local, em ordem de nome.
+
+    Serve o caso do documento: editar em lote videos que o operador ja tem no
+    disco, sem passar pelo downloader. Nao entra em `editados/` nem em
+    `exports/` do proprio modulo - reprocessar a propria saida so geraria
+    video sobre video.
+    """
+    pasta = Path(caminho or "")
+    if not pasta.is_dir():
+        raise MassaError(f"Pasta nao encontrada: {pasta}")
+    padrao = "**/*" if recursivo else "*"
+    ignoradas = {"editados", "exports", "previas"}
+    achados = []
+    for x in sorted(pasta.glob(padrao)):
+        if not x.is_file() or x.suffix.lower() not in VIDEO_EXT:
+            continue
+        # so ignora subpasta DENTRO da escolhida - se o operador apontar
+        # direto para `editados/`, e porque ele quer aquilo mesmo.
+        if ignoradas & set(x.relative_to(pasta).parts[:-1]):
+            continue
+        achados.append(x)
+    if not achados:
+        raise MassaError(f"Nenhum video em {pasta} (aceito: {', '.join(VIDEO_EXT)})")
+    return [str(x) for x in achados]
+
+
+def enfileirar_pasta(projeto_id: str, template_id: str, caminho: str,
+                     recursivo: bool = False) -> dict:
+    """[SELECIONAR PASTA LOCAL] - varre e enfileira de uma vez."""
+    entradas = varrer_pasta(caminho, recursivo)
+    resultado = enfileirar(projeto_id, template_id, entradas)
+    resultado["encontrados"] = len(entradas)
+    resultado["pasta"] = str(Path(caminho))
     return resultado
 
 

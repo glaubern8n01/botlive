@@ -503,3 +503,273 @@ class ApiTests(Base):
         os.environ["MASS_SESSIONS_DIR"] = str(self.tmp / "sess")
         dados = self.client.get("/mass/v1/sessao/principal", headers=self.admin).json()
         self.assertEqual({"conta", "salva"}, set(dados))
+
+
+class PastaLocalTests(Base):
+    """Editar videos que ja estao no disco, sem passar pelo downloader."""
+
+    def _pasta_com(self, *nomes):
+        pasta = self.tmp / f"local-{store.uid()[:6]}"
+        pasta.mkdir(parents=True)
+        for nome in nomes:
+            (pasta / nome).parent.mkdir(parents=True, exist_ok=True)
+            (pasta / nome).write_bytes(b"video")
+        return pasta
+
+    def test_varre_so_video_e_em_ordem(self):
+        pasta = self._pasta_com("b.mp4", "a.mov", "leiame.txt", "capa.png")
+        achados = [Path(x).name for x in editor.varrer_pasta(str(pasta))]
+        self.assertEqual(["a.mov", "b.mp4"], achados)
+
+    def test_pasta_inexistente_da_erro_claro(self):
+        with self.assertRaises(store.MassaError) as erro:
+            editor.varrer_pasta(str(self.tmp / "nao-existe"))
+        self.assertIn("Pasta nao encontrada", str(erro.exception))
+
+    def test_pasta_sem_video_e_recusada(self):
+        pasta = self._pasta_com("leiame.txt")
+        with self.assertRaises(store.MassaError):
+            editor.varrer_pasta(str(pasta))
+
+    def test_recursivo_ignora_a_propria_saida(self):
+        pasta = self._pasta_com("raiz.mp4", "sub/outro.mp4", "editados/ja_feito.mp4")
+        achados = [Path(x).name for x in editor.varrer_pasta(str(pasta), recursivo=True)]
+        self.assertIn("raiz.mp4", achados)
+        self.assertIn("outro.mp4", achados)
+        self.assertNotIn("ja_feito.mp4", achados)
+
+    def test_apontar_direto_para_editados_ainda_funciona(self):
+        pasta = self._pasta_com("editados/pronto.mp4")
+        achados = editor.varrer_pasta(str(pasta / "editados"))
+        self.assertEqual(1, len(achados))
+
+    def test_enfileira_a_pasta_inteira(self):
+        pasta = self._pasta_com("um.mp4", "dois.mp4")
+        template = self._template()
+        r = editor.enfileirar_pasta(self.projeto["id"], template["id"], str(pasta))
+        self.assertEqual(2, r["enfileirados"])
+        self.assertEqual(2, r["encontrados"])
+        self.assertEqual(2, editor.fila(self.projeto["id"])["resumo"]["queued"])
+
+
+class MockupVideoTests(Base):
+    def _mockup(self, nome):
+        caminho = self.tmp / nome
+        caminho.write_bytes(b"mockup")
+        return caminho
+
+    def test_mockup_em_video_entra_em_loop_e_termina_com_a_base(self):
+        template = self._template(mockup_path=str(self._mockup("frame.webm")))
+        comando = editor.montar_comando(self._video(), self.tmp / "out.mp4", template)
+        self.assertIn("-stream_loop", comando)
+        self.assertEqual("-1", comando[comando.index("-stream_loop") + 1])
+        filtro = comando[comando.index("-filter_complex") + 1]
+        self.assertIn("overlay=0:0:shortest=1", filtro)
+
+    def test_mockup_em_imagem_nao_usa_loop(self):
+        template = self._template(mockup_path=str(self._mockup("frame.png")))
+        comando = editor.montar_comando(self._video(), self.tmp / "out.mp4", template)
+        self.assertNotIn("-stream_loop", comando)
+        filtro = comando[comando.index("-filter_complex") + 1]
+        self.assertIn("overlay=0:0[comock]", filtro)
+
+    def test_extensao_de_mockup_desconhecida_e_recusada(self):
+        with self.assertRaises(store.MassaError) as erro:
+            self._template(mockup_path=str(self._mockup("frame.txt")))
+        self.assertIn("mockup", str(erro.exception))
+
+    def test_logo_em_video_e_recusada(self):
+        with self.assertRaises(store.MassaError):
+            self._template(logo_path=str(self._mockup("logo.mp4")))
+
+
+class PaginaFake:
+    """Pagina de mentira: aceita os seletores declarados e anota tudo.
+
+    Deixa o fluxo do Instagram testavel sem Playwright instalado, sem rede e
+    sem tocar em conta nenhuma.
+    """
+
+    def __init__(self, aceitar=None, url_apos_goto=None):
+        self.aceitar = aceitar            # None = aceita qualquer seletor
+        self.url_apos_goto = url_apos_goto
+        self._url = "https://www.instagram.com/"
+        self.chamadas = []
+
+    @property
+    def url(self):
+        return self._url
+
+    def _existe(self, seletor):
+        return self.aceitar is None or any(x in seletor for x in self.aceitar)
+
+    def goto(self, url, timeout=0):
+        self._url = self.url_apos_goto or url
+        self.chamadas.append(("goto", self._url))
+
+    def click(self, seletor, timeout=0):
+        if not self._existe(seletor):
+            raise RuntimeError("seletor inexistente")
+        self.chamadas.append(("click", seletor))
+
+    def fill(self, seletor, texto, timeout=0):
+        if not self._existe(seletor):
+            raise RuntimeError("seletor inexistente")
+        self.chamadas.append(("fill", texto))
+
+    def set_input_files(self, seletor, arquivo, timeout=0):
+        self.chamadas.append(("arquivo", arquivo))
+
+    def wait_for_selector(self, seletor, timeout=0):
+        self.chamadas.append(("espera", seletor))
+
+
+class PostadorLocalTests(Base):
+    def _pronto(self):
+        arquivo = self.tmp / f"pub-{store.uid()[:6]}.mp4"
+        arquivo.write_bytes(b"video")
+        return arquivo
+
+    def _acoes(self, pagina):
+        return [c[0] for c in pagina.chamadas]
+
+    def test_fluxo_carrega_video_preenche_legenda_e_confirma(self):
+        pagina = PaginaFake()
+        arquivo = str(self._pronto())
+        r = postador.fluxo_publicacao(pagina, arquivo, "Confira #promo", 1000)
+        self.assertTrue(r["confirmado"])
+        self.assertIn(("arquivo", arquivo), pagina.chamadas)
+        self.assertIn(("fill", "Confira #promo"), pagina.chamadas)
+        self.assertIn("espera", self._acoes(pagina))
+
+    def test_dois_avancar_ate_a_tela_da_legenda(self):
+        pagina = PaginaFake()
+        postador.fluxo_publicacao(pagina, str(self._pronto()), "x", 1000)
+        avancos = [c for c in pagina.chamadas if c[0] == "click" and "Avan" in c[1]]
+        self.assertEqual(2, len(avancos))
+
+    def test_ensaio_para_antes_de_compartilhar(self):
+        pagina = PaginaFake()
+        r = postador.fluxo_publicacao(pagina, str(self._pronto()), "x", 1000,
+                                      confirmar=False)
+        self.assertFalse(r["confirmado"])
+        cliques = [c[1] for c in pagina.chamadas if c[0] == "click"]
+        self.assertFalse([c for c in cliques if "Compartilhar" in c or "Share" in c])
+        self.assertNotIn("espera", self._acoes(pagina))
+
+    def test_checkpoint_nao_e_contornado(self):
+        pagina = PaginaFake(url_apos_goto="https://www.instagram.com/challenge/abc")
+        with self.assertRaises(store.MassaError) as erro:
+            postador.fluxo_publicacao(pagina, str(self._pronto()), "x", 1000)
+        self.assertIn("ACAO MANUAL", str(erro.exception))
+        self.assertEqual(["goto"], self._acoes(pagina))
+
+    def test_pedido_de_login_no_meio_vira_acao_manual(self):
+        pagina = PaginaFake(url_apos_goto="https://www.instagram.com/accounts/login/")
+        with self.assertRaises(store.MassaError):
+            postador.fluxo_publicacao(pagina, str(self._pronto()), "x", 1000)
+
+    def test_layout_desconhecido_da_erro_legivel(self):
+        pagina = PaginaFake(aceitar=["nada-existe"])
+        with self.assertRaises(store.MassaError) as erro:
+            postador.fluxo_publicacao(pagina, str(self._pronto()), "x", 1000)
+        self.assertIn("layout", str(erro.exception).lower())
+
+    def test_sem_legenda_nao_procura_o_campo(self):
+        pagina = PaginaFake()
+        postador.fluxo_publicacao(pagina, str(self._pronto()), "", 1000)
+        self.assertNotIn("fill", self._acoes(pagina))
+
+    def _com_navegador(self, pagina):
+        import contextlib
+
+        @contextlib.contextmanager
+        def falso(_conta):
+            yield pagina
+
+        return mock.patch.object(postador, "_navegador", falso)
+
+    def test_dry_run_no_navegador_ensaia_e_nao_publica(self):
+        os.environ["MASS_PUBLISH_ENABLED"] = "true"
+        os.environ["MASS_PUBLISHER_MODE"] = "local"
+        os.environ["LOCAL_PUBLISHER_DRY_RUN"] = "true"
+        os.environ["MASS_DRY_RUN_NAVEGADOR"] = "true"
+        try:
+            pagina = PaginaFake()
+            ids = postador.enfileirar(self.projeto["id"], [str(self._pronto())])["ids"]
+            with self._com_navegador(pagina):
+                resultado = postador.publicar_item(ids[0])
+            self.assertEqual("completed", resultado["status"])
+            self.assertEqual(1, resultado["dry_run"])
+            self.assertIn("PAROU antes de confirmar", resultado["erro"])
+            cliques = [c[1] for c in pagina.chamadas if c[0] == "click"]
+            self.assertFalse([c for c in cliques if "Compartilhar" in c])
+        finally:
+            os.environ.pop("MASS_DRY_RUN_NAVEGADOR", None)
+
+    def test_publicacao_local_real_percorre_a_tela(self):
+        os.environ["MASS_PUBLISH_ENABLED"] = "true"
+        os.environ["MASS_PUBLISHER_MODE"] = "local"
+        os.environ["LOCAL_PUBLISHER_DRY_RUN"] = "false"
+        pagina = PaginaFake()
+        arquivo = str(self._pronto())
+        ids = postador.enfileirar(self.projeto["id"], [arquivo], "Legenda")["ids"]
+        with self._com_navegador(pagina):
+            resultado = postador.publicar_item(ids[0])
+        self.assertEqual("completed", resultado["status"])
+        self.assertEqual(0, resultado["dry_run"])
+        self.assertIn(("arquivo", arquivo), pagina.chamadas)
+
+    def test_checkpoint_na_fila_vira_manual_action_required(self):
+        os.environ["MASS_PUBLISH_ENABLED"] = "true"
+        os.environ["MASS_PUBLISHER_MODE"] = "local"
+        os.environ["LOCAL_PUBLISHER_DRY_RUN"] = "false"
+        pagina = PaginaFake(url_apos_goto="https://www.instagram.com/challenge/x")
+        ids = postador.enfileirar(self.projeto["id"], [str(self._pronto())])["ids"]
+        with self._com_navegador(pagina):
+            resultado = postador.publicar_item(ids[0])
+        self.assertEqual("manual_action_required", resultado["status"])
+
+
+class PastaApiTests(Base):
+    def setUp(self):
+        super().setUp()
+        os.environ["MASS_ADMIN_TOKEN"] = "admin-massa"
+        from fastapi.testclient import TestClient
+        from massa.main import app
+
+        self.client = TestClient(app)
+        self.admin = {"X-Mass-Token": "admin-massa"}
+
+    def test_lista_pasta_local(self):
+        pasta = self.tmp / f"api-{store.uid()[:6]}"
+        pasta.mkdir(parents=True)
+        (pasta / "a.mp4").write_bytes(b"v")
+        r = self.client.post("/mass/v1/pasta/listar", headers=self.admin,
+                             json={"caminho": str(pasta)})
+        self.assertEqual(200, r.status_code)
+        self.assertEqual(1, r.json()["total"])
+
+    def test_pasta_vazia_volta_422(self):
+        pasta = self.tmp / f"vazia-{store.uid()[:6]}"
+        pasta.mkdir(parents=True)
+        r = self.client.post("/mass/v1/pasta/listar", headers=self.admin,
+                             json={"caminho": str(pasta)})
+        self.assertEqual(422, r.status_code)
+
+    def test_enfileira_edicao_a_partir_da_pasta(self):
+        pasta = self.tmp / f"lote-{store.uid()[:6]}"
+        pasta.mkdir(parents=True)
+        (pasta / "a.mp4").write_bytes(b"v")
+        (pasta / "b.mp4").write_bytes(b"v")
+        template = self._template()
+        r = self.client.post(f"/mass/v1/projetos/{self.projeto['id']}/edicoes",
+                             headers=self.admin,
+                             json={"template_id": template["id"], "pasta": str(pasta)})
+        self.assertEqual(201, r.status_code)
+        self.assertEqual(2, r.json()["enfileirados"])
+
+    def test_health_declara_o_que_aceita(self):
+        dados = self.client.get("/mass/v1/health").json()
+        self.assertIn(".mp4", dados["entradas_aceitas"])
+        self.assertIn(".webm", dados["mockup_aceito"])

@@ -1,0 +1,71 @@
+BotLive - Producao em Massa
+===========================
+
+O que e
+-------
+Baixar varios videos, aplicar a mesma edicao em todos, gerar o ZIP e
+enfileirar a postagem. Tudo processado no seu computador: nada de video
+sobe para nuvem so para ser editado.
+
+Antes de usar: instale duas ferramentas
+---------------------------------------
+Elas nao vem dentro do instalador porque sao pesadas e tem licenca propria.
+
+1) FFmpeg (edicao dos videos)
+   winget install Gyan.FFmpeg
+   Ou baixe em https://ffmpeg.org/download.html e coloque no PATH.
+
+2) yt-dlp (download dos videos)
+   winget install yt-dlp.yt-dlp
+
+Sem elas o aplicativo abre, mas download e edicao falham com o motivo na tela.
+
+Como usar
+---------
+1. Abra "BotLive Producao em Massa".
+2. A janela preta mostra um TOKEN - copie.
+3. O navegador abre sozinho. Cole o token para entrar.
+4. Crie um projeto, cole os links, baixe, monte o template, edite, exporte.
+
+Onde ficam os arquivos
+----------------------
+%LOCALAPPDATA%\BotLive\massa
+    massa.db      banco do modulo
+    token.txt     seu token de acesso (so desta maquina)
+    projetos\     downloads, editados e exports de cada lote
+    sessoes\      sessao do navegador, se voce usar o modo local
+
+Desinstalar NAO apaga essa pasta. Seus videos continuam la.
+
+Postagem
+--------
+Sai de fabrica DESLIGADA e em dry-run: o aplicativo monta tudo e para antes
+de confirmar a publicacao. Para publicar de verdade e preciso mudar isso de
+proposito, nas variaveis de ambiente:
+
+    MASS_PUBLISH_ENABLED=true
+    LOCAL_PUBLISHER_DRY_RUN=false
+
+Dois modos de publicar:
+  api   (padrao) usa a API oficial do Instagram. Nao arrisca a conta.
+  local navegador controlado, com login feito por voce, a mao.
+        AVISO: automatizar o site do Instagram vai contra os termos de uso
+        dele e pode custar a conta. O modo api nao tem esse risco.
+
+O modo local exige o Playwright:
+    python -m pip install playwright
+    python -m playwright install chromium
+
+Se o Instagram pedir confirmacao, captcha ou codigo, o aplicativo PARA e
+marca o item como "acao manual necessaria". Ele nao tenta contornar nada:
+quem resolve e voce, no navegador.
+
+Segredos
+--------
+Nao ha nenhum dentro do instalador. Token, banco e sessao nascem na primeira
+execucao, na sua maquina.
+
+Instalar em outro PC
+--------------------
+Copie o BotLive-Setup-Test.exe, instale, e instale FFmpeg e yt-dlp como
+acima. Cada maquina gera o proprio token.

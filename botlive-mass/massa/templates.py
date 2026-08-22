@@ -25,6 +25,11 @@ POSICOES = ("superior-esquerda", "superior-direita", "inferior-esquerda",
             "inferior-direita", "centro", "superior", "inferior")
 AUDIOS = ("manter", "remover", "normalizar")
 
+# Mockup aceita imagem ou video com canal alpha (webm/vp9, mov prores 4444).
+# O editor detecta pela extensao e trata video em loop; ver editor.mockup_e_video.
+LOGO_ACEITOS = (".png", ".webp", ".jpg", ".jpeg")
+MOCKUP_ACEITOS = LOGO_ACEITOS + (".webm", ".mov", ".mp4", ".mkv")
+
 PADRAO = {
     "formato": "9:16",
     "modo_horizontal": "blur",
@@ -71,6 +76,15 @@ def _validar(dados: dict) -> dict:
         caminho = dados.get(campo) or ""
         if caminho and not Path(caminho).is_file():
             raise MassaError(f"{campo} aponta para arquivo inexistente: {caminho}")
+    mockup = dados.get("mockup_path") or ""
+    if mockup and Path(mockup).suffix.lower() not in MOCKUP_ACEITOS:
+        raise MassaError(
+            f"mockup precisa ser imagem ou video com transparencia. "
+            f"Aceito: {', '.join(MOCKUP_ACEITOS)}"
+        )
+    logo = dados.get("logo_path") or ""
+    if logo and Path(logo).suffix.lower() not in LOGO_ACEITOS:
+        raise MassaError(f"logo precisa ser imagem. Aceito: {', '.join(LOGO_ACEITOS)}")
     return dados
 
 

@@ -7,6 +7,10 @@ MODO api (padrao e recomendado)
 MODO local
     Navegador controlado por Playwright, com login manual feito pelo operador
     e sessao salva. Foi pedido no documento para nao depender da Graph API.
+    O fluxo completo esta implementado: abre o Instagram com a sessao salva,
+    cria a publicacao, carrega o video, preenche a legenda e - so fora do
+    dry-run - confirma. Com MASS_DRY_RUN_NAVEGADOR=true o ensaio percorre a
+    tela inteira e PARA antes de Compartilhar.
 
     AVISO QUE PRECISA FICAR ESCRITO: automatizar o app do Instagram por
     navegador vai contra os termos de uso da plataforma e pode custar a conta.
@@ -25,6 +29,7 @@ import json
 import os
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import projetos
@@ -36,11 +41,47 @@ MODOS = ("api", "local")
 ESTADOS = ("queued", "running", "completed", "failed", "cancelled",
            "manual_action_required", "paused")
 
+# Fluxo do navegador local. Os seletores sao listas porque o Instagram muda o
+# layout e a lingua da conta muda o rotulo do botao: tenta na ordem e para no
+# primeiro que existir. Se nenhum existir, o item falha com motivo legivel em
+# vez de clicar no lugar errado.
+TIMEOUT_LOCAL_MS = int(os.getenv("MASS_LOCAL_TIMEOUT", "45")) * 1000
+
+SINAIS_DESAFIO = ("/challenge", "/accounts/login", "two_factor",
+                  "checkpoint", "/accounts/suspended")
+
+BOTAO_CRIAR = (
+    'svg[aria-label="Nova publicação"]', 'svg[aria-label="New post"]',
+    '[aria-label="Nova publicação"]', '[aria-label="New post"]',
+    'a[href="/create/select/"]',
+)
+BOTAO_SELECIONAR = (
+    'button:has-text("Selecionar do computador")',
+    'button:has-text("Select from computer")',
+)
+ENTRADA_ARQUIVO = 'input[type="file"]'
+BOTAO_AVANCAR = (
+    'div[role="button"]:has-text("Avançar")', 'button:has-text("Avançar")',
+    'div[role="button"]:has-text("Next")', 'button:has-text("Next")',
+)
+CAMPO_LEGENDA = (
+    'textarea[aria-label*="legenda" i]', 'textarea[aria-label*="caption" i]',
+    'div[contenteditable="true"][aria-label*="legenda" i]',
+    'div[contenteditable="true"][aria-label*="caption" i]',
+    'div[role="textbox"][contenteditable="true"]',
+)
+BOTAO_COMPARTILHAR = (
+    'div[role="button"]:has-text("Compartilhar")', 'button:has-text("Compartilhar")',
+    'div[role="button"]:has-text("Share")', 'button:has-text("Share")',
+)
+CONFIRMACAO = 'text=/publicad|compartilhad|shared|your post/i'
+
+
+def ligado(nome: str, padrao: str = "false") -> bool:
+    return os.getenv(nome, padrao).strip().lower() in {"1", "true", "yes", "sim"}
+
 
 def flags() -> dict:
-    def ligado(nome, padrao="false"):
-        return os.getenv(nome, padrao).strip().lower() in {"1", "true", "yes", "sim"}
-
     modo = os.getenv("MASS_PUBLISHER_MODE", "api").strip().lower()
     if modo not in MODOS:
         modo = "api"
@@ -199,23 +240,162 @@ def abrir_para_login(conta: str = "principal", timeout_minutos: int = 5) -> dict
     return {"conta": conta, "sessao": str(destino), "salva": True}
 
 
-def _publicar_local(item: dict) -> dict:
-    """Publicacao pelo navegador. So chega aqui fora do dry-run."""
-    conta = item["conta"] or "principal"
+def _checar_desafio(url: str, etapa: str = "") -> None:
+    """Desafio da plataforma para o fluxo - nunca tenta contornar.
+
+    Captcha, 2FA e checkpoint sao barreiras de seguranca do Instagram. O item
+    vira manual_action_required (o chamador reconhece a palavra "checkpoint")
+    e quem resolve e o operador, no navegador, com as proprias maos.
+    """
+    alvo = (url or "").lower()
+    if any(sinal in alvo for sinal in SINAIS_DESAFIO):
+        onde = f" em {etapa}" if etapa else ""
+        raise MassaError(
+            f"checkpoint do Instagram{onde}: ACAO MANUAL NECESSARIA. "
+            f"Abra a conta no navegador, resolva o desafio e rode o login "
+            f"manual de novo. A fila parou neste item de proposito."
+        )
+
+
+def _clicar_primeiro(pagina, seletores, timeout_ms: int, rotulo: str = "",
+                     obrigatorio: bool = True) -> str:
+    """Clica no primeiro seletor que existir. Layout mudou = erro legivel."""
+    for seletor in seletores:
+        try:
+            pagina.click(seletor, timeout=timeout_ms)
+            return seletor
+        except Exception:
+            continue
+    if obrigatorio:
+        raise MassaError(
+            f"nao encontrei {rotulo or 'o elemento'} na tela do Instagram. "
+            f"O layout pode ter mudado - confira no navegador antes de repetir."
+        )
+    return ""
+
+
+def _preencher_primeiro(pagina, seletores, texto: str, timeout_ms: int) -> str:
+    for seletor in seletores:
+        try:
+            pagina.fill(seletor, texto, timeout=timeout_ms)
+            return seletor
+        except Exception:
+            continue
+    raise MassaError("nao encontrei o campo de legenda na tela do Instagram")
+
+
+def fluxo_publicacao(pagina, arquivo: str, legenda: str,
+                     timeout_ms: int = TIMEOUT_LOCAL_MS,
+                     confirmar: bool = True) -> dict:
+    """Passos do post no site do Instagram, um por um.
+
+    Recebe a pagina pronta em vez de abrir o navegador aqui: assim o fluxo e
+    testavel sem Playwright instalado e sem tocar em conta nenhuma.
+
+    Com confirmar=False faz tudo - carrega o video, preenche a legenda - e
+    PARA antes de Compartilhar. E o dry-run do documento, mas de verdade:
+    exercitando a tela, nao so o banco.
+    """
+    passos = []
+    pagina.goto("https://www.instagram.com/", timeout=timeout_ms)
+    _checar_desafio(pagina.url, "abertura")
+
+    _clicar_primeiro(pagina, BOTAO_CRIAR, timeout_ms, "o botao de nova publicacao")
+    passos.append("criar")
+    _clicar_primeiro(pagina, BOTAO_SELECIONAR, timeout_ms,
+                     "o botao de selecionar do computador", obrigatorio=False)
+
+    pagina.set_input_files(ENTRADA_ARQUIVO, arquivo, timeout=timeout_ms)
+    passos.append("video carregado")
+
+    # corte -> filtros -> legenda: dois "Avancar" ate a tela da descricao.
+    for _ in range(2):
+        _clicar_primeiro(pagina, BOTAO_AVANCAR, timeout_ms, "o botao Avancar")
+    passos.append("avancou ate a legenda")
+
+    if legenda:
+        _preencher_primeiro(pagina, CAMPO_LEGENDA, legenda, timeout_ms)
+        passos.append("legenda preenchida")
+
+    _checar_desafio(pagina.url, "antes de publicar")
+
+    if not confirmar:
+        passos.append("PAROU antes de confirmar (dry-run)")
+        return {"confirmado": False, "passos": passos, "url": ""}
+
+    _clicar_primeiro(pagina, BOTAO_COMPARTILHAR, timeout_ms, "o botao Compartilhar")
+    # publicar demora mais que clicar: o video ainda sobe depois do clique.
+    pagina.wait_for_selector(CONFIRMACAO, timeout=timeout_ms * 4)
+    _checar_desafio(pagina.url, "depois de publicar")
+    passos.append("publicado")
+    return {"confirmado": True, "passos": passos, "url": pagina.url}
+
+
+@contextmanager
+def _navegador(conta: str):
+    """Abre o Chromium com a sessao salva. Nao faz login, nao digita senha."""
+    # Sessao primeiro: falta de sessao e coisa que o operador resolve (login
+    # manual), e Playwright ausente e problema de instalacao. Trocar a ordem
+    # esconderia o motivo real atras do outro.
     if not sessao_salva(conta):
         raise MassaError(
             f"sem sessao salva para {conta!r}. Rode o login manual antes "
             "(abrir_para_login)."
         )
-    raise MassaError(
-        "Publicacao local por navegador ainda nao habilitada nesta fase. "
-        "A sessao ja e salva e o dry-run mostra o fluxo completo; o passo de "
-        "confirmar o post no navegador fica para a proxima fase, junto com o "
-        "tratamento de checkpoint. Use MASS_PUBLISHER_MODE=api para publicar."
-    )
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise MassaError(
+            "Playwright nao instalado. Rode: python -m pip install playwright "
+            "&& python -m playwright install chromium"
+        )
+
+    estado = sessao_dir(conta) / "state.json"
+    headless = os.getenv("MASS_LOCAL_HEADLESS", "false").strip().lower() in {
+        "1", "true", "yes", "sim"
+    }
+    with sync_playwright() as p:
+        # visivel por padrao: se o Instagram pedir alguma coisa, o operador ve
+        # a tela e resolve na hora em vez de descobrir por um erro seco.
+        navegador = p.chromium.launch(headless=headless)
+        contexto = navegador.new_context(storage_state=str(estado))
+        pagina = contexto.new_page()
+        try:
+            yield pagina
+            contexto.storage_state(path=str(estado))  # renova o que expirou
+        finally:
+            navegador.close()
+
+
+def _publicar_local(item: dict, confirmar: bool = True) -> dict:
+    """Publicacao pelo navegador, com a sessao que o operador salvou.
+
+    AVISO: automatizar o site do Instagram vai contra os termos de uso e pode
+    custar a conta. O modo api nao tem esse risco.
+    """
+    conta = item["conta"] or "principal"
+    legenda = _legenda(item)
+    with _navegador(conta) as pagina:
+        resultado = fluxo_publicacao(pagina, item["arquivo"], legenda,
+                                     TIMEOUT_LOCAL_MS, confirmar)
+    return {"url": resultado.get("url", ""), "detalhe": resultado}
 
 
 # --- fila ------------------------------------------------------------------
+
+
+def _registrar_falha(publicacao_id: str, erro: Exception) -> dict:
+    """Desafio da plataforma nao e retentado: exige humano."""
+    texto = str(erro).lower()
+    travado = any(x in texto for x in
+                  ("checkpoint", "captcha", "2fa", "verificacao", "sessao",
+                   "acao manual"))
+    auditar("publicacao.falha", "publicacao", publicacao_id,
+            {"erro": str(erro)[:200]}, resultado="erro")
+    return atualizar("mass_publicacoes", publicacao_id, {
+        "status": "manual_action_required" if travado else "failed",
+        "erro": str(erro)[:400],
+    })
 
 
 def publicar_item(publicacao_id: str) -> dict:
@@ -237,12 +417,22 @@ def publicar_item(publicacao_id: str) -> dict:
                          {"status": "failed", "erro": "arquivo sumiu"})
 
     if estado["dry_run"]:
+        nota = "dry-run: video preparado, legenda montada, publicacao NAO confirmada"
+        # No modo local da para ensaiar na tela de verdade: carrega o video,
+        # preenche a legenda e para antes de Compartilhar. Fica atras de flag
+        # porque abre navegador - o dry-run padrao continua so no banco.
+        if estado["modo"] == "local" and ligado("MASS_DRY_RUN_NAVEGADOR"):
+            try:
+                ensaio = _publicar_local(item, confirmar=False)
+            except MassaError as erro:
+                return _registrar_falha(publicacao_id, erro)
+            nota = "dry-run no navegador: " + " · ".join(ensaio["detalhe"]["passos"])
         auditar("publicacao.dry_run", "publicacao", publicacao_id,
                 {"modo": estado["modo"], "arquivo": item["arquivo"]})
         return atualizar("mass_publicacoes", publicacao_id, {
             "status": "completed",
             "dry_run": 1,
-            "erro": "dry-run: video preparado, legenda montada, publicacao NAO confirmada",
+            "erro": nota,
             "publicado_em": agora(),
         })
 
@@ -255,14 +445,7 @@ def publicar_item(publicacao_id: str) -> dict:
     try:
         envio = _publicar_api(item) if estado["modo"] == "api" else _publicar_local(item)
     except MassaError as erro:
-        texto = str(erro).lower()
-        # desafio da plataforma nao e retentado: exige humano
-        travado = any(x in texto for x in ("checkpoint", "captcha", "2fa", "verificacao", "sessao"))
-        estado_final = "manual_action_required" if travado else "failed"
-        auditar("publicacao.falha", "publicacao", publicacao_id,
-                {"erro": str(erro)[:200]}, resultado="erro")
-        return atualizar("mass_publicacoes", publicacao_id,
-                         {"status": estado_final, "erro": str(erro)[:400]})
+        return _registrar_falha(publicacao_id, erro)
 
     auditar("publicacao.enviada", "publicacao", publicacao_id, {"modo": estado["modo"]})
     return atualizar("mass_publicacoes", publicacao_id, {
