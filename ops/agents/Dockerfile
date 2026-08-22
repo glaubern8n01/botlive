@@ -24,6 +24,7 @@ ENV VEXPUBLISH_DATABASE_PATH=/data/agents/vexpublish.db \
     COMMERCE_DATABASE_PATH=/data/agents/commerce.db \
     MASS_DATABASE_PATH=/data/agents/massa.db \
     MASS_SESSIONS_DIR=/data/agents/sessoes-massa \
+    MASS_PROJECTS_DIR=/data/agents/massa-projetos \
     PYTHONUNBUFFERED=1
 
 # Checkout no Windows entrega CRLF, e com CRLF o shebang quebra dentro do
