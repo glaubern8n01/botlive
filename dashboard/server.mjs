@@ -199,7 +199,14 @@ async function callAdminRpc(fnName, params) {
     headers: { apikey: adminKey, Authorization: `Bearer ${adminKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   });
-  return { ok: response.ok, status: response.status };
+  // A mensagem do Postgres vem no corpo e é o que diz POR QUE um item do lote
+  // foi recusado ("somente vídeos prontos...", "já foi registrado..."). Sem ela
+  // o relatório por item viraria um "falhou" sem utilidade nenhuma.
+  let error = '';
+  if (!response.ok) {
+    try { error = String((await response.json())?.message || '').slice(0, 200); } catch { /* corpo não-JSON */ }
+  }
+  return { ok: response.ok, status: response.status, error };
 }
 
 function missingFields(body, fields) {
@@ -323,6 +330,122 @@ async function kwaiPublishRoute(request, response, url) {
   return json(response, 200, { ok: true, removidos }), true;
 }
 
+// --- Encerramento do lote Kwai -------------------------------------------
+//
+// Fechar o lote item a item pela tela não serve por dois motivos concretos:
+// a página carrega só os 100 jobs mais recentes (hoje o perfil tem 282, e os
+// prontos não cabem todos nessa janela), e um erro no meio deixava metade
+// marcada e metade não, sem dizer quais.
+//
+// Aqui a lista vem do banco com a chave administrativa — todos os prontos, não
+// os que couberam na tela — e cada item é registrado individualmente: um que
+// falha não derruba o resto e volta identificado, para reprocessar só ele.
+//
+// GET  = prévia. Não apaga NADA. Diz quantos registros, quantos arquivos e
+//        quantos bytes seriam afetados.
+// POST = executa, e só com as duas confirmações (Kwai principal e clone).
+const PERFIL_KWAI = 'kwai_cut_futebol';
+
+async function jobsProntosDoLote(jobIds) {
+  const consulta = new URL('/rest/v1/publication_jobs', supabaseUrl);
+  consulta.searchParams.set('select', 'job_id,asset_id,cover_path,title,media_assets(path,validation_status)');
+  consulta.searchParams.set('profile_id', `eq.${PERFIL_KWAI}`);
+  consulta.searchParams.set('status', 'eq.ready');
+  consulta.searchParams.set('order', 'created_at.asc');
+  consulta.searchParams.set('limit', '1000');
+  const resposta = await fetch(consulta, { headers: { apikey: adminKey, Authorization: `Bearer ${adminKey}` } });
+  if (!resposta.ok) throw new Error(`Consulta de jobs prontos falhou (${resposta.status})`);
+  let linhas = (await resposta.json()).map((linha) => ({
+    ...linha,
+    media_assets: Array.isArray(linha.media_assets) ? linha.media_assets[0] || null : linha.media_assets,
+  }));
+  if (Array.isArray(jobIds) && jobIds.length) {
+    const alvo = new Set(jobIds.filter((id) => uuidPattern.test(String(id))));
+    linhas = linhas.filter((linha) => alvo.has(linha.job_id));
+  }
+  return linhas;
+}
+
+function arquivosDoJob(job) {
+  const caminhos = [];
+  if (job.cover_path) caminhos.push(job.cover_path);
+  const caminhoVideo = job.media_assets?.path;
+  if (caminhoVideo) {
+    caminhos.push(caminhoVideo);
+    caminhos.push(caminhoVideo.replace(/\.mp4$/, '-capa.jpg'));
+  }
+  return [...new Set(caminhos)];
+}
+
+async function kwaiBatchRoute(request, response, url) {
+  if (url.pathname !== '/api/kwai/batch-close') return false;
+  if (!adminKey) return json(response, 503, { error: 'Backend administrativo não configurado' }), true;
+
+  if (request.method === 'GET') {
+    const jobs = await jobsProntosDoLote(null);
+    let arquivos = 0;
+    let bytes = 0;
+    for (const job of jobs) {
+      for (const bruto of arquivosDoJob(job)) {
+        try {
+          const caminho = await verifiedMediaPath(bruto);
+          bytes += (await stat(caminho)).size;
+          arquivos += 1;
+        } catch { /* arquivo já não está na VPS: não conta */ }
+      }
+    }
+    return json(response, 200, { registros: jobs.length, arquivos, bytes }), true;
+  }
+
+  if (request.method !== 'POST') return json(response, 405, { error: 'Método não permitido' }), true;
+  const body = await readJsonBody(request);
+  // As duas confirmações são exigidas aqui também, e não só na tela: assim uma
+  // chamada solta não apaga nada por engano.
+  if (!body.confirm_principal || !body.confirm_clone) {
+    return json(response, 400, {
+      error: 'Confirme que publicou no Kwai principal E no Kwai clone antes de encerrar o lote',
+    }), true;
+  }
+
+  const jobs = await jobsProntosDoLote(body.job_ids);
+  if (!jobs.length) return json(response, 200, { registros: 0, sucesso: 0, falhas: [], arquivos: 0, bytes: 0 }), true;
+
+  const dia = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const falhas = [];
+  let sucesso = 0;
+  let arquivos = 0;
+  let bytes = 0;
+
+  for (const job of jobs) {
+    // Identificador próprio por vídeo: a RPC exige valor não-vazio e há índice
+    // único em (platform, external_id) — um valor repetido derrubaria o lote
+    // inteiro no segundo item.
+    const externalId = `lote-manual-${dia}-${job.job_id.slice(0, 8)}`;
+    const rpc = await callAdminRpc('mark_manual_publication', {
+      p_job_id: job.job_id,
+      p_external_id: externalId,
+      p_published_at: new Date().toISOString(),
+    });
+    if (!rpc.ok) {
+      falhas.push({ job_id: job.job_id, titulo: job.title || '', erro: rpc.error || 'RPC recusou o registro' });
+      continue;  // segue o lote: um item ruim não trava os outros
+    }
+    sucesso += 1;
+    // Arquivo só sai DEPOIS do registro dar certo. Na ordem inversa, um erro
+    // no banco deixaria o vídeo apagado e o job ainda em aberto.
+    for (const bruto of arquivosDoJob(job)) {
+      try {
+        const caminho = await verifiedMediaPath(bruto);
+        bytes += (await stat(caminho)).size;
+        await unlink(caminho);
+        arquivos += 1;
+      } catch { /* já não existia: o janitor cobre */ }
+    }
+  }
+
+  return json(response, 200, { registros: jobs.length, sucesso, falhas, arquivos, bytes }), true;
+}
+
 // Salvar/aprovar o texto da publicação. Mesmo motivo: anon revogado da RPC.
 async function kwaiTextRoute(request, response, url) {
   if (url.pathname !== '/api/kwai/update-text') return false;
@@ -425,6 +548,7 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/health') return json(response, 200, { ok: true, mode: 'prepare_only' });
     if (await kwaiBulkRoute(request, response, url)) return;
     if (await kwaiPublishRoute(request, response, url)) return;
+    if (await kwaiBatchRoute(request, response, url)) return;
     if (await kwaiTextRoute(request, response, url)) return;
     if (await kwaiReviewRoute(request, response, url)) return;
     if (await cleanupRoute(request, response, url)) return;
