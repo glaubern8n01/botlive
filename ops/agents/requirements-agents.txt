@@ -5,3 +5,7 @@ pydantic==2.10.4
 # narracao local (Piper roda em onnxruntime, CPU, sem GPU)
 piper-tts==1.7.0
 pillow==12.1.1
+# Download em massa (Producao em Massa). Sem pin pelo mesmo motivo do
+# requirements.txt do vigia: precisa acompanhar as mudancas das plataformas.
+# Sem ele o modulo sobe, mas todo download falha - ffmpeg sozinho nao baixa.
+yt-dlp
