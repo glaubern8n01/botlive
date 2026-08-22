@@ -20,6 +20,7 @@ Escopo implementado (V3 + V4 + V5):
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -237,6 +238,45 @@ class Vigia:
             print(f"[vigia] falha ao ler vigia_channels ({exc}); deteccao de fim pausada neste ciclo.")
             return None
 
+    def _canais_bloqueados(self) -> set[str]:
+        """Canais que a DESCOBERTA nunca pode pegar.
+
+        Existe porque desligar o canal em vigia_channels so o tirava da lista
+        manual — a descoberta aberta continuava pegando o mesmo streamer pelo
+        jogo e pelos viewers. Foi assim que bahiaqz voltou tres vezes depois de
+        dois videos bloqueados por Content ID (Paramount, Rio Shore).
+
+        Duas fontes, unidas: a coluna enabled=false do vigia_channels (o
+        operador desliga pelo painel) e BOTLIVE_CANAIS_BLOQUEADOS (lever de
+        emergencia, funciona mesmo com o Supabase fora do ar).
+
+        Se a leitura falhar, mantem o ultimo conjunto conhecido em vez de
+        esvaziar: esquecer um bloqueio e pior do que ficar com um a mais.
+        """
+        do_env = {
+            x.strip().lower()
+            for x in os.getenv("BOTLIVE_CANAIS_BLOQUEADOS", "").split(",")
+            if x.strip()
+        }
+        client = self._client()
+        if client is not None:
+            try:
+                response = (
+                    client.table(CHANNELS_TABLE)
+                    .select("login")
+                    .eq("enabled", False)
+                    .limit(500)
+                    .execute()
+                )
+                self._bloqueados_cache = {
+                    str(row["login"]).strip().lower()
+                    for row in (response.data or [])
+                    if row.get("login")
+                }
+            except Exception as exc:
+                print(f"[vigia] falha ao ler bloqueados ({exc}); usando o ultimo conjunto conhecido.")
+        return do_env | getattr(self, "_bloqueados_cache", set())
+
     def _ledger_get(self, stream_id: str) -> Optional[dict[str, Any]]:
         client = self._client()
         if client is None:
@@ -339,6 +379,7 @@ class Vigia:
             streams = self.api.get_streams_by_game(
                 config.discovery_game, language=config.discovery_language or None, first=100
             )
+            bloqueados = self._canais_bloqueados()
             picked = 0
             for stream in streams:  # ja vem ordenado por viewers desc
                 if picked >= config.discovery_max_channels:
@@ -348,6 +389,11 @@ class Vigia:
                 stream_id = str(stream["id"])
                 if stream_id in live_now:
                     continue  # canal manual tem prioridade na origem
+                login = str(stream.get("user_login") or "").strip().lower()
+                if login in bloqueados:
+                    # Nao consome vaga: o proximo BR da lista entra no lugar.
+                    print(f"[vigia][descoberta] {login} BLOQUEADO; ignorando a live.")
+                    continue
                 if parece_portugal(stream):
                     # Nao consome vaga: segue para o proximo (mais BR abaixo).
                     print(
