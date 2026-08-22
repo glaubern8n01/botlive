@@ -20,7 +20,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
             "bg-zinc-800 text-zinc-50 shadow-sm hover:bg-zinc-800/80": variant === "secondary",
             "hover:bg-zinc-800 hover:text-zinc-50": variant === "ghost",
             "text-zinc-50 underline-offset-4 hover:underline": variant === "link",
-            "h-9 px-4 py-2": size === "default",
+            "h-11 sm:h-9 px-4 py-2": size === "default",
             "h-8 rounded-md px-3 text-xs": size === "sm",
             "h-10 rounded-md px-8": size === "lg",
             "h-9 w-9": size === "icon",
