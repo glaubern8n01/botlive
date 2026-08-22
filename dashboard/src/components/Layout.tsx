@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router';
-import { LayoutDashboard, Settings2, Users, History, Scissors, LogOut, ShoppingBag, BadgeDollarSign, Radio, FolderInput, Store, Scissors as Tesoura, Music2, UserCog, KeyRound, ListOrdered, BarChart3 } from 'lucide-react';
+import { LayoutDashboard, Settings2, Users, History, Scissors, LogOut, ShoppingBag, BadgeDollarSign, Radio, FolderInput, Store, Scissors as Tesoura, Music2, UserCog, KeyRound, ListOrdered, BarChart3, Layers } from 'lucide-react';
 
 export function Layout() {
   const handleLogout = () => {
@@ -16,6 +16,7 @@ export function Layout() {
     ...(import.meta.env.VITE_MULTICHANNEL_ENABLED === "true" ? [{ to: "/canais-publicacao", icon: Radio, label: "Canais de publicação" }] : []),
     ...(import.meta.env.VITE_IMPORT_ENABLED === "true" ? [{ to: "/importar-adaptar", icon: FolderInput, label: "Importar / Adaptar" }] : []),
     ...(import.meta.env.VITE_COMMERCE_ENABLED === "true" ? [{ to: "/commerce-studio", icon: Store, label: "Commerce Studio" }] : []),
+    ...(import.meta.env.VITE_MASS_ENABLED === "true" ? [{ to: "/producao-em-massa", icon: Layers, label: "Produção em Massa" }] : []),
     { to: "/kwai-cut", icon: Tesoura, label: "Kwai CUT" },
     { to: "/tiktok", icon: Music2, label: "TikTok" },
     { to: "/perfis", icon: UserCog, label: "Perfis" },

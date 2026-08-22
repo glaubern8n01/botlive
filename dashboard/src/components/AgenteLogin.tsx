@@ -71,7 +71,7 @@ export function AgenteLogin({ titulo, resumo, faz, naoFaz, chaveSessao, aoEntrar
                     >{copiado ? "copiado" : "copiar"}</button>
                 </div>
                 <p className="mt-2 text-xs text-zinc-500">
-                    A saída traz três linhas. Use a que começa com o nome deste módulo.
+                    A saída traz uma linha por módulo. Use a que começa com o nome deste aqui.
                 </p>
             </div>
 

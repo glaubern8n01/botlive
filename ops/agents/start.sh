@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sobe os tres agentes no mesmo container, um uvicorn por porta.
+# Sobe os agentes no mesmo container, um uvicorn por porta.
 #
 # Um container so, e nao tres servicos, porque os tres compartilham o mesmo
 # volume de dados e o mesmo codigo: separar traria sincronizacao de volume
@@ -14,6 +14,7 @@ python vexpublish/migrations/manage.py upgrade
 python botlive-import/migrations/manage.py upgrade
 python botlive-commerce/migrations/manage.py upgrade
 python -c "import sys; sys.path.insert(0,'/app/botlive-dm'); from dm.store import migrar; migrar(); print('[agents] dm.db migrado')"
+python -c "import sys; sys.path.insert(0,'/app/botlive-mass'); from massa.store import migrar; migrar(); print('[agents] massa.db migrado')"
 
 echo "[agents] subindo VexPublish :8785"
 uvicorn vexpublish.api:app --host 0.0.0.0 --port 8785 --no-access-log &
@@ -31,8 +32,12 @@ echo "[agents] subindo DM :8815"
 PYTHONPATH=/app/botlive-dm uvicorn dm.main:app --host 0.0.0.0 --port 8815 --no-access-log &
 PID_DM=$!
 
+echo "[agents] subindo Massa :8825"
+PYTHONPATH=/app/botlive-mass uvicorn massa.main:app --host 0.0.0.0 --port 8825 --no-access-log &
+PID_MASS=$!
+
 # Se qualquer um morrer, derruba o container inteiro (swarm reinicia).
-trap 'kill $PID_VEX $PID_IMP $PID_COM $PID_DM 2>/dev/null || true' TERM INT
-wait -n $PID_VEX $PID_IMP $PID_COM $PID_DM
+trap 'kill $PID_VEX $PID_IMP $PID_COM $PID_DM $PID_MASS 2>/dev/null || true' TERM INT
+wait -n $PID_VEX $PID_IMP $PID_COM $PID_DM $PID_MASS
 echo "[agents] um dos agentes encerrou; derrubando o container para reiniciar"
 exit 1
