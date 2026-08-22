@@ -34,11 +34,28 @@ if (-not $PularPainel) {
     }
     # So a aba nova entra ligada: o resto do painel continua atras das flags
     # de sempre, exatamente como no navegador.
-    $env:VITE_MASS_ENABLED = "true"
-    $env:VITE_MASS_API_URL = ""      # mesma origem: a API serve o painel
-    Push-Location $dash
-    npm run build
-    Pop-Location
+    #
+    # Vai por arquivo, e nao por $env:, porque no PowerShell atribuir "" APAGA a
+    # variavel - o Vite recebia undefined, caia no endereco padrao 127.0.0.1:8825
+    # e a pagina dava "Failed to fetch" quando o app subia em outra porta. No
+    # arquivo, vazio e vazio mesmo: caminho relativo, a propria API serve tudo.
+    $envLocal = Join-Path $dash ".env.production.local"
+    $tinha = Test-Path $envLocal
+    if ($tinha) { Copy-Item $envLocal "$envLocal.bak" -Force }
+    Set-Content -Path $envLocal -Encoding utf8 -Value @(
+        "VITE_MASS_ENABLED=true",
+        "VITE_MASS_API_URL="
+    )
+    try {
+        Push-Location $dash
+        npm run build
+        Pop-Location
+    } finally {
+        # O arquivo e so do build do app: deixar para tras mudaria o `npm run
+        # dev` do Glauber depois.
+        Remove-Item $envLocal -Force -ErrorAction SilentlyContinue
+        if ($tinha) { Move-Item "$envLocal.bak" $envLocal -Force }
+    }
     if (Test-Path $painel) { Remove-Item $painel -Recurse -Force }
     Copy-Item (Join-Path $dash "dist") $painel -Recurse
 } else {

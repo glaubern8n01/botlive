@@ -27,7 +27,12 @@ const COR_STATUS: Record<string, string> = {
 
 export function ProducaoEmMassa() {
     const [tab, setTab] = useState<Tab>("download");
-    const [token, setToken] = useState(() => sessionStorage.getItem("mass_token") || "");
+    // No app Windows o token e a senha do painel sao o mesmo valor, injetado na
+    // hora de servir a pagina - evita digitar a mesma senha duas vezes. No painel
+    // da VPS a variavel nao existe e o login por token continua igual.
+    const [token, setToken] = useState(() => sessionStorage.getItem("mass_token")
+        || (window as unknown as { __BOTLIVE_TOKEN__?: string }).__BOTLIVE_TOKEN__
+        || "");
     const [projetos, setProjetos] = useState<Row[]>([]);
     const [projeto, setProjeto] = useState<string>("");
     const [saude, setSaude] = useState<Row | null>(null);

@@ -340,6 +340,54 @@ async function kwaiTextRoute(request, response, url) {
   return json(response, rpc.ok ? 200 : 422, rpc.ok ? { ok: true } : { error: 'Não foi possível salvar o texto' }), true;
 }
 
+// Proxy da Produção em Massa. Existe porque quem serve o painel é ESTE processo
+// (não há nginx no meio) e o agente da 8825 não tem rota pública própria — sem
+// isto a aba carregaria e não teria como falar com a API.
+//
+// Sem MASS_API_TARGET a rota simplesmente não existe: em qualquer instalação que
+// não configure a variável, o painel continua exatamente como está hoje.
+//
+// Repassa só o necessário: método, corpo e o cabeçalho do token. Quem autoriza
+// continua sendo o próprio módulo — este proxy não decide nada.
+const massaTarget = process.env.MASS_API_TARGET;
+
+function corpoBruto(request) {
+  return new Promise((ok, falhou) => {
+    const partes = [];
+    request.on('data', (parte) => partes.push(parte));
+    request.on('end', () => ok(Buffer.concat(partes)));
+    request.on('error', falhou);
+  });
+}
+
+async function massaRoute(request, response, url) {
+  if (!massaTarget || !url.pathname.startsWith('/mass/')) return false;
+  const destino = new URL(url.pathname + url.search, massaTarget);
+  const cabecalhos = {};
+  for (const nome of ['content-type', 'x-mass-token', 'accept']) {
+    if (request.headers[nome]) cabecalhos[nome] = request.headers[nome];
+  }
+  const semCorpo = request.method === 'GET' || request.method === 'HEAD';
+  const corpo = semCorpo ? undefined : await corpoBruto(request);
+  try {
+    const resposta = await fetch(destino, {
+      method: request.method,
+      headers: cabecalhos,
+      body: corpo && corpo.length ? corpo : undefined,
+    });
+    const dados = Buffer.from(await resposta.arrayBuffer());
+    response.writeHead(resposta.status, {
+      'Content-Type': resposta.headers.get('content-type') || 'application/json; charset=utf-8',
+      'Content-Length': dados.length,
+      'Cache-Control': 'no-store',
+    });
+    response.end(request.method === 'HEAD' ? undefined : dados);
+  } catch {
+    json(response, 502, { error: 'Agente de Produção em Massa indisponível' });
+  }
+  return true;
+}
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
@@ -350,6 +398,7 @@ const server = createServer(async (request, response) => {
     if (await kwaiReviewRoute(request, response, url)) return;
     if (await cleanupRoute(request, response, url)) return;
     if (await mediaRoute(request, response, url)) return;
+    if (await massaRoute(request, response, url)) return;
     const requested = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\/+/, '');
     let path = resolve(join(distRoot, requested));
     if (path !== distRoot && !path.startsWith(`${distRoot}${sep}`)) return json(response, 403, { error: 'Caminho inválido' });

@@ -98,17 +98,33 @@ def preparar_ambiente() -> tuple:
     return dados, token
 
 
-def montar_painel(app, raiz: Path) -> bool:
+def montar_painel(app, raiz: Path, token: str) -> bool:
     """Serve o painel compilado na mesma porta da API.
 
     O mount vai para o fim da lista de rotas, entao as rotas /mass/v1/* que
     ja estao registradas continuam ganhando - o painel so pega o que sobra.
+
+    O index sai com o token injetado: no aplicativo a senha do painel e o
+    token do modulo sao o mesmo valor, digitado uma vez so. Nao da para fazer
+    isso em tempo de build (o token nasce nesta maquina), e por isso tambem
+    nada disso vai dentro do instalador.
     """
     painel = raiz / "painel"
     if not (painel / "index.html").is_file():
         return False
+    import json
+
+    from fastapi.responses import HTMLResponse
     from fastapi.staticfiles import StaticFiles
     from starlette.exceptions import HTTPException as ErroHTTP
+
+    marca = json.dumps(token)
+    pagina = (painel / "index.html").read_text(encoding="utf-8").replace(
+        "</head>",
+        f"<script>window.__BOTLIVE_SENHA__={marca};"
+        f"window.__BOTLIVE_TOKEN__={marca};</script></head>",
+        1,
+    )
 
     class PainelSPA(StaticFiles):
         """Rota do painel que nao existe no disco devolve o index.
@@ -122,12 +138,17 @@ def montar_painel(app, raiz: Path) -> bool:
         """
 
         async def get_response(self, path, scope):
+            # index.html sempre sai da memoria, com o token dentro. Servir o
+            # arquivo do disco entregaria a pagina sem a injecao e o painel
+            # pediria uma senha que ninguem tem.
+            if path in ("", ".", "/", "index.html"):
+                return HTMLResponse(pagina)
             try:
                 return await super().get_response(path, scope)
             except ErroHTTP as erro:
                 if erro.status_code != 404:
                     raise
-                return await super().get_response("index.html", scope)
+                return HTMLResponse(pagina)
 
     app.mount("/", PainelSPA(directory=str(painel), html=True), name="painel")
     return True
@@ -151,7 +172,7 @@ def main() -> int:
     from massa.store import migrar
 
     migrar()
-    tem_painel = montar_painel(app, raiz)
+    tem_painel = montar_painel(app, raiz, token)
     porta = porta_livre(PORTA_PADRAO)
     endereco = f"http://127.0.0.1:{porta}"
 

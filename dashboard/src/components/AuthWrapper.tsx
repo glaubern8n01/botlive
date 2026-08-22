@@ -12,8 +12,12 @@ export function AuthWrapper({ children }: { children: React.ReactNode }) {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    const envPassword = import.meta.env.VITE_DASHBOARD_PASSWORD;
-    
+    // O app Windows injeta a senha em tempo de execução (window.__BOTLIVE_SENHA__),
+    // porque lá a senha é o token sorteado na máquina do usuário — não existe em
+    // tempo de build. No painel da VPS essa variável não existe e nada muda aqui.
+    const senhaInjetada = (window as unknown as { __BOTLIVE_SENHA__?: string }).__BOTLIVE_SENHA__;
+    const envPassword = senhaInjetada || import.meta.env.VITE_DASHBOARD_PASSWORD;
+
     // Fallback simple password just in case env var is missing or empty
     const checkPassword = envPassword || 'admin';
     

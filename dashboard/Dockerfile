@@ -20,6 +20,11 @@ ARG VITE_TIKTOK_AUTH_BASE_URL
 ARG VITE_TIKTOK_STANDARD_API_ENABLED
 ARG VITE_TIKTOK_STANDARD_UPLOAD_DRAFT_ENABLED
 ARG VITE_TIKTOK_STANDARD_DIRECT_POST_ENABLED
+# Producao em Massa. VITE_MASS_API_URL vazia de proposito quando o painel e a
+# API ficam no mesmo dominio (o server.mjs faz o proxy de /mass/): a pagina usa
+# caminho relativo. Sem estas duas a aba nem entra no bundle.
+ARG VITE_MASS_ENABLED
+ARG VITE_MASS_API_URL
 
 COPY . .
 RUN npm run build
