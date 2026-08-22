@@ -340,16 +340,47 @@ async function kwaiTextRoute(request, response, url) {
   return json(response, rpc.ok ? 200 : 422, rpc.ok ? { ok: true } : { error: 'Não foi possível salvar o texto' }), true;
 }
 
-// Proxy da Produção em Massa. Existe porque quem serve o painel é ESTE processo
-// (não há nginx no meio) e o agente da 8825 não tem rota pública própria — sem
-// isto a aba carregaria e não teria como falar com a API.
+// Proxy dos agentes locais (VexPublish, Importar, Commerce, DM, Produção em Massa).
 //
-// Sem MASS_API_TARGET a rota simplesmente não existe: em qualquer instalação que
-// não configure a variável, o painel continua exatamente como está hoje.
+// Existe porque quem serve o painel é ESTE processo — não há nginx no meio — e
+// nenhum agente tem rota pública própria. Sem isto as abas carregam e não têm
+// como falar com a API: cada uma tentaria 127.0.0.1 na porta do agente, que só
+// existe dentro do container deles.
 //
-// Repassa só o necessário: método, corpo e o cabeçalho do token. Quem autoriza
-// continua sendo o próprio módulo — este proxy não decide nada.
+// Sem AGENTES_API_TARGET (nem MASS_API_TARGET) nenhuma dessas rotas existe: em
+// qualquer instalação que não configure, o painel continua exatamente como está.
+//
+// Repassa só o necessário: método, corpo e o cabeçalho de token da aba. Quem
+// autoriza continua sendo cada módulo — este proxy não decide nada.
+const agentesTarget = process.env.AGENTES_API_TARGET;
 const massaTarget = process.env.MASS_API_TARGET;
+
+// Um uvicorn por porta, todos no mesmo container.
+const PORTAS_AGENTES = {
+  '/vexpublish/': 8785,
+  '/import/': 8795,
+  '/commerce/': 8805,
+  '/dm/': 8815,
+  '/mass/': 8825,
+};
+
+// Cada aba manda o token no seu próprio cabeçalho; repassar todos é mais simples
+// (e mais seguro) do que adivinhar qual pertence a qual rota.
+const CABECALHOS_REPASSADOS = [
+  'content-type', 'accept',
+  'x-mass-token', 'x-vexpublish-token', 'x-import-token',
+  'x-commerce-token', 'x-dm-token', 'x-campaigns-token',
+];
+
+function destinoDoAgente(pathname, search) {
+  // MASS_API_TARGET veio primeiro e continua valendo sozinho, para não quebrar
+  // instalação que já esteja usando só ele.
+  if (pathname.startsWith('/mass/') && massaTarget) return new URL(pathname + search, massaTarget);
+  if (!agentesTarget) return null;
+  const prefixo = Object.keys(PORTAS_AGENTES).find((p) => pathname.startsWith(p));
+  if (!prefixo) return null;
+  return new URL(pathname + search, `${agentesTarget}:${PORTAS_AGENTES[prefixo]}`);
+}
 
 function corpoBruto(request) {
   return new Promise((ok, falhou) => {
@@ -360,11 +391,11 @@ function corpoBruto(request) {
   });
 }
 
-async function massaRoute(request, response, url) {
-  if (!massaTarget || !url.pathname.startsWith('/mass/')) return false;
-  const destino = new URL(url.pathname + url.search, massaTarget);
+async function agentesRoute(request, response, url) {
+  const destino = destinoDoAgente(url.pathname, url.search);
+  if (!destino) return false;
   const cabecalhos = {};
-  for (const nome of ['content-type', 'x-mass-token', 'accept']) {
+  for (const nome of CABECALHOS_REPASSADOS) {
     if (request.headers[nome]) cabecalhos[nome] = request.headers[nome];
   }
   const semCorpo = request.method === 'GET' || request.method === 'HEAD';
@@ -383,7 +414,7 @@ async function massaRoute(request, response, url) {
     });
     response.end(request.method === 'HEAD' ? undefined : dados);
   } catch {
-    json(response, 502, { error: 'Agente de Produção em Massa indisponível' });
+    json(response, 502, { error: 'Agente local indisponível' });
   }
   return true;
 }
@@ -398,7 +429,7 @@ const server = createServer(async (request, response) => {
     if (await kwaiReviewRoute(request, response, url)) return;
     if (await cleanupRoute(request, response, url)) return;
     if (await mediaRoute(request, response, url)) return;
-    if (await massaRoute(request, response, url)) return;
+    if (await agentesRoute(request, response, url)) return;
     const requested = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\/+/, '');
     let path = resolve(join(distRoot, requested));
     if (path !== distRoot && !path.startsWith(`${distRoot}${sep}`)) return json(response, 403, { error: 'Caminho inválido' });

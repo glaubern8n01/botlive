@@ -7,7 +7,7 @@ import { ComoFunciona } from "../components/ComoFunciona";
 type Tab = "produtos" | "provas" | "criativos" | "pacotes";
 type Row = Record<string, any>;
 
-const API = import.meta.env.VITE_COMMERCE_API_URL || "http://127.0.0.1:8805";
+const API = import.meta.env.VITE_COMMERCE_API_URL ?? "http://127.0.0.1:8805";
 const tabs: [Tab, string][] = [["produtos", "Produtos"], ["provas", "Evidências e claims"], ["criativos", "Criativos"], ["pacotes", "Pacotes Live Pilot"]];
 const panel = "rounded-2xl border border-zinc-800 bg-zinc-900/75 p-4";
 const input = "min-h-11 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2";

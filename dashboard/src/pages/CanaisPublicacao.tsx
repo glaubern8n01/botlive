@@ -9,7 +9,7 @@ import { ComoFunciona } from "../components/ComoFunciona";
 type Tab = "canais" | "contas" | "comparacao" | "fila";
 type Row = Record<string, any>;
 
-const API = import.meta.env.VITE_VEXPUBLISH_API_URL || "http://127.0.0.1:8785";
+const API = import.meta.env.VITE_VEXPUBLISH_API_URL ?? "http://127.0.0.1:8785";
 const tabs: [Tab, string][] = [["canais", "Canais"], ["contas", "Contas e limites"], ["comparacao", "Comparação"], ["fila", "Fila e saúde"]];
 const panel = "rounded-2xl border border-zinc-800 bg-zinc-900/75 p-4";
 const input = "min-h-11 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2";

@@ -25,6 +25,13 @@ ARG VITE_TIKTOK_STANDARD_DIRECT_POST_ENABLED
 # caminho relativo. Sem estas duas a aba nem entra no bundle.
 ARG VITE_MASS_ENABLED
 ARG VITE_MASS_API_URL
+# Demais agentes locais, pela mesma regra: a URL vazia significa mesma origem.
+ARG VITE_MULTICHANNEL_ENABLED
+ARG VITE_VEXPUBLISH_API_URL
+ARG VITE_IMPORT_ENABLED
+ARG VITE_IMPORT_API_URL
+ARG VITE_COMMERCE_ENABLED
+ARG VITE_COMMERCE_API_URL
 
 COPY . .
 RUN npm run build

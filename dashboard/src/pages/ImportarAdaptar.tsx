@@ -7,7 +7,7 @@ import { ComoFunciona } from "../components/ComoFunciona";
 type Tab = "fontes" | "biblioteca" | "adaptacao" | "auditoria";
 type Row = Record<string, any>;
 
-const API = import.meta.env.VITE_IMPORT_API_URL || "http://127.0.0.1:8795";
+const API = import.meta.env.VITE_IMPORT_API_URL ?? "http://127.0.0.1:8795";
 const tabs: [Tab, string][] = [["fontes", "Fontes autorizadas"], ["biblioteca", "Biblioteca"], ["adaptacao", "Adaptação e fila"], ["auditoria", "Auditoria"]];
 const panel = "rounded-2xl border border-zinc-800 bg-zinc-900/75 p-4";
 const input = "min-h-11 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2";
