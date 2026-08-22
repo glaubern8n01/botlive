@@ -224,9 +224,12 @@ export function KwaiCut() {
       <Metric title="Gerados hoje" value={metrics.generated} />
       <Metric title="Aprovados" value={metrics.approved} good />
       <Metric title="Na fila" value={metrics.queued} />
-      <Metric title="Prontos para postar" value={metrics.ready} good />
-      <Metric title="Publicados" value={metrics.published} />
-      <Metric title="Rejeitados" value={metrics.rejected} warn />
+      {/* Estes tres contam SO o que foi criado hoje - e a view kwai_cut_daily_metrics,
+          com `created_at >= current_date`. Sem o "hoje" no rotulo, um lote de
+          ontem esperando encerramento aparecia como zero e parecia nao existir. */}
+      <Metric title="Prontos para postar (hoje)" value={metrics.ready} good />
+      <Metric title="Publicados (hoje)" value={metrics.published} />
+      <Metric title="Rejeitados (hoje)" value={metrics.rejected} warn />
       <Metric title="Déficit da meta" value={deficit} warn={deficit > 0} />
       <Metric title="Fontes descobertas" value={prospects.length} />
       <Metric title="Aguardando revisão" value={reviewRequired} warn={reviewRequired > 0} />
