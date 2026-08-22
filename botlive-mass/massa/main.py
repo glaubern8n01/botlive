@@ -31,7 +31,13 @@ def exigir(acao: str):
             "reviewer": os.getenv("MASS_REVIEWER_TOKEN", ""),
         }
         for papel, token in tokens.items():
-            if token and x_mass_token and hmac.compare_digest(token, x_mass_token):
+            # compare_digest em str so aceita ASCII: com token acentuado (ou
+            # com BOM vindo de um arquivo do Windows) ele levantava TypeError e
+            # a API respondia 500 em vez de dizer que o token esta errado.
+            # Em bytes a comparacao continua em tempo constante e aceita tudo.
+            if token and x_mass_token and hmac.compare_digest(
+                token.encode("utf-8"), x_mass_token.encode("utf-8")
+            ):
                 if "*" in PAPEIS[papel] or acao in PAPEIS[papel]:
                     return {"actor": papel, "role": papel}
                 raise HTTPException(403, "Permissao insuficiente")

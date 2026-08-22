@@ -769,6 +769,25 @@ class PastaApiTests(Base):
         self.assertEqual(201, r.status_code)
         self.assertEqual(2, r.json()["enfileirados"])
 
+    def test_token_com_bom_ou_acento_nao_derruba_a_api(self):
+        """Arquivo de token gravado pelo Notepad vem com BOM.
+
+        Com compare_digest em str isso levantava TypeError e a API respondia
+        500. Tem que responder 401, dizendo que o token esta errado.
+
+        Mandar o token com BOM de volta nao da para testar por HTTP: header
+        so aceita ASCII, entao o proprio cliente recusa antes de sair. O que
+        importa e o servidor nao explodir com um token mal gravado.
+        """
+        for ruim in ("﻿admin-massa", "senha-com-acentuacao-ç"):
+            os.environ["MASS_ADMIN_TOKEN"] = ruim
+            try:
+                r = self.client.get("/mass/v1/projetos",
+                                    headers={"X-Mass-Token": "admin-massa"})
+                self.assertEqual(401, r.status_code, ruim)
+            finally:
+                os.environ["MASS_ADMIN_TOKEN"] = "admin-massa"
+
     def test_health_declara_o_que_aceita(self):
         dados = self.client.get("/mass/v1/health").json()
         self.assertIn(".mp4", dados["entradas_aceitas"])

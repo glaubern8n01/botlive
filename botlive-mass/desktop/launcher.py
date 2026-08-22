@@ -46,7 +46,9 @@ def token_local(dados: Path) -> str:
     """Token sorteado na primeira execucao. Nunca vem dentro do instalador."""
     arquivo = dados / "token.txt"
     if arquivo.is_file():
-        atual = arquivo.read_text(encoding="utf-8").strip()
+        # utf-8-sig: Notepad e o Set-Content do PowerShell gravam BOM, e o BOM
+        # entraria dentro do token - a comparacao no servidor rejeitaria tudo.
+        atual = arquivo.read_text(encoding="utf-8-sig").strip()
         if atual:
             return atual
     novo = secrets.token_urlsafe(24)
@@ -132,6 +134,14 @@ def montar_painel(app, raiz: Path) -> bool:
 
 
 def main() -> int:
+    # O console do Windows abre em cp1252: um caractere fora dessa tabela no
+    # token ou no caminho derrubava o app inteiro na hora de imprimir.
+    for fluxo in (sys.stdout, sys.stderr):
+        try:
+            fluxo.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     dados, token = preparar_ambiente()
     raiz = raiz_recursos()
     if str(raiz) not in sys.path:
