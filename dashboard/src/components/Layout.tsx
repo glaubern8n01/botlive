@@ -16,6 +16,9 @@ export function Layout() {
     ...(import.meta.env.VITE_MULTICHANNEL_ENABLED === "true" ? [{ to: "/canais-publicacao", icon: Radio, label: "Canais de publicação" }] : []),
     ...(import.meta.env.VITE_IMPORT_ENABLED === "true" ? [{ to: "/importar-adaptar", icon: FolderInput, label: "Importar / Adaptar" }] : []),
     ...(import.meta.env.VITE_COMMERCE_ENABLED === "true" ? [{ to: "/commerce-studio", icon: Store, label: "Commerce Studio" }] : []),
+    // Shopee tem aba própria, como o documento pede: mesma infraestrutura,
+    // dados e regras separados por plataforma.
+    ...(import.meta.env.VITE_COMMERCE_ENABLED === "true" ? [{ to: "/shopee", icon: ShoppingBag, label: "Shopee" }] : []),
     ...(import.meta.env.VITE_MASS_ENABLED === "true" ? [{ to: "/producao-em-massa", icon: Layers, label: "Produção em Massa" }] : []),
     { to: "/kwai-cut", icon: Tesoura, label: "Kwai CUT" },
     { to: "/tiktok", icon: Music2, label: "TikTok" },
