@@ -26,7 +26,8 @@ ENV VEXPUBLISH_DATABASE_PATH=/data/agents/vexpublish.db \
     MASS_SESSIONS_DIR=/data/agents/sessoes-massa \
     MASS_PROJECTS_DIR=/data/agents/massa-projetos \
     CAMPAIGNS_DATABASE_PATH=/data/agents/campaigns.db \
-    CAMPAIGNS_MEDIA_ROOT=/data/agents/campanhas-midia \n    CAMPAIGNS_COOKIES_FILE=/data/agents/cookies-youtube.txt \
+    CAMPAIGNS_MEDIA_ROOT=/data/agents/campanhas-midia \
+    CAMPAIGNS_COOKIES_FILE=/data/agents/cookies-youtube.txt \
     PYTHONUNBUFFERED=1
 
 # Checkout no Windows entrega CRLF, e com CRLF o shebang quebra dentro do
