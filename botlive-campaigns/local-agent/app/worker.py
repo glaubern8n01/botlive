@@ -29,10 +29,23 @@ def duplicado(candidate,output_sha256):
 def process(job,worker_id):
  payload=json.loads(job["payload"]);transition(job["id"],"running",heartbeat_at=now());heartbeat(job["id"],worker_id,.05)
  if job["kind"]=="detect":
-  material=get("campaign_materials",job["entity_id"]);campaign=get("campaign_campaigns",material["campaign_id"]);items=engine.detect(material["local_path"],payload.get("max_candidates",8),payload.get("min_gap_seconds",45),payload.get("min_score",0));duration=payload.get("clip_duration",45)
+  material=get("campaign_materials",job["entity_id"]);campaign=get("campaign_campaigns",material["campaign_id"]);duration=payload.get("clip_duration",45)
+  # modo "fala": escolhe pelo que foi dito, nao por movimento. E o que serve
+  # para podcast, entrevista e reaction - a maior parte das campanhas. Sem fala
+  # reconhecida, cai para o detector de movimento em vez de nao gerar nada.
+  modo=payload.get("modo","movimento");items=[]
+  if modo=="fala":
+   from . import fala
+   items=fala.detectar(material["local_path"],payload.get("max_candidates",8),payload.get("min_gap_seconds",45),payload.get("janela_min",15),payload.get("janela_max",60),payload.get("min_score",0))
+   if not items:audit("detect.sem_fala","material",material["id"],{"caindo_para":"movimento"})
+  if not items:items=engine.detect(material["local_path"],payload.get("max_candidates",8),payload.get("min_gap_seconds",45),payload.get("min_score",0))
   for index,item in enumerate(items):
-   start=max(0,item["timestamp"]-duration/2);end=start+duration;key=f"{material['id']}:{round(start,2)}:{duration}:{payload.get('layout','vertical-fit')}"
-   candidate=insert("campaign_candidates",{"campaign_id":campaign["id"],"material_id":material["id"],"source_start":start,"source_end":end,"score":item["score"],"algorithm_version":engine.ALGORITHM_VERSION,"parameters":json.dumps(payload),"version":1,"caption":" ".join(json.loads(campaign["hashtags"]) + json.loads(campaign["mentions"])),"hook":"","layout":payload.get("layout","vertical-fit"),"status":"detected","checklist_status":"pending","idempotency_key":key,"created_at":now(),"updated_at":now()});heartbeat(job["id"],worker_id,.1+.8*(index+1)/max(len(items),1));audit("candidate.detected","candidate",candidate["id"],item)
+   # A janela por fala ja vem com inicio e fim reais; a por movimento so tem o
+   # pico, e ai a duracao e centrada nele.
+   start=item.get("inicio") if item.get("inicio") is not None else max(0,item["timestamp"]-duration/2)
+   end=item.get("fim") if item.get("fim") is not None else start+duration
+   key=f"{material['id']}:{round(start,2)}:{round(end-start,2)}:{payload.get('layout','vertical-fit')}"
+   candidate=insert("campaign_candidates",{"campaign_id":campaign["id"],"material_id":material["id"],"source_start":start,"source_end":end,"score":item["score"],"algorithm_version":(__import__("app.fala",fromlist=["ALGORITMO"]).ALGORITMO if item.get("inicio") is not None else engine.ALGORITHM_VERSION),"parameters":json.dumps(payload),"version":1,"caption":" ".join(json.loads(campaign["hashtags"]) + json.loads(campaign["mentions"])),"hook":"","layout":payload.get("layout","vertical-fit"),"status":"detected","checklist_status":"pending","idempotency_key":key,"created_at":now(),"updated_at":now()});heartbeat(job["id"],worker_id,.1+.8*(index+1)/max(len(items),1));audit("candidate.detected","candidate",candidate["id"],item)
   return {"candidates":len(items)}
  if job["kind"]=="render":
   candidate=get("campaign_candidates",job["entity_id"]);material=get("campaign_materials",candidate["material_id"]);campaign=get("campaign_campaigns",candidate["campaign_id"]);out=ROOT/"data"/"outputs"/campaign["id"]/f"{candidate['id']}.mp4";mentions=json.loads(campaign["mentions"]);rules=json.loads(campaign["rules"]);result=engine.render(material["local_path"],out,candidate["source_start"],candidate["source_end"],candidate["layout"],candidate["caption"],candidate["hook"]," ".join(mentions),rules.get("cta", ""));update("campaign_candidates",candidate["id"],{"output_path":result["path"],"output_sha256":result["sha256"],"status":"review","updated_at":now()});candidate=get("campaign_candidates",candidate["id"]);campaign["rules"]=rules;campaign["hashtags"]=json.loads(campaign["hashtags"]);campaign["mentions"]=mentions;checks=evaluate(campaign,candidate,{**result,"authorized":bool(material["authorized"]),"duplicate_of":duplicado(candidate,result["sha256"])});state=summary(checks)
