@@ -75,7 +75,7 @@ def pasta_da_campanha(campaign_id: str) -> Path:
 
 
 def registrar(campaign_id: str, network: str, url: str, influencer: str,
-              authorization_source: str, notes: str = "") -> dict:
+              authorization_source: str, notes: str = "", desde: str = "") -> dict:
     """Liga uma fonte de conteudo a campanha.
 
     `authorization_source` e obrigatorio pelo mesmo motivo do upload: material
@@ -91,6 +91,9 @@ def registrar(campaign_id: str, network: str, url: str, influencer: str,
         raise ValueError("URL da fonte precisa ser http(s)")
     if not (authorization_source or "").strip():
         raise ValueError("Fonte sem autorizacao declarada nao entra")
+    desde = (desde or "").strip()
+    if desde and not (len(desde) == 8 and desde.isdigit()):
+        raise ValueError("desde deve ser AAAAMMDD (ex: 20260720)")
 
     existente = rows("campaign_sources", 1, 0, "campaign_id=? AND url=?", (campaign_id, url.strip()))
     if existente:
@@ -103,6 +106,10 @@ def registrar(campaign_id: str, network: str, url: str, influencer: str,
         "influencer": (influencer or "").strip()[:120],
         "authorization_source": authorization_source.strip(),
         "notes": notes,
+        # Campanha costuma limitar o acervo por data ("gameplay a partir de
+        # 20/07"). Cortar material anterior desqualifica o video, entao o
+        # limite fica na fonte e vai direto para o yt-dlp.
+        "desde": desde,
         "enabled": 1,
         "last_checked_at": None,
         "last_error": "",
@@ -136,11 +143,16 @@ def _ja_baixado(campaign_id: str, video_id: str) -> bool:
     return bool(linha)
 
 
+def _desde(fonte: dict) -> list:
+    valor = (fonte.get("desde") or "").strip()
+    return ["--dateafter", valor] if valor else []
+
+
 def listar_disponiveis(fonte: dict, limite: int = 5) -> list:
     """Lista o que existe na fonte sem baixar nada."""
     comando = [*comando_ytdlp(), "--flat-playlist", "--dump-json",
                "--playlist-end", str(max(1, limite)), "--ignore-errors",
-               *_cookies(), fonte["url"]]
+               *_desde(fonte), *_cookies(), fonte["url"]]
     processo = subprocess.run(comando, capture_output=True, text=True, timeout=TIMEOUT_BUSCA)
     achados = []
     for linha in processo.stdout.splitlines():
@@ -200,7 +212,7 @@ def buscar(source_id: str, limite: int = POR_RODADA) -> dict:
         comando = [
             *comando_ytdlp(), "--no-playlist", "--no-overwrites",
             "--merge-output-format", "mp4", "--restrict-filenames",
-            *_cookies(),
+            *_desde(fonte), *_cookies(),
             "-o", str(alvo), item["url"] or fonte["url"],
         ]
         processo = subprocess.run(comando, capture_output=True, text=True, timeout=TIMEOUT_BUSCA)

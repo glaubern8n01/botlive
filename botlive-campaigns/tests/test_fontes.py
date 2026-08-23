@@ -178,3 +178,32 @@ class FonteDaCampanhaTests(unittest.TestCase):
             resultado = fontes.buscar(fonte["id"])
         self.assertIn("nada novo", resultado["motivo"])
         self.assertEqual("", store.get("campaign_sources", fonte["id"])["last_error"])
+
+    def test_data_invalida_e_recusada(self):
+        with self.assertRaises(ValueError) as erro:
+            self._fonte(url="https://youtube.com/@x", desde="20/07/2026")
+        self.assertIn("AAAAMMDD", str(erro.exception))
+
+    def test_limite_de_data_vai_para_o_ytdlp(self):
+        """A campanha do Lucas Clash ON só aceita gameplay a partir de 20/07."""
+        fonte = self._fonte(url="https://www.youtube.com/@lucasclashon/videos", desde="20260720")
+        chamadas = []
+
+        def falso_run(comando, **kwargs):
+            chamadas.append(comando)
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(fontes, "comando_ytdlp", return_value=["yt-dlp"]), \
+             mock.patch("subprocess.run", side_effect=falso_run):
+            fontes.buscar(fonte["id"])
+
+        self.assertIn("--dateafter", chamadas[0])
+        self.assertEqual("20260720", chamadas[0][chamadas[0].index("--dateafter") + 1])
+
+    def test_fonte_sem_data_nao_manda_filtro(self):
+        fonte = self._fonte(url="https://www.youtube.com/@semdata")
+        chamadas = []
+        with mock.patch.object(fontes, "comando_ytdlp", return_value=["yt-dlp"]), \
+             mock.patch("subprocess.run", side_effect=lambda c, **k: (chamadas.append(c), mock.Mock(returncode=0, stdout="", stderr=""))[1]):
+            fontes.buscar(fonte["id"])
+        self.assertNotIn("--dateafter", chamadas[0])
