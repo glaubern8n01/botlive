@@ -151,13 +151,18 @@ def _desde(fonte: dict) -> list:
 def listar_disponiveis(fonte: dict, limite: int = 5) -> list:
     """Lista o que existe na fonte sem baixar nada."""
     limite_data = (fonte.get("desde") or "").strip()
-    # --flat-playlist e barato, mas nao traz upload_date: testado no canal do
-    # Lucas Clash ON, os seis videos voltaram com data None e o --dateafter nao
-    # filtrou nada. Quando a campanha limita por data, vale pagar a listagem
-    # completa - so ela sabe quando o video foi publicado.
-    comando = [*comando_ytdlp()]
-    if not limite_data:
-        comando.append("--flat-playlist")
+    # --flat-playlist e barato mas volta upload_date None, e ai o --dateafter
+    # nao tem por onde decidir - testado no canal do Lucas Clash ON, os seis
+    # videos voltaram sem data.
+    #
+    # A saida NAO e listar tudo por extenso: extracao completa abre o player de
+    # cada video e o YouTube devolve "Sign in to confirm you're not a bot" no IP
+    # da VPS, mesmo com cookie. O que resolve e pedir a data aproximada na
+    # propria aba do canal, que nao passa pelo player.
+    ehyoutube = "youtube.com" in fonte["url"] or "youtu.be" in fonte["url"]
+    comando = [*comando_ytdlp(), "--flat-playlist"]
+    if limite_data and ehyoutube:
+        comando += ["--extractor-args", "youtubetab:approximate_date"]
     comando += ["--dump-json", "--playlist-end", str(max(1, limite)),
                 "--ignore-errors", *_desde(fonte), *_cookies(), fonte["url"]]
     processo = subprocess.run(comando, capture_output=True, text=True, timeout=TIMEOUT_BUSCA)
@@ -171,7 +176,7 @@ def listar_disponiveis(fonte: dict, limite: int = 5) -> list:
         # Cinto e suspensorio: mesmo com --dateafter, video sem data conhecida
         # nao entra quando a campanha tem limite. Corte de material fora do
         # periodo e desclassificado, entao a duvida joga contra.
-        if limite_data and data < limite_data:
+        if limite_data and (not data or data < limite_data):
             continue
         achados.append({
             "video_id": str(dado.get("id") or ""),

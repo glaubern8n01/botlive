@@ -208,14 +208,22 @@ class FonteDaCampanhaTests(unittest.TestCase):
             fontes.buscar(fonte["id"])
         self.assertNotIn("--dateafter", chamadas[0])
 
-    def test_listagem_com_data_nao_usa_flat_playlist(self):
-        """--flat-playlist volta upload_date None e o --dateafter nao filtra
-        nada: testado no canal do Lucas Clash ON."""
+    def test_youtube_com_data_pede_a_data_aproximada_da_aba(self):
+        """Sem isto o --flat-playlist volta upload_date None e nada e filtrado.
+        Listar por extenso resolveria a data, mas abre o player de cada video e
+        cai no bot-block da VPS - a aba do canal nao passa pelo player."""
         fonte = self._fonte(url="https://www.youtube.com/@lucasclashon/videos", desde="20260720")
-        with mock.patch.object(fontes, "comando_ytdlp", return_value=["yt-dlp"]), \
-             mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout="", stderr="")) as run:
+        with mock.patch.object(fontes, "comando_ytdlp", return_value=["yt-dlp"]),              mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout="", stderr="")) as run:
             fontes.listar_disponiveis(fonte)
-        self.assertNotIn("--flat-playlist", run.call_args[0][0])
+        comando = run.call_args[0][0]
+        self.assertIn("--flat-playlist", comando)
+        self.assertIn("youtubetab:approximate_date", comando)
+
+    def test_fonte_sem_data_nao_paga_a_data_aproximada(self):
+        fonte = self._fonte(url="https://www.youtube.com/@outro/videos")
+        with mock.patch.object(fontes, "comando_ytdlp", return_value=["yt-dlp"]),              mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout="", stderr="")) as run:
+            fontes.listar_disponiveis(fonte)
+        self.assertNotIn("youtubetab:approximate_date", run.call_args[0][0])
 
     def test_video_anterior_ao_periodo_e_descartado(self):
         fonte = self._fonte(url="https://www.youtube.com/@lucas2/videos", desde="20260720")
