@@ -12,3 +12,7 @@ yt-dlp
 # Campanhas de Cortes: o upload de material autorizado usa multipart/form-data,
 # e sem esta biblioteca o FastAPI recusa a rota inteira em tempo de execucao.
 python-multipart>=0.0.20,<1
+# Scripts que resolvem o desafio JS do YouTube. O deno sozinho nao basta: o
+# yt-dlp precisa deste pacote para ter o solucionador. Sem ele, download de
+# YouTube morre em "Signature solving failed" mesmo com cookie e runtime.
+yt-dlp-ejs
