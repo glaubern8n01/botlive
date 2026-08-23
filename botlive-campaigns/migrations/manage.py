@@ -3,7 +3,7 @@ import argparse,os,sqlite3,sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"local-agent"))
 from app.store import DB_PATH,SCHEMA,connect
-TABLES=["campaign_export_tokens","campaign_metrics","campaign_rule_checks","campaign_jobs","campaign_results","campaign_publications","campaign_channels","campaign_candidates","campaign_materials","campaign_settings","campaign_audit","campaign_campaigns"]
+TABLES=["campaign_sources","campaign_export_tokens","campaign_metrics","campaign_rule_checks","campaign_jobs","campaign_results","campaign_publications","campaign_channels","campaign_candidates","campaign_materials","campaign_settings","campaign_audit","campaign_campaigns"]
 def upgrade():
  with connect() as db:db.executescript(SCHEMA)
 def downgrade(confirm=False):

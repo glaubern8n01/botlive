@@ -23,6 +23,7 @@ app.add_middleware(CORSMiddleware,allow_origins=origins,allow_credentials=False,
 
 class CampaignIn(BaseModel):
  platform:str=Field(min_length=2,max_length=80);name:str=Field(min_length=2,max_length=160);url:str="";niche:str="";status:str="draft";starts_at:str|None=None;ends_at:str|None=None;reward_model:str="";reward_value:float=0;budget:float=0;networks:list[str]=[];rules:dict={};hashtags:list[str]=[];mentions:list[str]=[];min_duration:int|None=None;max_duration:int|None=None;target_profile:str="";duplicate_policy:str="deny";automation_policy:str="manual-only"
+class SourceIn(BaseModel):network:str;url:str;influencer:str="";authorization_source:str;notes:str=""
 class ChannelIn(BaseModel):network:str;handle:str;niche:str="";auth_state:str="manual";permissions:list[str]=[];daily_limit:int=0;token_hint:str=""
 class ReviewIn(BaseModel):action:str;notes:str="";caption:str|None=None;hook:str|None=None
 class JobIn(BaseModel):material_id:str;max_candidates:int=Field(8,ge=1,le=50);clip_duration:int=Field(45,ge=6,le=180);min_gap_seconds:int=Field(45,ge=0,le=3600);min_score:float=Field(0,ge=0,le=1);layout:str="vertical-fit";idempotency_key:str
@@ -75,6 +76,30 @@ def material_content(item_id:str,user=Depends(require("read"))):
  path=Path(item["local_path"])
  if not path.is_file() or path.parent!=accepted_root():raise HTTPException(404,"Arquivo indisponível")
  return FileResponse(path,media_type=item["detected_mime"],filename=item["name"])
+@app.get("/campaigns/v1/sources",dependencies=[Depends(require("read"))])
+def sources(campaign_id:str|None=None):
+ """Fontes de conteudo ligadas as campanhas - a live que vira corte."""
+ from . import fontes
+ return {"items":fontes.listar(campaign_id)}
+@app.post("/campaigns/v1/campaigns/{campaign_id}/sources",status_code=201)
+def add_source(campaign_id:str,value:SourceIn,user=Depends(require("write"))):
+ from . import fontes
+ try:item=fontes.registrar(campaign_id,value.network,value.url,value.influencer,value.authorization_source,value.notes)
+ except ValueError as exc:raise HTTPException(422,str(exc))
+ audit("source.added","source",item["id"],{"campaign":campaign_id},actor=user["actor"],role=user["role"]);return item
+@app.post("/campaigns/v1/sources/{source_id}/toggle")
+def toggle_source(source_id:str,enabled:bool=True,user=Depends(require("write"))):
+ from . import fontes
+ try:return fontes.alternar(source_id,enabled)
+ except ValueError as exc:raise HTTPException(404,str(exc))
+@app.post("/campaigns/v1/sources/{source_id}/fetch",status_code=201)
+def fetch_source(source_id:str,limite:int=1,user=Depends(require("jobs"))):
+ """Enfileira a captura agora, sem esperar a varredura do worker."""
+ from . import fontes
+ if not get("campaign_sources",source_id):raise HTTPException(404,"Fonte inexistente")
+ from datetime import datetime,timezone
+ chave=f"capturar:{source_id}:{datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}"
+ item=enqueue("capturar",source_id,{"limite":max(1,min(limite,5))},chave);audit("job.queued","job",item["id"],{"kind":"capturar"},actor=user["actor"],role=user["role"]);return item
 @app.post("/campaigns/v1/jobs/detect",status_code=201)
 def detect_job(request:Request,value:JobIn,user=Depends(require("jobs"))):
  rate_limit(request,"jobs",20,60);material=get("campaign_materials",value.material_id)

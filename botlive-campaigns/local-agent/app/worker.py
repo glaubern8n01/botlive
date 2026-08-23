@@ -3,7 +3,7 @@ import json,os,socket,time,traceback
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from . import engine
-from .queue import claim,heartbeat,recover_orphans,transition
+from .queue import claim,enqueue,heartbeat,recover_orphans,transition
 from .rules import evaluate,summary
 from .store import ROOT,audit,connect,get,insert,now,uid,update
 
@@ -39,6 +39,16 @@ def process(job,worker_id):
   with connect() as db:
    for check in checks:db.execute("INSERT OR REPLACE INTO campaign_rule_checks(id,candidate_id,rule_key,status,severity,reason,evidence,checked_at) VALUES(?,?,?,?,?,?,?,?)",(uid(),candidate["id"],check["rule_key"],check["status"],check["severity"],check["reason"],json.dumps(check["evidence"]),check["checked_at"]))
   update("campaign_candidates",candidate["id"],{"checklist_status":state,"updated_at":now()});return result
+ if job["kind"]=="capturar":
+  # A ponte: busca o que ha de novo na fonte do influenciador, registra como
+  # material autorizado da campanha e ja enfileira a deteccao. Sem isto,
+  # alguem tinha que baixar a live e subir o arquivo a mao todo dia.
+  from . import fontes
+  resultado=fontes.buscar(job["entity_id"],payload.get("limite",1));detectados=0
+  for material in resultado["materiais"]:
+   chave=f"detect:{material['id']}"
+   enqueue("detect",material["id"],{"max_candidates":payload.get("max_candidates",8),"clip_duration":payload.get("clip_duration",45),"min_gap_seconds":payload.get("min_gap_seconds",45),"layout":payload.get("layout","vertical-fit")},chave);detectados+=1
+  heartbeat(job["id"],worker_id,.9);return {"materiais":len(resultado["materiais"]),"deteccoes_enfileiradas":detectados,"motivo":resultado["motivo"]}
  raise ValueError("Tipo de job desconhecido")
 
 def run_once(worker_id=None):
@@ -47,8 +57,28 @@ def run_once(worker_id=None):
  try:result=process(job,worker_id);transition(job["id"],"completed",progress=1,error="");audit("job.completed","job",job["id"],result);return True
  except Exception as exc:
   attempts=int(job["attempts"]);maximum=int(job["max_attempts"]);status="retry_wait" if attempts<maximum else "failed";run_after=(datetime.now(timezone.utc)+timedelta(seconds=min(300,2**attempts))).isoformat();transition(job["id"],status,error=str(exc)[:1000],run_after=run_after,worker_id=None);audit("job.failed","job",job["id"],{"error":str(exc),"retry":status=="retry_wait"},result="failed");return True
+def agendar_fontes():
+ """Enfileira a checagem das fontes que estao ha mais tempo sem olhar.
+
+ A chave de idempotencia carrega a hora: uma fonte e checada no maximo uma vez
+ por hora, e reiniciar o worker nao refaz o trabalho da hora corrente.
+ """
+ from . import fontes
+ agendados=0
+ for fonte in fontes.fontes_para_checar(limite=5):
+  hora=datetime.now(timezone.utc).strftime("%Y%m%d%H")
+  if enqueue("capturar",fonte["id"],{"limite":1},f"capturar:{fonte['id']}:{hora}")["status"]=="queued":agendados+=1
+ return agendados
 def main():
  if os.getenv("CAMPAIGNS_ENABLED","false").lower()!="true":raise SystemExit("Campanhas desativadas")
+ ultima_varredura=0.0
  while True:
-  if os.getenv("CAMPAIGNS_PAUSED","false").lower()=="true" or not run_once():time.sleep(2)
+  if os.getenv("CAMPAIGNS_PAUSED","false").lower()=="true":time.sleep(2);continue
+  # A cada 10 minutos olha se ha fonte para checar; no resto do tempo o worker
+  # so consome a fila.
+  if time.monotonic()-ultima_varredura>600:
+   try:agendar_fontes()
+   except Exception as exc:print(f"[campanhas] varredura de fontes falhou: {exc}")
+   ultima_varredura=time.monotonic()
+  if not run_once():time.sleep(2)
 if __name__=="__main__":main()
