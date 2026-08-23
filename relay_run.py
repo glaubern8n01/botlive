@@ -27,6 +27,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 # Títulos de futebol vêm com emoji (🔴 live etc.); no console do Windows (cp1252)
@@ -256,8 +257,34 @@ def pending_candidates(url: str, key: str, limit: int):
                            f"&profile_id=eq.{PROFILE}&review_status=eq.review_required&limit={limit}")
 
 
+def ja_processado(url: str, key: str, video_url: str) -> bool:
+    """O vídeo já virou corte antes? Então não vale baixar de novo.
+
+    Sem esta checagem o relay baixava o mesmo vídeo do YouTube dezenas de vezes
+    (a descoberta reinsere a mesma URL como candidato novo), gastava banda de
+    casa, queimava o IP com bot-block — e a VPS descartava tudo no fim com
+    duplicate_source_sha256. Custa uma consulta; economiza um download inteiro.
+    """
+    try:
+        rows = _rest(url, key, f"football_discovered_videos?select=discovered_id"
+                               f"&profile_id=eq.{PROFILE}"
+                               f"&metadata->>original_url=eq.{quote(video_url, safe='')}&limit=1")
+        return bool(rows)
+    except Exception:  # noqa: BLE001 — se a consulta falhar, segue o fluxo normal
+        return False
+
+
 def process_one(url: str, key: str, cand: dict) -> str:
     vid_url = cand["source_url"]; title = (cand.get("title") or "Corte futebol")[:80]
+    if ja_processado(url, key, vid_url):
+        # Tira da fila com motivo auditável, senão a mesma URL volta pra sempre.
+        try:
+            _rest(url, key, f"football_source_prospects?prospect_id=eq.{cand['prospect_id']}", "PATCH",
+                  {"review_status": "blocked", "reviewed_by": "relay",
+                   "blocked_reason": "duplicado_ja_processado"})
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+        return "duplicado_pulado"
     name = f"relay_{uuid.uuid4().hex[:10]}.mp4"
     local = WORK / name
     print(f"  baixando: {title[:48]} ...", flush=True)
@@ -314,6 +341,15 @@ def process_one(url: str, key: str, cand: dict) -> str:
         # Disco da VPS é curto: apaga o arquivo-fonte após o corte final (o MP4
         # cortado já está no volume ready/). Mantém a fonte se o corte falhou.
         _ssh(f"rm -f {remote_host}")
+        # Cada vídeo do relay vira uma linha em football_sources. A descoberta
+        # multicanal varre TODA fonte habilitada e tenta abrir o source_ref com
+        # yt-dlp — em arquivo local isso é sempre "is not a valid URL". Com 724
+        # dessas acumuladas, cada ciclo gerava ~720 erros e outras tantas linhas
+        # em football_source_checks. Já cortou: sai da varredura.
+        try:
+            _rest(url, key, f"football_sources?source_id=eq.{source_id}", "PATCH", {"enabled": False})
+        except Exception:  # noqa: BLE001 — best-effort; não invalida o corte
+            pass
     return "ready" if ok_cut else f"corte:{(r.stdout + r.stderr)[-80:]}"
 
 
