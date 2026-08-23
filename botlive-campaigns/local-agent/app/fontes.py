@@ -39,6 +39,10 @@ TIMEOUT_BUSCA = int(os.getenv("CAMPAIGNS_FETCH_TIMEOUT", "1800"))
 # Quantos VODs/lives novos buscar por rodada. Baixo de proposito: campanha nao
 # precisa de tudo, precisa do que ainda nao foi cortado.
 POR_RODADA = int(os.getenv("CAMPAIGNS_FETCH_POR_RODADA", "1"))
+# Quanto gravar quando a fonte esta AO VIVO. Live nao tem fim: sem teto, o
+# yt-dlp fica preso ate o cara desligar e o job estoura o timeout sem entregar
+# nada. Meia hora ja da material de sobra para varios cortes.
+MINUTOS_DE_LIVE = int(os.getenv("CAMPAIGNS_LIVE_MINUTOS", "30"))
 
 
 def comando_ytdlp() -> list:
@@ -184,6 +188,7 @@ def listar_disponiveis(fonte: dict, limite: int = 5) -> list:
             "url": dado.get("url") or dado.get("webpage_url") or "",
             "duracao": dado.get("duration"),
             "data": data,
+            "ao_vivo": bool(dado.get("is_live")),
         })
     achados = [x for x in achados if x["video_id"]]
     # Sem isto, canal que nao existe, video removido ou bloqueio de IP voltavam
@@ -219,7 +224,13 @@ def buscar(source_id: str, limite: int = POR_RODADA) -> dict:
                {"last_error": str(erro)[:300], "last_checked_at": now()})
         return {"materiais": [], "motivo": f"falha ao listar: {erro}"}
 
-    novos = [x for x in disponiveis if not _ja_baixado(fonte["campaign_id"], x["video_id"])]
+    # Live e sempre "material novo": o id nao muda enquanto a transmissao esta
+    # no ar, mas a gravacao de agora nao e a de uma hora atras. Por isso a
+    # chave de deduplicacao ganha a hora quando a fonte esta ao vivo.
+    for item in disponiveis:
+        item["chave"] = (f"{item['video_id']}-ao-vivo-{now()[:13]}"
+                         if item.get("ao_vivo") else item["video_id"])
+    novos = [x for x in disponiveis if not _ja_baixado(fonte["campaign_id"], x["chave"])]
     if not novos:
         update("campaign_sources", source_id, {"last_checked_at": now(), "last_error": ""})
         return {"materiais": [], "motivo": "nada novo na fonte"}
@@ -227,13 +238,19 @@ def buscar(source_id: str, limite: int = POR_RODADA) -> dict:
     destino_base = pasta_da_campanha(fonte["campaign_id"])
     criados = []
     for item in novos[:max(1, limite)]:
-        alvo = destino_base / f"{item['video_id']}.mp4"
+        alvo = destino_base / f"{item['chave']}.mp4"
         comando = [
             *comando_ytdlp(), "--no-playlist", "--no-overwrites",
             "--merge-output-format", "mp4", "--restrict-filenames",
             *_desde(fonte), *_cookies(),
-            "-o", str(alvo), item["url"] or fonte["url"],
         ]
+        if item.get("ao_vivo"):
+            # Grava uma janela e para sozinho. O -t vai para o ffmpeg que o
+            # yt-dlp usa como downloader; sem ele a gravacao so termina quando
+            # a live termina.
+            comando += ["--downloader", "ffmpeg",
+                        "--downloader-args", f"ffmpeg_i:-t {MINUTOS_DE_LIVE * 60}"]
+        comando += ["-o", str(alvo), item["url"] or fonte["url"]]
         processo = subprocess.run(comando, capture_output=True, text=True, timeout=TIMEOUT_BUSCA)
         if processo.returncode != 0 or not alvo.exists():
             update("campaign_sources", source_id, {
@@ -266,7 +283,11 @@ def buscar(source_id: str, limite: int = POR_RODADA) -> dict:
             "expires_at": None,
             "status": "validated",
             "metadata": json.dumps({
-                "video_id": item["video_id"],
+                # Guarda a CHAVE, que e o que _ja_baixado procura. Para VOD ela
+                # e o proprio id; para live carrega a hora da gravacao.
+                "video_id": item["chave"],
+                "video_id_origem": item["video_id"],
+                "ao_vivo": bool(item.get("ao_vivo")),
                 "source_id": source_id,
                 "duracao": item.get("duracao"),
             }, ensure_ascii=False),

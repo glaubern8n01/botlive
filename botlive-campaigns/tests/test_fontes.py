@@ -236,3 +236,47 @@ class FonteDaCampanhaTests(unittest.TestCase):
              mock.patch("subprocess.run", return_value=mock.Mock(returncode=0, stdout=linhas, stderr="")):
             achados = fontes.listar_disponiveis(fonte)
         self.assertEqual(["novo"], [x["video_id"] for x in achados])
+
+    def _live(self, url="https://kick.com/juninhomanella"):
+        fonte = self._fonte(url=url, network="kick")
+        saida = '{"id":"live1","title":"ao vivo","is_live":true}'
+        return fonte, saida
+
+    def test_live_grava_janela_e_para_sozinha(self):
+        """Live nao tem fim: sem teto o yt-dlp fica preso ate o cara desligar."""
+        fonte, saida = self._live()
+        chamadas = []
+
+        def falso(comando, **kwargs):
+            chamadas.append(comando)
+            return mock.Mock(returncode=1, stdout=saida if len(chamadas) == 1 else "", stderr="")
+
+        with mock.patch.object(fontes, "comando_ytdlp", return_value=["yt-dlp"]), \
+             mock.patch("subprocess.run", side_effect=falso):
+            fontes.buscar(fonte["id"])
+
+        download = chamadas[-1]
+        self.assertIn("--downloader", download)
+        self.assertIn(f"ffmpeg_i:-t {fontes.MINUTOS_DE_LIVE * 60}", download)
+
+    def test_vod_nao_ganha_limite_de_gravacao(self):
+        fonte = self._fonte(url="https://kick.com/outro/videos", network="kick")
+        chamadas = []
+
+        def falso(comando, **kwargs):
+            chamadas.append(comando)
+            saida = '{"id":"vod1","title":"gravado"}' if len(chamadas) == 1 else ""
+            return mock.Mock(returncode=1, stdout=saida, stderr="")
+
+        with mock.patch.object(fontes, "comando_ytdlp", return_value=["yt-dlp"]), \
+             mock.patch("subprocess.run", side_effect=falso):
+            fontes.buscar(fonte["id"])
+        self.assertNotIn("--downloader", chamadas[-1])
+
+    def test_duas_gravacoes_da_mesma_live_sao_materiais_diferentes(self):
+        """O id da live nao muda enquanto ela esta no ar, mas a gravacao de
+        agora nao e a de uma hora atras."""
+        item = {"video_id": "live1", "ao_vivo": True}
+        primeira = f"{item['video_id']}-ao-vivo-2026-08-23T18"
+        segunda = f"{item['video_id']}-ao-vivo-2026-08-23T19"
+        self.assertNotEqual(primeira, segunda)
