@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from vexpublish import adapters
-from vexpublish.adapters import base
+from vexpublish.adapters import base, kwai
 from vexpublish.adapters.mock import MockAdapter
 from vexpublish.core.errors import CodigoErro, VexPublishError
 from vexpublish.sessions import vault
@@ -27,10 +27,17 @@ def test_registro_cobre_as_quatro_plataformas():
 
 
 def test_compatibilidade_declarada_bate_com_a_realidade():
-    """YouTube tem login real ligado; os outros tres seguem sem nada testado."""
+    """Cada valor tem que refletir o que foi testado de verdade.
+
+    YouTube: login e envio validados com video private -> PARCIAL.
+    Kwai: as cinco rotas foram investigadas em 22/08 e nenhuma serve para a
+    conta brasileira -> NAO. Nao e o mesmo que "ainda nao olhamos".
+    TikTok e Instagram: continuam sem teste real -> NAO VALIDADO.
+    """
     atual = adapters.compatibilidade()
     assert atual["youtube"] == "PARCIAL"
-    assert atual["tiktok"] == atual["instagram"] == atual["kwai"] == "NAO VALIDADO"
+    assert atual["kwai"] == "NAO"
+    assert atual["tiktok"] == atual["instagram"] == "NAO VALIDADO"
 
 
 def test_nenhum_adapter_publica_de_verdade():
@@ -109,8 +116,22 @@ def test_youtube_exige_titulo(job, conta):
 
 
 def test_kwai_documenta_ordem_de_investigacao(job, conta):
+    """A investigacao ficou registrada no proprio adapter, com veredito por rota."""
     payload = adapters.obter("kwai").prepare(job, conta)
-    assert payload["rota_pretendida"] == "api-oficial"
+    # A unica rota existente hoje e a pessoa publicando pelo celular.
+    assert payload["rota_pretendida"] == "manual-mobile"
+    rotas = dict(kwai.ORDEM_DE_INVESTIGACAO)
+    assert set(rotas) == {"api-oficial", "social-auto-upload", "fuploader",
+                          "playwright-kwai-br", "android-adb"}
+    # kuaishou nao pode ser confundido com Kwai BR - foi o achado central.
+    assert "kuaishou" in rotas["social-auto-upload"].lower()
+
+
+def test_kwai_recusa_publicar_e_explica_por_que(job, conta):
+    with pytest.raises(VexPublishError) as erro:
+        adapters.obter("kwai").publish(job, conta, {})
+    assert erro.value.codigo is CodigoErro.MANUAL_ACTION_REQUIRED
+    assert "manual" in str(erro.value).lower()
 
 
 def test_modulo_desligado_bloqueia_execucao(job, conta):
