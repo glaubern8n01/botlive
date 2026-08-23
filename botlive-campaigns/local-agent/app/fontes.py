@@ -52,6 +52,22 @@ def comando_ytdlp() -> list:
     raise RuntimeError("yt-dlp indisponivel: instale com python -m pip install yt-dlp")
 
 
+def _cookies() -> list:
+    """Cookies do proprio dono, quando a fonte exige sessao.
+
+    O YouTube barra IP de datacenter com "Sign in to confirm you're not a bot":
+    listar funciona, baixar nao. A saida gratuita e exportar os cookies do
+    navegador uma vez e apontar CAMPAIGNS_COOKIES_FILE para o arquivo.
+
+    Nao e contorno de protecao: sao os cookies da conta do proprio operador,
+    o mesmo que o yt-dlp documenta e o que o modulo de massa ja faz.
+    """
+    arquivo = os.getenv("CAMPAIGNS_COOKIES_FILE", "").strip()
+    if arquivo and Path(arquivo).is_file():
+        return ["--cookies", arquivo]
+    return []
+
+
 def pasta_da_campanha(campaign_id: str) -> Path:
     destino = Path(os.getenv("CAMPAIGNS_MEDIA_ROOT", ROOT / "data" / "media")) / campaign_id
     destino.mkdir(parents=True, exist_ok=True)
@@ -123,7 +139,8 @@ def _ja_baixado(campaign_id: str, video_id: str) -> bool:
 def listar_disponiveis(fonte: dict, limite: int = 5) -> list:
     """Lista o que existe na fonte sem baixar nada."""
     comando = [*comando_ytdlp(), "--flat-playlist", "--dump-json",
-               "--playlist-end", str(max(1, limite)), "--ignore-errors", fonte["url"]]
+               "--playlist-end", str(max(1, limite)), "--ignore-errors",
+               *_cookies(), fonte["url"]]
     processo = subprocess.run(comando, capture_output=True, text=True, timeout=TIMEOUT_BUSCA)
     achados = []
     for linha in processo.stdout.splitlines():
@@ -183,6 +200,7 @@ def buscar(source_id: str, limite: int = POR_RODADA) -> dict:
         comando = [
             *comando_ytdlp(), "--no-playlist", "--no-overwrites",
             "--merge-output-format", "mp4", "--restrict-filenames",
+            *_cookies(),
             "-o", str(alvo), item["url"] or fonte["url"],
         ]
         processo = subprocess.run(comando, capture_output=True, text=True, timeout=TIMEOUT_BUSCA)
