@@ -342,3 +342,78 @@ class FilaTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RenderTests(unittest.TestCase):
+    """O MP4 do criativo — a peça que faltava entre o roteiro e o post."""
+
+    def setUp(self):
+        from commerce import render
+
+        self.render = render
+        self.tmp = Path(tempfile.mkdtemp())
+        os.environ["COMMERCE_RENDER_DIR"] = str(self.tmp / "renders")
+        self.imagem = self.tmp / "produto.jpg"
+        self.imagem.write_bytes(b"foto")
+
+    def test_comando_monta_9x16_com_gancho_e_cta(self):
+        comando = self.render.montar_comando(
+            [self.imagem], None, self.tmp / "saida.mp4", "Gancho aqui", "COMPRE AGORA", 12.0
+        )
+        filtro = comando[comando.index("-filter_complex") + 1]
+        self.assertIn("scale=1080:1920", filtro)
+        self.assertIn("Gancho aqui", filtro)
+        self.assertIn("COMPRE AGORA", filtro)
+        # gancho no comeco, CTA no fim
+        self.assertIn("between(t,0,3.0)", filtro)
+        self.assertIn("between(t,8.00,12.00)", filtro)
+
+    def test_sem_imagem_e_recusado(self):
+        with self.assertRaises(store.CommerceError):
+            self.render.montar_comando([], None, self.tmp / "x.mp4", "a", "b", 10.0)
+
+    def test_narracao_entra_como_faixa_de_audio(self):
+        audio = self.tmp / "voz.wav"
+        audio.write_bytes(b"wav")
+        comando = self.render.montar_comando([self.imagem], audio, self.tmp / "s.mp4", "", "", 10.0)
+        self.assertIn("-shortest", comando)
+        self.assertIn("aac", comando)
+
+    def test_sem_narracao_nao_mapeia_audio(self):
+        comando = self.render.montar_comando([self.imagem], None, self.tmp / "s.mp4", "", "", 10.0)
+        self.assertNotIn("-shortest", comando)
+
+    def test_texto_com_dois_pontos_e_escapado(self):
+        """Dois-pontos é sintaxe dentro do drawtext: sem escape, o render morre."""
+        comando = self.render.montar_comando(
+            [self.imagem], None, self.tmp / "s.mp4", "Promo: hoje", "", 10.0
+        )
+        filtro = comando[comando.index("-filter_complex") + 1]
+        self.assertIn("Promo\\: hoje", filtro)
+
+    def test_so_entra_foto_com_direito_declarado(self):
+        produto = products.criar_produto(platform="shopee", title="Produto teste",
+                                         source="manual", price=10.0)
+        com_direito = self.tmp / "com.jpg"
+        com_direito.write_bytes(b"x")
+        sem_direito = self.tmp / "sem.jpg"
+        sem_direito.write_bytes(b"x")
+        creatives.registrar_asset(produto["id"], "imagem", str(com_direito),
+                                  rights="licenca do vendedor")
+        with self.assertRaises(store.CommerceError):
+            creatives.registrar_asset(produto["id"], "imagem", str(sem_direito), rights="  ")
+        achadas = self.render.imagens_do_produto(produto["id"])
+        self.assertEqual([com_direito], achadas)
+
+    def test_criativo_nao_aprovado_nao_renderiza(self):
+        produto = products.criar_produto(platform="shopee", title="Outro produto",
+                                         source="manual", price=10.0)
+        criativo = creatives.criar(produto["id"], kind="PRODUCT_HERO",
+                                   hook="oi", script="texto", cta="CTA")
+        with self.assertRaises(store.CommerceError) as erro:
+            self.render.renderizar(criativo["id"])
+        self.assertIn("aprovacao humana", str(erro.exception))
+
+    def test_narracao_junta_gancho_roteiro_e_cta(self):
+        texto = self.render.texto_narrado({"hook": "Olha isso", "script": "produto bom", "cta": "LINK NA BIO"})
+        self.assertEqual("Olha isso produto bom LINK NA BIO", texto)

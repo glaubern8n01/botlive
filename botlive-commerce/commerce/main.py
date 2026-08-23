@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import bridge, creatives, handoff, livepilot, products
+from . import bridge, creatives, handoff, livepilot, products, render
 from .store import CommerceError, auditar, listar, migrar, obter
 
 
@@ -262,6 +262,25 @@ def aprovar_criativo(item_id: str, user=Depends(exigir("approve"))):
         raise _erro(exc)
     auditar("creative.approved", "creative", item_id, actor=user["actor"], role=user["role"])
     return criativo
+
+
+@app.post("/commerce/v1/creatives/{item_id}/render")
+def renderizar_criativo(item_id: str, user=Depends(exigir("write"))):
+    """Gera o MP4 do criativo aprovado. Local: Pillow, Piper e FFmpeg.
+
+    Sem esta rota o modulo montava roteiro, gancho e QA e nao saia video
+    nenhum - nao havia o que postar.
+    """
+    try:
+        resultado = render.renderizar(item_id)
+    except CommerceError as exc:
+        auditar("creative.render_refused", "creative", item_id, {"reason": str(exc)},
+                result="blocked", actor=user["actor"], role=user["role"])
+        raise _erro(exc)
+    auditar("creative.rendered", "creative", item_id,
+            {"bytes": resultado["bytes"], "duracao": resultado["duracao"]},
+            actor=user["actor"], role=user["role"])
+    return resultado
 
 
 @app.post("/commerce/v1/creatives/{item_id}/queue")
