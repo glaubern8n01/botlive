@@ -19,3 +19,8 @@ yt-dlp-ejs
 # Transcricao local para escolher o corte pela fala (modo padrao das
 # campanhas). Roda em CPU, int8. O modelo small (~460MB) baixa na primeira vez.
 faster-whisper
+# Motor de corte legado do BotLive (clipper.py e highlight_detector.py), que o
+# modulo de campanhas reaproveita para renderizar o vertical. Mesmas versoes do
+# requirements.txt do vigia, para os dois nao divergirem.
+moviepy==1.0.3
+numpy==2.4.3
