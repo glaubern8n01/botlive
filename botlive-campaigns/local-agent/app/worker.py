@@ -33,12 +33,20 @@ def process(job,worker_id):
   # modo "fala": escolhe pelo que foi dito, nao por movimento. E o que serve
   # para podcast, entrevista e reaction - a maior parte das campanhas. Sem fala
   # reconhecida, cai para o detector de movimento em vez de nao gerar nada.
-  modo=payload.get("modo","movimento");items=[]
+  # Campanha e podcast, musica e entrevista: o momento bom e uma frase, nao um
+  # pico de movimento. Por isso o padrao aqui e "fala".
+  modo=payload.get("modo",os.getenv("CAMPAIGNS_DETECT_MODO","fala"));items=[]
   if modo=="fala":
    from . import fala
    items=fala.detectar(material["local_path"],payload.get("max_candidates",8),payload.get("min_gap_seconds",45),payload.get("janela_min",15),payload.get("janela_max",60),payload.get("min_score",0))
    if not items:audit("detect.sem_fala","material",material["id"],{"caindo_para":"movimento"})
-  if not items:items=engine.detect(material["local_path"],payload.get("max_candidates",8),payload.get("min_gap_seconds",45),payload.get("min_score",0))
+  if not items:
+   # O detector de movimento depende do motor legado (moviepy). Se ele nao
+   # estiver na imagem, isso vira aviso e nao falha do job - o material fica
+   # registrado esperando, em vez de sumir na fila de erro.
+   try:items=engine.detect(material["local_path"],payload.get("max_candidates",8),payload.get("min_gap_seconds",45),payload.get("min_score",0))
+   except Exception as exc:
+    audit("detect.movimento_indisponivel","material",material["id"],{"erro":str(exc)[:200]},result="failed");return {"candidates":0,"motivo":f"sem deteccao possivel: {exc}"[:200]}
   for index,item in enumerate(items):
    # A janela por fala ja vem com inicio e fim reais; a por movimento so tem o
    # pico, e ai a duracao e centrada nele.

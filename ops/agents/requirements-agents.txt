@@ -16,3 +16,6 @@ python-multipart>=0.0.20,<1
 # yt-dlp precisa deste pacote para ter o solucionador. Sem ele, download de
 # YouTube morre em "Signature solving failed" mesmo com cookie e runtime.
 yt-dlp-ejs
+# Transcricao local para escolher o corte pela fala (modo padrao das
+# campanhas). Roda em CPU, int8. O modelo small (~460MB) baixa na primeira vez.
+faster-whisper
