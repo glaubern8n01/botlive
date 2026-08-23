@@ -1,7 +1,7 @@
 import { FormEvent,ReactNode,useEffect,useState } from "react";
 type Tab="campaigns"|"materials"|"production"|"review"|"publications"|"channels"|"results"|"audit";
 type Row=Record<string,any>;
-const API=import.meta.env.VITE_CAMPAIGNS_API_URL||"http://127.0.0.1:8775";
+const API=import.meta.env.VITE_CAMPAIGNS_API_URL??"http://127.0.0.1:8775";
 const tabs:[Tab,string][]=[["campaigns","Campanhas"],["materials","Fontes e materiais"],["production","Produção"],["review","Revisão"],["publications","Publicações e rascunhos"],["channels","Contas e canais"],["results","Resultados"],["audit","Auditoria e configurações"]];
 const panel="rounded-2xl border border-zinc-800 bg-zinc-900/75 p-4";const input="min-h-11 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2";const button="min-h-11 rounded-lg bg-cyan-500 px-4 font-bold text-zinc-950 disabled:opacity-40";const secondary="min-h-10 rounded-lg border border-zinc-700 px-3 py-2";
 export function CampanhasCortes(){

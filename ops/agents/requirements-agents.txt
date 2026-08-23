@@ -9,3 +9,6 @@ pillow==12.1.1
 # requirements.txt do vigia: precisa acompanhar as mudancas das plataformas.
 # Sem ele o modulo sobe, mas todo download falha - ffmpeg sozinho nao baixa.
 yt-dlp
+# Campanhas de Cortes: o upload de material autorizado usa multipart/form-data,
+# e sem esta biblioteca o FastAPI recusa a rota inteira em tempo de execucao.
+python-multipart>=0.0.20,<1

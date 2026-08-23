@@ -480,6 +480,7 @@ const massaTarget = process.env.MASS_API_TARGET;
 
 // Um uvicorn por porta, todos no mesmo container.
 const PORTAS_AGENTES = {
+  '/campaigns/': 8775,
   '/vexpublish/': 8785,
   '/import/': 8795,
   '/commerce/': 8805,
