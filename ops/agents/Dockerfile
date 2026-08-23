@@ -47,7 +47,11 @@ RUN dos2unix /app/ops/agents/start.sh && chmod +x /app/ops/agents/start.sh
 
 EXPOSE 8775 8785 8795 8805 8815 8825
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+# Tempos folgados de proposito. Com os limites de CPU apertados - e pior, com a
+# VPS sob steal time do provedor - o curl local passou dos 5s e o swarm matou o
+# container por "unhealthy" a cada 4 minutos, derrubando render pela metade.
+# Healthcheck e para pegar processo morto, nao processo lento.
+HEALTHCHECK --interval=60s --timeout=25s --start-period=150s --retries=5 \
     CMD curl -fsS http://127.0.0.1:8785/vexpublish/v1/health || exit 1
 
 CMD ["/app/ops/agents/start.sh"]
