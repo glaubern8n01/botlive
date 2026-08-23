@@ -22,6 +22,11 @@ ENV VEXPUBLISH_DATABASE_PATH=/data/agents/vexpublish.db \
     VEXPUBLISH_SESSIONS_DIR=/data/agents/sessions \
     IMPORT_DATABASE_PATH=/data/agents/import.db \
     COMMERCE_DATABASE_PATH=/data/agents/commerce.db \
+    MASS_DATABASE_PATH=/data/agents/massa.db \
+    MASS_SESSIONS_DIR=/data/agents/sessoes-massa \
+    MASS_PROJECTS_DIR=/data/agents/massa-projetos \
+    CAMPAIGNS_DATABASE_PATH=/data/agents/campaigns.db \
+    CAMPAIGNS_MEDIA_ROOT=/data/agents/campanhas-midia \
     PYTHONUNBUFFERED=1
 
 # Checkout no Windows entrega CRLF, e com CRLF o shebang quebra dentro do
@@ -29,7 +34,7 @@ ENV VEXPUBLISH_DATABASE_PATH=/data/agents/vexpublish.db \
 # arquivo chegou ate aqui.
 RUN dos2unix /app/ops/agents/start.sh && chmod +x /app/ops/agents/start.sh
 
-EXPOSE 8785 8795 8805
+EXPOSE 8775 8785 8795 8805 8815 8825
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8785/vexpublish/v1/health || exit 1

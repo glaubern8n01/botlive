@@ -74,6 +74,68 @@ def transcrever_fala(video_path: str | Path) -> TranscricaoResultado:
         )
 
 
+@dataclass(frozen=True)
+class Fala:
+    """Um trecho falado, com o tempo em que aparece."""
+
+    inicio: float
+    fim: float
+    texto: str
+
+
+def transcrever_com_tempos(video_path: str | Path) -> list[Fala]:
+    """Mesma transcricao, mas guardando inicio e fim de cada trecho.
+
+    Existe porque `transcrever_fala` joga o tempo fora - ela so precisa do
+    texto para o guarda de nicho e para a legenda de post. Para gerar SRT o
+    tempo e justamente o que importa.
+
+    Compartilha o mesmo modelo em memoria da outra funcao: numa VPS de 4 vCPU,
+    carregar o whisper duas vezes no mesmo processo custaria caro a toa.
+
+    Nunca levanta excecao: sem fala, arquivo ruim ou modelo indisponivel
+    devolvem lista vazia, e quem chamou decide o que fazer.
+    """
+    caminho = Path(video_path)
+    if not caminho.exists():
+        return []
+    try:
+        model = _carregar_modelo()
+        segments, _ = model.transcribe(
+            str(caminho), language=MODEL_LANGUAGE, vad_filter=True, beam_size=5
+        )
+        return [
+            Fala(inicio=float(s.start or 0.0), fim=float(s.end or 0.0), texto=s.text.strip())
+            for s in segments
+            if s.text and s.text.strip()
+        ]
+    except Exception:
+        return []
+
+
+def _tempo_srt(segundos: float) -> str:
+    total = max(0.0, float(segundos))
+    horas, resto = divmod(int(total), 3600)
+    minutos, segs = divmod(resto, 60)
+    milis = int(round((total - int(total)) * 1000))
+    return f"{horas:02d}:{minutos:02d}:{segs:02d},{milis:03d}"
+
+
+def escrever_srt(falas: list, destino: str | Path) -> Path:
+    """Grava as falas em SRT. Devolve o caminho, mesmo se a lista for vazia."""
+    destino = Path(destino)
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    blocos = []
+    for indice, fala in enumerate(falas, start=1):
+        # Trecho sem duracao aparece e some no mesmo quadro: da um minimo.
+        fim = fala.fim if fala.fim > fala.inicio else fala.inicio + 1.2
+        blocos.append(
+            f"{indice}\n{_tempo_srt(fala.inicio)} --> {_tempo_srt(fim)}\n{fala.texto}\n"
+        )
+    destino.write_text("\n".join(blocos), encoding="utf-8")
+    return destino
+
+
 if __name__ == "__main__":
     import argparse
 

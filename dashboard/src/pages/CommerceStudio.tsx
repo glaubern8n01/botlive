@@ -7,7 +7,7 @@ import { ComoFunciona } from "../components/ComoFunciona";
 type Tab = "produtos" | "provas" | "criativos" | "pacotes";
 type Row = Record<string, any>;
 
-const API = import.meta.env.VITE_COMMERCE_API_URL || "http://127.0.0.1:8805";
+const API = import.meta.env.VITE_COMMERCE_API_URL ?? "http://127.0.0.1:8805";
 const tabs: [Tab, string][] = [["produtos", "Produtos"], ["provas", "Evidências e claims"], ["criativos", "Criativos"], ["pacotes", "Pacotes Live Pilot"]];
 const panel = "rounded-2xl border border-zinc-800 bg-zinc-900/75 p-4";
 const input = "min-h-11 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2";
@@ -16,9 +16,23 @@ const secondary = "min-h-10 rounded-lg border border-zinc-700 px-3 py-2";
 const ORIGENS = ["manual", "importado", "catalogo-oficial", "api-afiliado"];
 const EVIDENCIAS = ["especificacao", "pagina-oficial", "laudo", "review", "teste-proprio"];
 
-export function CommerceStudio() {
+// A mesma tela serve TikTok Shop e Shopee. O documento pede aba propria para
+// cada uma, com regras independentes - e o que muda entre elas e o escopo dos
+// dados, nao o fluxo. Duas rotas, um componente: nenhuma tela duplicada para
+// sair de sincronia depois.
+type Loja = { plataforma: string; titulo: string; chaveSessao: string };
+
+const LOJAS: Record<string, Loja> = {
+    "tiktok-shop": { plataforma: "tiktok-shop", titulo: "Commerce Studio", chaveSessao: "commerce_token" },
+    shopee: { plataforma: "shopee", titulo: "Shopee", chaveSessao: "commerce_token" },
+};
+
+export function Shopee() { return <CommerceStudio loja="shopee" />; }
+
+export function CommerceStudio({ loja = "tiktok-shop" }: { loja?: string }) {
+    const config = LOJAS[loja] || LOJAS["tiktok-shop"];
     const [tab, setTab] = useState<Tab>("produtos");
-    const [token, setToken] = useState(() => sessionStorage.getItem("commerce_token") || "");
+    const [token, setToken] = useState(() => sessionStorage.getItem(config.chaveSessao) || "");
     const [draft, setDraft] = useState("");
     const [produtos, setProdutos] = useState<Row[]>([]);
     const [selecionado, setSelecionado] = useState<Row | null>(null);
@@ -43,7 +57,7 @@ export function CommerceStudio() {
 
     async function refresh() {
         setSaude(await (await fetch(API + "/commerce/v1/health")).json());
-        setProdutos((await request("/commerce/v1/products")).items || []);
+        setProdutos((await request(`/commerce/v1/products?platform=${config.plataforma}`)).items || []);
         if (selecionado) setSelecionado(await request(`/commerce/v1/products/${selecionado.id}`));
         if (tab === "criativos") {
             setTipos((await request("/commerce/v1/creative-kinds")).items || []);
@@ -55,7 +69,7 @@ export function CommerceStudio() {
     useEffect(() => { if (token) void run(refresh); }, [token, tab]);
 
     if (!token) return <AgenteLogin
-        titulo="Commerce Studio"
+        titulo={config.titulo}
         resumo="Monta os vídeos de venda de produto (TikTok Shop e Shopee): o que pode ser dito sobre o produto, os criativos e o pacote que a live consome."
         faz={[
             "Cadastrar produto com link de afiliado e as provas do que ele faz",
@@ -73,7 +87,7 @@ export function CommerceStudio() {
             <div className="flex flex-wrap justify-between gap-3">
                 <div>
                     <p className="text-xs font-bold uppercase tracking-widest text-cyan-400">Feature flag · separado do Live Pilot</p>
-                    <h1 className="text-2xl font-bold">Commerce Studio</h1>
+                    <h1 className="text-2xl font-bold">{config.titulo}</h1>
                     <p className="text-sm text-zinc-400">TikTok Shop e Shopee. A extensão de LIVE não é alterada — ela só consome o pacote exportado.</p>
                 </div>
                 <button className={secondary} onClick={() => { sessionStorage.removeItem("commerce_token"); setToken(""); }}>Desconectar</button>
@@ -102,7 +116,7 @@ export function CommerceStudio() {
         {error && <div role="alert" className="rounded-lg border border-red-700 bg-red-950/40 p-3">{error}</div>}
         {notice && <div role="status" className="rounded-lg border border-emerald-700 bg-emerald-950/40 p-3">{notice}</div>}
 
-        {tab === "produtos" && <Produtos rows={produtos} request={request} run={run} refresh={refresh} escolher={async (x: Row) => run(async () => setSelecionado(await request(`/commerce/v1/products/${x.id}`)))} />}
+        {tab === "produtos" && <Produtos loja={config.plataforma} rows={produtos} request={request} run={run} refresh={refresh} escolher={async (x: Row) => run(async () => setSelecionado(await request(`/commerce/v1/products/${x.id}`)))} />}
         {tab === "provas" && <Provas produto={selecionado} request={request} run={run} refresh={refresh} />}
         {tab === "criativos" && <Criativos rows={criativos} tipos={tipos} produto={selecionado} request={request} run={run} refresh={refresh} aviso={setNotice} />}
         {tab === "pacotes" && <Pacotes rows={pacotes} produto={selecionado} request={request} run={run} refresh={refresh} aviso={setNotice} />}
@@ -111,8 +125,8 @@ export function CommerceStudio() {
 
 type Acoes = { request: (p: string, i?: RequestInit) => Promise<any>; run: (w: () => Promise<void>) => Promise<void>; refresh: () => Promise<void> };
 
-function Produtos({ rows, request, run, refresh, escolher }: Acoes & { rows: Row[]; escolher: (x: Row) => void }) {
-    const vazio = { platform: "tiktok-shop", title: "", source: "manual", brand: "", affiliate_url: "", price: 0, target_audience: "", notes: "", features: [] as string[] };
+function Produtos({ rows, request, run, refresh, escolher, loja }: Acoes & { rows: Row[]; escolher: (x: Row) => void; loja: string }) {
+    const vazio = { platform: loja, title: "", source: "manual", brand: "", affiliate_url: "", price: 0, target_audience: "", notes: "", features: [] as string[] };
     const [form, setForm] = useState(vazio);
     return <section className={`${panel} space-y-4`}>
         <h2 className="text-lg font-bold">Produtos</h2>

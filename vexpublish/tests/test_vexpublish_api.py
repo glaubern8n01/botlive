@@ -52,7 +52,7 @@ def test_health_e_publico_e_mostra_o_que_esta_liberado(cliente):
         "youtube": False,
         "kwai": False,
     }
-    assert dados["adapters"]["kwai"] == "NAO VALIDADO"
+    assert dados["adapters"]["kwai"] == "NAO"  # investigado em 22/08, sem rota
 
 
 def test_modulo_desligado_esconde_rotas(cliente, monkeypatch):

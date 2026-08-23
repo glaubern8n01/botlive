@@ -163,4 +163,4 @@ def test_resumo_agrega_status_contas_e_adapters(job):
     dados = jobs.resumo()
     assert dados["por_status"]["draft"] == 1
     assert "tiktok" in dados["contas"]
-    assert dados["adapters"]["kwai"] == "NAO VALIDADO"
+    assert dados["adapters"]["kwai"] == "NAO"  # investigado em 22/08, sem rota

@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router';
-import { LayoutDashboard, Settings2, Users, History, Scissors, LogOut, ShoppingBag, BadgeDollarSign, Radio, FolderInput, Store, Scissors as Tesoura, Music2, UserCog, KeyRound, ListOrdered, BarChart3 } from 'lucide-react';
+import { LayoutDashboard, Settings2, Users, History, Scissors, LogOut, ShoppingBag, BadgeDollarSign, Radio, FolderInput, Store, Scissors as Tesoura, Music2, UserCog, KeyRound, ListOrdered, BarChart3, Layers } from 'lucide-react';
 
 export function Layout() {
   const handleLogout = () => {
@@ -10,12 +10,19 @@ export function Layout() {
   const navItems = [
     { to: "/", icon: LayoutDashboard, label: "Painel" },
     { to: "/configuracao", icon: Settings2, label: "Configuração" },
-    { to: "/canais", icon: Users, label: "Canais" },
+    // "Canais" aqui sao os canais da Twitch que o vigia observa. Com a aba de
+    // publicacao ligada, duas coisas diferentes competiam pela mesma palavra -
+    // e a confusao ja custou tempo. O rotulo diz de qual dos dois se trata.
+    { to: "/canais", icon: Users, label: "Canais vigiados" },
     ...(import.meta.env.VITE_SHOP_LIVE_ENABLED === "true" ? [{ to: "/shop-live", icon: ShoppingBag, label: "Shop LIVE" }] : []),
     ...(import.meta.env.VITE_CAMPAIGNS_ENABLED === "true" ? [{ to: "/campanhas-cortes", icon: BadgeDollarSign, label: "Campanhas de Cortes" }] : []),
-    ...(import.meta.env.VITE_MULTICHANNEL_ENABLED === "true" ? [{ to: "/canais-publicacao", icon: Radio, label: "Canais de publicação" }] : []),
+    ...(import.meta.env.VITE_MULTICHANNEL_ENABLED === "true" ? [{ to: "/canais-publicacao", icon: Radio, label: "Publicação" }] : []),
     ...(import.meta.env.VITE_IMPORT_ENABLED === "true" ? [{ to: "/importar-adaptar", icon: FolderInput, label: "Importar / Adaptar" }] : []),
     ...(import.meta.env.VITE_COMMERCE_ENABLED === "true" ? [{ to: "/commerce-studio", icon: Store, label: "Commerce Studio" }] : []),
+    // Shopee tem aba própria, como o documento pede: mesma infraestrutura,
+    // dados e regras separados por plataforma.
+    ...(import.meta.env.VITE_COMMERCE_ENABLED === "true" ? [{ to: "/shopee", icon: ShoppingBag, label: "Shopee" }] : []),
+    ...(import.meta.env.VITE_MASS_ENABLED === "true" ? [{ to: "/producao-em-massa", icon: Layers, label: "Produção em Massa" }] : []),
     { to: "/kwai-cut", icon: Tesoura, label: "Kwai CUT" },
     { to: "/tiktok", icon: Music2, label: "TikTok" },
     { to: "/perfis", icon: UserCog, label: "Perfis" },

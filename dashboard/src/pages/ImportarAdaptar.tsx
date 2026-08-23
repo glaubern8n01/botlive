@@ -7,7 +7,7 @@ import { ComoFunciona } from "../components/ComoFunciona";
 type Tab = "fontes" | "biblioteca" | "adaptacao" | "auditoria";
 type Row = Record<string, any>;
 
-const API = import.meta.env.VITE_IMPORT_API_URL || "http://127.0.0.1:8795";
+const API = import.meta.env.VITE_IMPORT_API_URL ?? "http://127.0.0.1:8795";
 const tabs: [Tab, string][] = [["fontes", "Fontes autorizadas"], ["biblioteca", "Biblioteca"], ["adaptacao", "Adaptação e fila"], ["auditoria", "Auditoria"]];
 const panel = "rounded-2xl border border-zinc-800 bg-zinc-900/75 p-4";
 const input = "min-h-11 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2";
@@ -162,11 +162,12 @@ function Biblioteca({ rows, fontes, request, run, refresh, aviso }: Acoes & { ro
 }
 
 function Adaptacao({ rows, itens, request, run, refresh, aviso }: Acoes & { rows: Row[]; itens: Row[]; aviso: (x: string) => void }) {
-    const vazio = { item_id: "", channel_id: "", plan: { layout: "vertical-fit", title: "", description: "", brand: "", cta: "" } };
+    const vazio = { item_id: "", channel_id: "", plan: { layout: "vertical-fit", title: "", description: "", brand: "", cta: "", subtitles: false, intro_path: "", outro_path: "" } };
     const [form, setForm] = useState<any>(vazio);
     return <section className={`${panel} space-y-4`}>
         <h2 className="text-lg font-bold">Adaptação e fila por canal</h2>
         <p className="text-sm text-zinc-400">O crédito da origem é mantido — o plano não aceita opção de remover autoria ou proteção.</p>
+        <p className="text-xs text-zinc-500">A legenda sai da fala do próprio vídeo (Whisper local, na CPU) e o .srt fica ao lado do arquivo. Intro e outro são reescalados para o formato do vídeo antes de colar. Se o acabamento falhar, o vídeo adaptado continua válido e o motivo aparece no card.</p>
         <form onSubmit={(e) => { e.preventDefault(); void run(async () => { await request("/import/v1/adaptations", { method: "POST", body: JSON.stringify(form) }); setForm(vazio); await refresh(); }); }} className="grid gap-2 md:grid-cols-3">
             <select className={input} value={form.item_id} onChange={e => setForm({ ...form, item_id: e.target.value })} required>
                 <option value="">Item da biblioteca</option>{itens.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
@@ -178,8 +179,15 @@ function Adaptacao({ rows, itens, request, run, refresh, aviso }: Acoes & { rows
             <input className={input} placeholder="Título / tarja" value={form.plan.title} onChange={e => setForm({ ...form, plan: { ...form.plan, title: e.target.value } })} />
             <input className={input} placeholder="Identidade / marca" value={form.plan.brand} onChange={e => setForm({ ...form, plan: { ...form.plan, brand: e.target.value } })} />
             <input className={input} placeholder="CTA" value={form.plan.cta} onChange={e => setForm({ ...form, plan: { ...form.plan, cta: e.target.value } })} />
+            <input className={input} placeholder="Caminho da intro (opcional)" value={form.plan.intro_path} onChange={e => setForm({ ...form, plan: { ...form.plan, intro_path: e.target.value } })} />
+            <input className={input} placeholder="Caminho do outro (opcional)" value={form.plan.outro_path} onChange={e => setForm({ ...form, plan: { ...form.plan, outro_path: e.target.value } })} />
+            <label className="flex items-center gap-2 text-sm text-zinc-300">
+                <input type="checkbox" checked={form.plan.subtitles} onChange={e => setForm({ ...form, plan: { ...form.plan, subtitles: e.target.checked } })} />
+                Queimar legenda automática
+            </label>
             <button className={button}>Planejar adaptação</button>
         </form>
+        <FilaDeRender request={request} run={run} aviso={aviso} />
         {!rows.length && <p className="rounded-xl border border-dashed border-zinc-700 p-6 text-center text-zinc-400">Nenhuma adaptação planejada.</p>}
         <div className="grid gap-3 md:grid-cols-2">
             {rows.map(x => <article key={x.id} className="rounded-xl border border-zinc-800 p-3">
@@ -187,12 +195,39 @@ function Adaptacao({ rows, itens, request, run, refresh, aviso }: Acoes & { rows
                 <p className="text-sm text-zinc-400">{x.width || "?"}×{x.height || "?"} · canal {x.channel_id || "—"}</p>
                 {x.error && <p className="text-xs text-red-300">{x.error}</p>}
                 <div className="mt-2 flex flex-wrap gap-3">
-                    {x.status === "planned" && <button className="underline" onClick={() => run(async () => { await request(`/import/v1/adaptations/${x.id}/render`, { method: "POST" }); await refresh(); })}>Renderizar</button>}
+                    {["planned", "failed"].includes(x.status) && <button className="underline" onClick={() => run(async () => { await request(`/import/v1/adaptations/${x.id}/render`, { method: "POST" }); aviso("Na fila de render. Aperte 'Rodar fila' para processar."); await refresh(); })}>Renderizar</button>}
+                    {x.status === "render_queued" && <span className="text-xs text-amber-300">na fila de render</span>}
                     {["rendered", "queued"].includes(x.status) && <button className="underline" onClick={() => run(async () => { const out = await request(`/import/v1/adaptations/${x.id}/queue`, { method: "POST", body: JSON.stringify({ caption: "" }) }); aviso(`${out.total} job(s) em draft no VexPublish, aguardando aprovação`); await refresh(); })}>Enviar para a fila do canal</button>}
                 </div>
             </article>)}
         </div>
     </section>;
+}
+
+function FilaDeRender({ request, run, aviso }: { request: any; run: any; aviso: (x: string) => void }) {
+    const [fila, setFila] = useState<Row | null>(null);
+    async function carregar() { setFila(await request("/import/v1/jobs?limit=50")); }
+    useEffect(() => { void run(carregar); }, []);
+
+    const resumo = fila?.resumo || {};
+    const pendentes = (resumo.queued || 0) + (resumo.running || 0);
+    return <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm">
+                Fila de render: <strong className="text-cyan-400">{pendentes}</strong> pendente(s)
+                {resumo.done ? ` · ${resumo.done} pronto(s)` : ""}
+                {resumo.failed ? ` · ${resumo.failed} falhou` : ""}
+            </p>
+            <div className="flex gap-2">
+                <button className="min-h-10 rounded-lg border border-zinc-700 px-3" onClick={() => run(carregar)}>Atualizar</button>
+                <button className="min-h-10 rounded-lg bg-cyan-500 px-4 font-bold text-zinc-950" onClick={() => run(async () => {
+                    const r = await request("/import/v1/jobs/run?maximo=3", { method: "POST" });
+                    aviso(`${r.processados} render(s) processado(s)`); await carregar();
+                })}>Rodar fila</button>
+            </div>
+        </div>
+        <p className="mt-1 text-xs text-zinc-500">O render sai da requisição: FFmpeg em lote longo estourava o tempo do navegador. Item que falha volta para a fila com espera crescente e desiste na terceira tentativa.</p>
+    </div>;
 }
 
 function Auditoria({ rows }: { rows: Row[] }) {

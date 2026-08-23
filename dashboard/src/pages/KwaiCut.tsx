@@ -51,6 +51,15 @@ type Account = {
   status: string;
 };
 
+type Previa = { registros: number; arquivos: number; bytes: number };
+type Relatorio = { registros: number; sucesso: number; arquivos: number; bytes: number; falhas: { job_id: string; titulo: string; erro: string }[]; erro?: string };
+
+function formatarBytes(bytes: number) {
+  if (!bytes) return '0 MB';
+  const giga = bytes / 1024 ** 3;
+  return giga >= 1 ? `${giga.toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
+}
+
 const emptyMetrics: Metrics = { daily_minimum: 30, daily_target: 30, daily_maximum: 100, generated: 0, approved: 0, rejected: 0, queued: 0, ready: 0, published: 0 };
 const emptyActivity: Activity = { name: '', min_duration_seconds: null, max_duration_seconds: null, required_hashtags: [], required_terms: [], category: 'football', minimum_quantity: null, caption_required: true, cover_required: true, additional_rules: '', confirmation_status: 'unconfirmed', active: true };
 
@@ -86,8 +95,25 @@ export function KwaiCut() {
       supabase.from('football_discovered_videos').select('discovered_id,source_name,source_url,title,duration,source_published_at,status,discard_reason,created_at').eq('profile_id', PROFILE).order('created_at', { ascending: false }).limit(100),
       supabase.from('football_source_prospects').select('*').eq('profile_id', PROFILE).order('created_at', { ascending: false }).limit(100),
     ]);
-    const firstError = [metricResult.error, sourceResult.error, eventResult.error, jobResult.error, activityResult.error, accountResult.error, checkResult.error, discoveredResult.error, prospectResult.error].find(Boolean);
-    if (firstError) setError('Migration do Kwai CUT ainda não aplicada ou leitura indisponível.');
+    // Uma leitura lenta nao pode fazer a pagina inteira dizer que a migration
+    // nao foi aplicada. Foi o que aconteceu: football_source_checks passou de
+    // 900 mil linhas, estourou o timeout do banco (57014) e a tela acusou
+    // migration ausente enquanto as outras oito tabelas respondiam normalmente.
+    const leituras: [string, { code?: string; message?: string } | null][] = [
+      ['métricas', metricResult.error], ['fontes', sourceResult.error],
+      ['eventos', eventResult.error], ['vídeos', jobResult.error],
+      ['atividade', activityResult.error], ['conta', accountResult.error],
+      ['verificações de fonte', checkResult.error], ['descobertas', discoveredResult.error],
+      ['prospects', prospectResult.error],
+    ];
+    const falhas = leituras.filter(([, erro]) => Boolean(erro));
+    if (falhas.length) {
+      const nomes = falhas.map(([nome]) => nome).join(', ');
+      const soTimeout = falhas.every(([, erro]) => erro?.code === '57014');
+      setError(soTimeout
+        ? `Leitura de ${nomes} demorou demais e o banco cancelou (falta índice). O resto da página está correto.`
+        : `Leitura indisponível: ${nomes}. Verifique migration e permissões dessas tabelas.`);
+    }
     if (metricResult.data) setMetrics(metricResult.data as Metrics);
     setSources((sourceResult.data || []) as Source[]);
     setEvents((eventResult.data || []) as EventRow[]);
@@ -198,9 +224,12 @@ export function KwaiCut() {
       <Metric title="Gerados hoje" value={metrics.generated} />
       <Metric title="Aprovados" value={metrics.approved} good />
       <Metric title="Na fila" value={metrics.queued} />
-      <Metric title="Prontos para postar" value={metrics.ready} good />
-      <Metric title="Publicados" value={metrics.published} />
-      <Metric title="Rejeitados" value={metrics.rejected} warn />
+      {/* Estes tres contam SO o que foi criado hoje - e a view kwai_cut_daily_metrics,
+          com `created_at >= current_date`. Sem o "hoje" no rotulo, um lote de
+          ontem esperando encerramento aparecia como zero e parecia nao existir. */}
+      <Metric title="Prontos para postar (hoje)" value={metrics.ready} good />
+      <Metric title="Publicados (hoje)" value={metrics.published} />
+      <Metric title="Rejeitados (hoje)" value={metrics.rejected} warn />
       <Metric title="Déficit da meta" value={deficit} warn={deficit > 0} />
       <Metric title="Fontes descobertas" value={prospects.length} />
       <Metric title="Aguardando revisão" value={reviewRequired} warn={reviewRequired > 0} />
@@ -216,7 +245,7 @@ export function KwaiCut() {
     <div className="flex gap-1 overflow-x-auto border-b border-zinc-800">{TABS.map((item) => <button key={item} onClick={() => setTab(item)} className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === item ? 'border-orange-400 text-white' : 'border-transparent text-zinc-400'}`}>{item}</button>)}</div>
     {loading ? <div className="py-16 text-center text-zinc-500">Carregando dados reais...</div> : <>
       {tab === 'Visão geral' && <Overview metrics={metrics} sources={sources} events={events} jobs={jobs} deficit={deficit} />}
-      {tab === 'Publicar pelo celular' && <ManualPublishing jobs={jobs} activity={activity} markPublished={markPublished} busy={busy} reviewRequired={reviewRequired} />}
+      {tab === 'Publicar pelo celular' && <ManualPublishing jobs={jobs} activity={activity} markPublished={markPublished} reload={load} busy={busy} reviewRequired={reviewRequired} />}
       {tab === 'Histórico' && <Jobs jobs={jobs.filter((job) => ['published','published_manual','rejected','cancelled'].includes(job.status))} cancel={cancelJob} busy={busy} videos />}
       {tab === 'Fontes' && <div className="space-y-4"><ProspectReview prospects={prospects} value={bulkLinks} setValue={setBulkLinks} add={addBulkLinks} busy={busy} reload={load} setError={setError} /><Sources sources={sources} form={sourceForm} setForm={setSourceForm} add={addSource} toggle={toggleSource} busy={busy} /></div>}
       {tab === 'Diagnóstico' && <Diagnostics checks={checks} discovered={discovered} sources={sources} />}
@@ -345,14 +374,42 @@ function AccountPanel({ account }: { account: Account | null }) {
   </div>;
 }
 
-function ManualPublishing({ jobs, activity, markPublished, busy, reviewRequired }: {
+function ManualPublishing({ jobs, activity, markPublished, reload, busy, reviewRequired }: {
   jobs: JobRow[];
   activity: Activity;
   markPublished: (jobId: string, assetId: string, externalId: string, publishedAt: string) => Promise<boolean>;
+  reload: () => Promise<void>;
   busy: boolean;
   reviewRequired: number;
 }) {
+  const [principalConfirmed, setPrincipalConfirmed] = useState(false);
+  const [cloneConfirmed, setCloneConfirmed] = useState(false);
+  const [previa, setPrevia] = useState<Previa | null>(null);
+  const [relatorio, setRelatorio] = useState<Relatorio | null>(null);
+  const [fechando, setFechando] = useState(false);
   const readyJobs = jobs.filter((job) => job.status === 'ready' && job.media_assets?.validation_status === 'valid');
+
+  // A previa vem do banco, nao da tela: a pagina carrega so os 100 jobs mais
+  // recentes e o lote pronto pode ser maior que isso.
+  const carregarPrevia = useCallback(async () => {
+    const resposta = await fetch('/api/kwai/batch-close');
+    if (resposta.ok) setPrevia(await resposta.json());
+  }, []);
+  useEffect(() => { void carregarPrevia(); }, [carregarPrevia]);
+
+  const fecharLote = async (jobIds?: string[]) => {
+    if (fechando) return;
+    setFechando(true);
+    const resposta = await fetch('/api/kwai/batch-close', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm_principal: true, confirm_clone: true, job_ids: jobIds || [] }),
+    });
+    const dados = await resposta.json().catch(() => ({}));
+    setRelatorio(resposta.ok ? dados : { registros: 0, sucesso: 0, falhas: [], arquivos: 0, bytes: 0, erro: dados.error || 'Falha ao encerrar o lote.' });
+    await carregarPrevia();
+    await reload();
+    setFechando(false);
+  };
   return <div className="space-y-5">
     <details className="rounded-xl border border-orange-800 bg-orange-950/20 p-4">
       <summary className="flex cursor-pointer items-center gap-2 font-semibold"><HelpCircle className="h-5 w-5" />Como publicar</summary>
@@ -364,6 +421,42 @@ function ManualPublishing({ jobs, activity, markPublished, busy, reviewRequired 
       </ol>
     </details>
     <div className="flex items-center gap-2 text-sm text-zinc-400"><Smartphone className="h-5 w-5 text-orange-400" />Arquivos protegidos pelo mesmo acesso do dashboard. Nenhuma sessão do Kwai é usada.</div>
+    {previa && previa.registros > 0 && <Card className="border-amber-700">
+      <CardHeader><CardTitle>Finalizar lote nas duas contas</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid gap-2 sm:grid-cols-3">
+          <div className="rounded-lg border border-zinc-800 p-3"><p className="text-xs text-zinc-400">Registros a marcar</p><p className="text-2xl font-bold text-amber-300">{previa.registros}</p></div>
+          <div className="rounded-lg border border-zinc-800 p-3"><p className="text-xs text-zinc-400">Arquivos a apagar</p><p className="text-2xl font-bold text-amber-300">{previa.arquivos}</p></div>
+          <div className="rounded-lg border border-zinc-800 p-3"><p className="text-xs text-zinc-400">Espaço liberado</p><p className="text-2xl font-bold text-amber-300">{formatarBytes(previa.bytes)}</p></div>
+        </div>
+        <p className="text-sm text-amber-200">Use somente depois que os {previa.registros} vídeos estiverem publicados no Kwai principal e no Kwai clone. Marcar registra a publicação e remove os arquivos da VPS para receber o próximo lote.</p>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={principalConfirmed} onChange={(event) => setPrincipalConfirmed(event.target.checked)} />Publiquei todos no Kwai principal</label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={cloneConfirmed} onChange={(event) => setCloneConfirmed(event.target.checked)} />Publiquei todos no Kwai clone</label>
+        <Button className="w-full" disabled={busy || fechando || !principalConfirmed || !cloneConfirmed} onClick={() => {
+          if (window.confirm(`Confirmar ${previa.registros} vídeos? Eles serão marcados como publicados e ${previa.arquivos} arquivos (${formatarBytes(previa.bytes)}) serão apagados da VPS.`)) {
+            void fecharLote();
+          }
+        }}><CheckCircle2 className="mr-2 h-4 w-4" />{fechando ? 'Encerrando o lote...' : 'Marcar lote como publicado e liberar espaço'}</Button>
+        <p className="text-xs text-zinc-500">Nada é apagado até esta confirmação. Cada vídeo é registrado individualmente — se algum falhar, os outros seguem e o que falhou volta identificado aqui embaixo.</p>
+      </CardContent>
+    </Card>}
+
+    {relatorio && <Card className={relatorio.falhas.length || relatorio.erro ? 'border-red-800' : 'border-emerald-800'}>
+      <CardHeader><CardTitle>Resultado do encerramento</CardTitle></CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        {relatorio.erro && <p className="text-red-300">{relatorio.erro}</p>}
+        <p><strong className="text-emerald-400">{relatorio.sucesso}</strong> de {relatorio.registros} marcados como publicados · {relatorio.arquivos} arquivos apagados · {formatarBytes(relatorio.bytes)} liberados</p>
+        {relatorio.falhas.length > 0 && <>
+          <p className="text-red-300">{relatorio.falhas.length} não passaram:</p>
+          <ul className="max-h-40 space-y-1 overflow-auto text-xs text-zinc-400">
+            {relatorio.falhas.map((falha) => <li key={falha.job_id}>{falha.titulo || falha.job_id.slice(0, 8)} — {falha.erro}</li>)}
+          </ul>
+          <Button className="w-full" disabled={fechando} onClick={() => void fecharLote(relatorio.falhas.map((falha) => falha.job_id))}>
+            <RefreshCw className="mr-2 h-4 w-4" />Tentar de novo só os {relatorio.falhas.length} que falharam
+          </Button>
+        </>}
+      </CardContent>
+    </Card>}
     {readyJobs.length ? <div className="grid gap-5 xl:grid-cols-2">
       {readyJobs.map((job, index) => <div key={job.job_id}><ManualVideoCard job={job} index={index} activity={activity} markPublished={markPublished} busy={busy} /></div>)}
     </div> : <Empty icon={<Smartphone />} title="Nenhum vídeo pronto" text={`Existem ${reviewRequired} fontes aguardando revisão. Os vídeos aparecerão após autorização, geração e validação em prepare_only.`} />}
@@ -384,17 +477,22 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
   const slug = String(job.content_events?.event_type || 'lance').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'lance';
   const filename = String(job.metadata?.download_filename || `kwai-futebol-${slug}-${date}-${String(index + 1).padStart(3, '0')}.mp4`);
   const coverName = filename.replace(/\.mp4$/, '-capa.jpg');
-  const videoUrl = `/api/assets/${job.asset_id}/video?name=${encodeURIComponent(filename)}`;
-  const coverUrl = `/api/assets/${job.asset_id}/cover?name=${encodeURIComponent(coverName)}`;
+  // Troca a chave de cache. Uma implantação antiga respondeu HTML nesta rota e
+  // alguns navegadores continuaram usando essa resposta no lugar do MP4.
+  const cacheBuster = 'v=3';
+  const videoUrl = `/api/assets/${job.asset_id}/video?${cacheBuster}&name=${encodeURIComponent(filename)}`;
+  const coverUrl = `/api/assets/${job.asset_id}/cover?${cacheBuster}&name=${encodeURIComponent(coverName)}`;
   const allText = composePublicationText(description, credits, hashtags);
   const gates = (job.metadata?.gates || {}) as Record<string, unknown>;
   const published = ['published', 'published_manual'].includes(job.status);
   const variant = job.editorial_variants?.variant_signature || 'CUT vertical';
   const event = job.content_events?.event_type || 'Evento de futebol';
+  const sentAt = created.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' });
 
   return <Card className={published ? 'border-emerald-800' : 'border-zinc-700'}>
-    <div className="aspect-video overflow-hidden rounded-t-xl bg-black">
-      <video className="h-full w-full object-contain" controls preload="metadata" poster={job.cover_path ? coverUrl : undefined}>
+    <div className="mx-auto overflow-hidden rounded-t-xl bg-black"
+      style={{ aspectRatio: `${job.media_assets?.width || 9} / ${job.media_assets?.height || 16}`, maxHeight: '70vh' }}>
+      <video className="h-full w-full object-contain" controls playsInline preload="metadata" poster={job.cover_path ? coverUrl : undefined}>
         <source src={videoUrl} type="video/mp4" />
       </video>
     </div>
@@ -407,10 +505,11 @@ function ManualVideoCard({ job, index, activity, markPublished, busy }: {
         <span>Formato: <b className="text-zinc-200">{job.media_assets?.width}×{job.media_assets?.height}</b></span>
         <span>Evento: <b className="text-zinc-200">{event}</b></span>
         <span>Variante: <b className="text-zinc-200">{variant}</b></span>
+        <span className="col-span-2">Enviado ao painel: <b className="text-zinc-200">{sentAt}</b></span>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
-        <a className="inline-flex h-9 items-center justify-center rounded-md bg-zinc-50 px-3 text-sm font-medium text-zinc-900" href={`${videoUrl}&download=1`} download={filename}><Download className="mr-2 h-4 w-4" />Baixar vídeo</a>
-        <a className={`inline-flex h-9 items-center justify-center rounded-md border border-zinc-700 px-3 text-sm ${job.cover_path ? '' : 'pointer-events-none opacity-40'}`} href={`${coverUrl}&download=1`} download={coverName}><Download className="mr-2 h-4 w-4" />Baixar capa</a>
+        <a className="inline-flex h-11 items-center justify-center rounded-md bg-zinc-50 px-3 text-sm font-medium text-zinc-900" href={`${videoUrl}&download=1`} download={filename}><Download className="mr-2 h-4 w-4" />Baixar vídeo</a>
+        <a className={`inline-flex h-11 items-center justify-center rounded-md border border-zinc-700 px-3 text-sm ${job.cover_path ? '' : 'pointer-events-none opacity-40'}`} href={`${coverUrl}&download=1`} download={coverName}><Download className="mr-2 h-4 w-4" />Baixar capa</a>
         <CopyButton label="Copiar descrição" value={description} />
         <CopyButton label="Copiar hashtags" value={hashtags} />
         <CopyButton label="Copiar créditos" value={credits} />

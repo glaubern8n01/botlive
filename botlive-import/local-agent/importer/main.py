@@ -16,8 +16,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from . import bridge, downloader, library, sources, variacao
+from . import fila
 from .adapt import executar, planejar, validar_plano
-from .store import ImportError_, auditar, listar, migrar, obter
+from .store import ImportError_, agora, atualizar, auditar, listar, migrar, obter
 
 
 PAPEIS = {"admin": {"*"}, "operator": {"read", "write", "render", "queue"}, "reviewer": {"read"}}
@@ -265,11 +266,44 @@ def validar_apenas(value: PlanIn, user=Depends(exigir("read"))):
 
 
 @app.post("/import/v1/adaptations/{item_id}/render")
-def renderizar(item_id: str, user=Depends(exigir("render"))):
+def renderizar(item_id: str, sincrono: bool = False, user=Depends(exigir("render"))):
+    """Enfileira o render em vez de renderizar aqui.
+
+    FFmpeg dentro da requisicao segurava a conexao ate o fim do trabalho: em
+    material longo isso estoura o timeout do navegador e do proxy, e o operador
+    fica sem saber se o video saiu. Agora a rota responde na hora e o worker
+    trabalha depois.
+
+    `sincrono=true` mantem o comportamento antigo, para teste e para material
+    curto em maquina local.
+    """
+    adaptacao = obter("import_adaptations", item_id)
+    if not adaptacao:
+        raise HTTPException(404, "Adaptacao inexistente")
+    if adaptacao["status"] == "rendered":
+        return {"adaptation": adaptacao, "job": None, "ja_estava_pronta": True}
     try:
-        return executar(item_id)
+        if sincrono:
+            return {"adaptation": executar(item_id), "job": None}
+        job = fila.enfileirar("render", item_id)
+        # "render_queued" e nao "queued": para a adaptacao, "queued" ja significa
+        # ENVIADA AO CANAL. Repetir a palavra faria a tela oferecer publicacao de
+        # um video que ainda nem foi renderizado.
+        atualizar("import_adaptations", item_id, {"status": "render_queued", "updated_at": agora()})
+        return {"adaptation": obter("import_adaptations", item_id), "job": job}
     except ImportError_ as exc:
         raise _erro(exc)
+
+
+@app.get("/import/v1/jobs", dependencies=[Depends(exigir("read"))])
+def listar_jobs(limit: int = Query(200, ge=1, le=1000)):
+    return fila.fila(limit)
+
+
+@app.post("/import/v1/jobs/run")
+def rodar_jobs(maximo: int = Query(3, ge=1, le=20), user=Depends(exigir("render"))):
+    """Processa a fila. Um item que falha nao derruba os outros."""
+    return fila.rodar(maximo)
 
 
 @app.post("/import/v1/adaptations/{item_id}/queue")

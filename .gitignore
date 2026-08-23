@@ -76,3 +76,6 @@ D:/robo-cortes-dark/fila_local.jsonl
 backups/
 *.bak
 .agents/
+
+# Sessao local do Claude Code (guarda copia de worktree inteira - nao vai para o repo)
+.claude/

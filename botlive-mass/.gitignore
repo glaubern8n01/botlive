@@ -1,0 +1,4 @@
+# Saida do empacotamento Windows - artefato de build nao vai para o repo.
+dist/
+build/
+desktop/painel/

@@ -326,6 +326,36 @@ def _upload(video_path: Path, metadados: dict, conta: str) -> dict:
     return {"video_id": video_id, "url": url}
 
 
+def _guarda_de_nicho(registro: dict) -> Optional[str]:
+    """Motivo para NAO postar, ou None se o corte pode subir.
+
+    Ponto unico: todo post do YouTube passa por postar_corte_registro, e o
+    Instagram so entra depois de aprovacao manual no YouTube. Barrar aqui
+    barra os dois.
+
+    Existe por causa de 21/08/2026: dois cortes do bahiaqz subiram com
+    conteudo de TV (futebol e audio do Rio Shore) e a Paramount bloqueou os
+    dois por Content ID. O filtro de video nao viu problema — ele mede
+    movimento e audio, nao sabe o que esta na tela. A fala sabe.
+
+    Desligavel com BOTLIVE_GUARDA_NICHO=0. Medido em 188 transcricoes reais:
+    barra 0,5% dos cortes, sem nenhum falso-positivo.
+    """
+    if os.getenv("BOTLIVE_GUARDA_NICHO", "1").strip().lower() in {"0", "false", "nao", "no"}:
+        return None
+    try:
+        from nicho_guard import avaliar_transcricao
+    except ImportError:
+        return None  # guarda ausente nunca pode derrubar a postagem
+    resultado = avaliar_transcricao(
+        registro.get("transcricao") or "",
+        nicho=str(registro.get("nicho") or "gta"),
+    )
+    if resultado.veredito == "fora_do_nicho":
+        return f"guarda de nicho: {resultado.motivo}"
+    return None
+
+
 def postar_corte_registro(registro: dict, config) -> dict:
     """Contrato do plugin (ver social_publisher): posta horizontal + vertical.
 
@@ -333,6 +363,16 @@ def postar_corte_registro(registro: dict, config) -> dict:
     resultado ou erro. Horizontal e vertical vao para o MESMO canal (config.conta)
     nesta etapa; separar por destino e evolucao futura do SocialConfig.
     """
+    bloqueio = _guarda_de_nicho(registro)
+    if bloqueio:
+        print(f"[yt] POST BARRADO — {bloqueio}")
+        return {
+            "erro": None,  # nao e falha do upload: e recusa deliberada
+            "bloqueado_por_nicho": True,
+            "motivo": bloqueio,
+            **{destino: {"pulado": bloqueio} for destino in DESTINOS},
+        }
+
     resultado: dict = {"erro": None}
     for destino in DESTINOS:
         video_path = _video_path(registro, destino)
