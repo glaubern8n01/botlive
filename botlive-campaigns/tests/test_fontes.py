@@ -155,3 +155,26 @@ class FonteDaCampanhaTests(unittest.TestCase):
         detects = store.rows("campaign_jobs", 10, 0, "kind=?", ("detect",))
         self.assertEqual(1, len(detects))
         self.assertEqual(material["id"], detects[0]["entity_id"])
+
+    def test_falha_do_ytdlp_nao_passa_como_nada_novo(self):
+        """O bug que custou uma investigação: canal inexistente virava silêncio."""
+        fonte = self._fonte()
+        erro = mock.Mock(returncode=1, stdout="",
+                         stderr="WARNING: algo\nERROR: [youtube:tab] This channel does not exist.")
+        with mock.patch.object(fontes, "comando_ytdlp", return_value=["yt-dlp"]), \
+             mock.patch("subprocess.run", return_value=erro):
+            resultado = fontes.buscar(fonte["id"])
+        self.assertEqual([], resultado["materiais"])
+        self.assertIn("falha ao listar", resultado["motivo"])
+        atual = store.get("campaign_sources", fonte["id"])
+        self.assertIn("does not exist", atual["last_error"])
+
+    def test_lista_vazia_sem_erro_continua_sendo_nada_novo(self):
+        """Canal que existe e não tem vídeo novo não é erro."""
+        fonte = self._fonte()
+        vazio = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(fontes, "comando_ytdlp", return_value=["yt-dlp"]), \
+             mock.patch("subprocess.run", return_value=vazio):
+            resultado = fontes.buscar(fonte["id"])
+        self.assertIn("nada novo", resultado["motivo"])
+        self.assertEqual("", store.get("campaign_sources", fonte["id"])["last_error"])

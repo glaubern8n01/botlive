@@ -137,7 +137,15 @@ def listar_disponiveis(fonte: dict, limite: int = 5) -> list:
             "url": dado.get("url") or dado.get("webpage_url") or "",
             "duracao": dado.get("duration"),
         })
-    return [x for x in achados if x["video_id"]]
+    achados = [x for x in achados if x["video_id"]]
+    # Sem isto, canal que nao existe, video removido ou bloqueio de IP voltavam
+    # como lista vazia - e a fonte era marcada "nada novo", escondendo a falha.
+    # Custou uma investigacao inteira: o erro real era um ID digitado errado.
+    if not achados and processo.returncode != 0:
+        motivo = (processo.stderr or "").strip().splitlines()
+        detalhe = next((x for x in reversed(motivo) if x.startswith("ERROR")), "")
+        raise RuntimeError(detalhe[:300] or f"yt-dlp saiu com codigo {processo.returncode}")
+    return achados
 
 
 def buscar(source_id: str, limite: int = POR_RODADA) -> dict:
