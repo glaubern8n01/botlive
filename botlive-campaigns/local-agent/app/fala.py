@@ -68,7 +68,11 @@ def pontuar_janela(falas: list, inicio_indice: int, janela_min: float,
     limite = abertura.inicio + janela_max
     dentro = []
     for fala in falas[inicio_indice:]:
-        if fala.inicio >= limite:
+        # Entra so a fala que TERMINA dentro do teto. Testar pelo inicio deixava
+        # um trecho longo estourar a janela inteira: no primeiro material real,
+        # um teto de 60s virou corte de 146s porque a ultima fala comecava
+        # dentro e terminava muito depois.
+        if fala.fim > limite:
             break
         dentro.append(fala)
     if not dentro:
@@ -191,8 +195,12 @@ def detectar(caminho, max_candidates: int = 10, min_gap_seconds: float = 45,
         if len(escolhidas) >= max_candidates:
             break
         # Sobreposicao vira corte repetido, e repetido e o que as campanhas
-        # recusam. O intervalo minimo e medido entre os centros.
-        if any(abs(janela["timestamp"] - x["timestamp"]) < min_gap_seconds for x in escolhidas):
+        # recusam. Comparar CENTROS nao bastava: duas janelas de 60s com centros
+        # a 35s de distancia se sobrepoem em quase metade. Aqui a comparacao e
+        # entre os intervalos, mais o respiro minimo entre um corte e outro.
+        if any(janela["inicio"] < x["fim"] + min_gap_seconds
+               and x["inicio"] < janela["fim"] + min_gap_seconds
+               for x in escolhidas):
             continue
         escolhidas.append(janela)
 

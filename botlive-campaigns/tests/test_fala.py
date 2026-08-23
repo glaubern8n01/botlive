@@ -124,3 +124,25 @@ class AvaliadorPorModeloTests(unittest.TestCase):
         with mock.patch("urllib.request.urlopen", side_effect=OSError("recusou conexão")):
             saida = fala.avaliar_com_llm(list(self.janelas), 2)
         self.assertEqual(0, saida[0]["inicio"])
+
+
+class LimitesReaisTests(unittest.TestCase):
+    """Defeitos que só apareceram no primeiro material de verdade."""
+
+    def _detectar(self, falas, **kwargs):
+        with mock.patch.object(fala, "_falas", return_value=falas):
+            return fala.detectar("video.mp4", **kwargs)
+
+    def test_fala_longa_no_fim_nao_estoura_o_teto(self):
+        """Um trecho de 146s saiu de uma janela de teto 60s: entrava pelo início."""
+        falas = [FalaFake(0, 20, "palavra " * 40), FalaFake(21, 190, "palavra " * 300)]
+        janelas = self._detectar(falas, janela_max=60, janela_min=15)
+        self.assertTrue(all(x["duracao"] <= 60 for x in janelas), [x["duracao"] for x in janelas])
+
+    def test_janelas_escolhidas_nao_se_cruzam(self):
+        falas = [conversa(i * 3, i * 3 + 2.5) for i in range(60)]
+        janelas = self._detectar(falas, max_candidates=5, min_gap_seconds=10, janela_max=60)
+        ordenadas = sorted(janelas, key=lambda x: x["inicio"])
+        for anterior, seguinte in zip(ordenadas, ordenadas[1:]):
+            self.assertGreaterEqual(seguinte["inicio"], anterior["fim"],
+                                    f"{anterior['inicio']}-{anterior['fim']} cruza {seguinte['inicio']}")
