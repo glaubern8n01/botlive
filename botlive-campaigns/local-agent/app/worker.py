@@ -3,6 +3,11 @@ import json,os,socket,time,traceback
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from . import engine
+
+# "fit" encaixa o video 16:9 no meio da tela e deixa tarja preta em cima e
+# embaixo - o corte usava um terco do 1080x1920. Shorts, Reels e TikTok
+# entregam menos quem nao preenche a tela. "crop" preenche.
+LAYOUT_PADRAO=os.getenv("CAMPAIGNS_LAYOUT","vertical-crop")
 from .queue import claim,enqueue,heartbeat,recover_orphans,transition
 from .rules import evaluate,summary
 from .store import ROOT,audit,connect,get,insert,now,uid,update
@@ -52,8 +57,8 @@ def process(job,worker_id):
    # pico, e ai a duracao e centrada nele.
    start=item.get("inicio") if item.get("inicio") is not None else max(0,item["timestamp"]-duration/2)
    end=item.get("fim") if item.get("fim") is not None else start+duration
-   key=f"{material['id']}:{round(start,2)}:{round(end-start,2)}:{payload.get('layout','vertical-fit')}"
-   candidate=insert("campaign_candidates",{"campaign_id":campaign["id"],"material_id":material["id"],"source_start":start,"source_end":end,"score":item["score"],"algorithm_version":(__import__("app.fala",fromlist=["ALGORITMO"]).ALGORITMO if item.get("inicio") is not None else engine.ALGORITHM_VERSION),"parameters":json.dumps(payload),"version":1,"caption":" ".join(json.loads(campaign["hashtags"]) + json.loads(campaign["mentions"])),"hook":"","layout":payload.get("layout","vertical-fit"),"status":"detected","checklist_status":"pending","idempotency_key":key,"created_at":now(),"updated_at":now()});heartbeat(job["id"],worker_id,.1+.8*(index+1)/max(len(items),1));audit("candidate.detected","candidate",candidate["id"],item)
+   key=f"{material['id']}:{round(start,2)}:{round(end-start,2)}:{payload.get('layout',LAYOUT_PADRAO)}"
+   candidate=insert("campaign_candidates",{"campaign_id":campaign["id"],"material_id":material["id"],"source_start":start,"source_end":end,"score":item["score"],"algorithm_version":(__import__("app.fala",fromlist=["ALGORITMO"]).ALGORITMO if item.get("inicio") is not None else engine.ALGORITHM_VERSION),"parameters":json.dumps(payload),"version":1,"caption":" ".join(json.loads(campaign["hashtags"]) + json.loads(campaign["mentions"])),"hook":"","layout":payload.get("layout",LAYOUT_PADRAO),"status":"detected","checklist_status":"pending","idempotency_key":key,"created_at":now(),"updated_at":now()});heartbeat(job["id"],worker_id,.1+.8*(index+1)/max(len(items),1));audit("candidate.detected","candidate",candidate["id"],item)
   return {"candidates":len(items)}
  if job["kind"]=="render":
   candidate=get("campaign_candidates",job["entity_id"]);material=get("campaign_materials",candidate["material_id"]);campaign=get("campaign_campaigns",candidate["campaign_id"]);out=ROOT/"data"/"outputs"/campaign["id"]/f"{candidate['id']}.mp4";mentions=json.loads(campaign["mentions"]);rules=json.loads(campaign["rules"]);result=engine.render(material["local_path"],out,candidate["source_start"],candidate["source_end"],candidate["layout"],candidate["caption"],candidate["hook"]," ".join(mentions),rules.get("cta", ""));update("campaign_candidates",candidate["id"],{"output_path":result["path"],"output_sha256":result["sha256"],"status":"review","updated_at":now()});candidate=get("campaign_candidates",candidate["id"]);campaign["rules"]=rules;campaign["hashtags"]=json.loads(campaign["hashtags"]);campaign["mentions"]=mentions;checks=evaluate(campaign,candidate,{**result,"authorized":bool(material["authorized"]),"duplicate_of":duplicado(candidate,result["sha256"])});state=summary(checks)
@@ -68,7 +73,7 @@ def process(job,worker_id):
   resultado=fontes.buscar(job["entity_id"],payload.get("limite",1));detectados=0
   for material in resultado["materiais"]:
    chave=f"detect:{material['id']}"
-   enqueue("detect",material["id"],{"max_candidates":payload.get("max_candidates",8),"clip_duration":payload.get("clip_duration",45),"min_gap_seconds":payload.get("min_gap_seconds",45),"layout":payload.get("layout","vertical-fit")},chave);detectados+=1
+   enqueue("detect",material["id"],{"max_candidates":payload.get("max_candidates",8),"clip_duration":payload.get("clip_duration",45),"min_gap_seconds":payload.get("min_gap_seconds",45),"layout":payload.get("layout",LAYOUT_PADRAO)},chave);detectados+=1
   heartbeat(job["id"],worker_id,.9);return {"materiais":len(resultado["materiais"]),"deteccoes_enfileiradas":detectados,"motivo":resultado["motivo"]}
  raise ValueError("Tipo de job desconhecido")
 

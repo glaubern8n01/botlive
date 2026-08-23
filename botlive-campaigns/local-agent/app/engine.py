@@ -10,7 +10,7 @@ def _load(name):
 def detect(path,max_candidates=8,min_gap_seconds=45,min_score=0):
  detector=_load("highlight_detector");items=detector.detectar_melhores_momentos(path,max_cortes=max_candidates,min_gap_seconds=min_gap_seconds,min_score=min_score)
  return [{"timestamp":x.timestamp_seconds,"score":x.score,"reason":x.reason,"audio_score":x.audio_score,"motion_score":x.motion_score,"brightness_score":x.brightness_score} for x in items]
-def render(path,output,start,end,layout="vertical-fit",caption="",hook="",brand="",cta=""):
+def render(path,output,start,end,layout="vertical-crop",caption="",hook="",brand="",cta=""):
  clipper=_load("clipper");output=Path(output);output.parent.mkdir(parents=True,exist_ok=True);duration=max(6,float(end)-float(start));peak=int(float(start)+duration/2)
  import runtime_paths
  previous=runtime_paths.get_output_root();runtime_paths.set_output_root(output.parent.parent)

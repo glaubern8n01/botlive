@@ -26,7 +26,7 @@ class CampaignIn(BaseModel):
 class SourceIn(BaseModel):network:str;url:str;influencer:str="";authorization_source:str;notes:str=""
 class ChannelIn(BaseModel):network:str;handle:str;niche:str="";auth_state:str="manual";permissions:list[str]=[];daily_limit:int=0;token_hint:str=""
 class ReviewIn(BaseModel):action:str;notes:str="";caption:str|None=None;hook:str|None=None
-class JobIn(BaseModel):material_id:str;max_candidates:int=Field(8,ge=1,le=50);clip_duration:int=Field(45,ge=6,le=180);min_gap_seconds:int=Field(45,ge=0,le=3600);min_score:float=Field(0,ge=0,le=1);layout:str="vertical-fit";idempotency_key:str
+class JobIn(BaseModel):material_id:str;max_candidates:int=Field(8,ge=1,le=50);clip_duration:int=Field(45,ge=6,le=180);min_gap_seconds:int=Field(45,ge=0,le=3600);min_score:float=Field(0,ge=0,le=1);layout:str="vertical-crop";idempotency_key:str
 class RenderIn(BaseModel):idempotency_key:str
 class PublicationIn(BaseModel):campaign_id:str;candidate_id:str;channel_id:str|None=None;description:str="";hashtags:list[str]=[];idempotency_key:str
 class ResultIn(BaseModel):campaign_id:str;publication_id:str|None=None;reported_views:int=0;validated_views:int=0;ranking:int|None=None;estimated_revenue:float=0;confirmed_revenue:float=0;processing_cost:float=0;payment_status:str="pending";notes:str=""
