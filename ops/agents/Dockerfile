@@ -9,8 +9,18 @@ WORKDIR /app
 
 # ffmpeg/ffprobe: o doctor checa e o modulo de importacao le metadata.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg curl dos2unix \
+    && apt-get install -y --no-install-recommends ffmpeg curl dos2unix unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Runtime JavaScript para o yt-dlp. O YouTube passou a exigir a resolucao de um
+# desafio em JS para liberar os formatos: sem runtime, o download morre em
+# "Signature solving failed" mesmo com cookie valido. Deno e o runtime que o
+# yt-dlp habilita por padrao.
+RUN curl -fsSL -o /tmp/deno.zip \
+        https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip \
+    && unzip -q /tmp/deno.zip -d /usr/local/bin \
+    && rm /tmp/deno.zip \
+    && deno --version
 
 COPY ops/agents/requirements-agents.txt /tmp/requirements-agents.txt
 RUN pip install --no-cache-dir -r /tmp/requirements-agents.txt
