@@ -476,3 +476,107 @@ class VariacaoTests(Base):
         t1 = vs[0].como_plano({"title": "Oferta"})["title"]
         t2 = vs[1].como_plano({"title": "Oferta"})["title"]
         self.assertNotEqual(t1, t2)
+
+
+class AcabamentoTests(unittest.TestCase):
+    """Legenda queimada e vinheta de intro/outro — o que faltava do executor.
+
+    Nenhum teste chama FFmpeg de verdade: o que importa aqui é o comando
+    montado e o comportamento quando o acabamento falha.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.video = self.tmp / "adaptado.mp4"
+        self.video.write_bytes(b"video")
+
+    def test_srt_sai_no_formato_que_o_ffmpeg_le(self):
+        from transcriber import Fala, escrever_srt
+
+        destino = escrever_srt(
+            [Fala(inicio=0.0, fim=1.5, texto="primeira"),
+             Fala(inicio=1.5, fim=3.25, texto="segunda")],
+            self.tmp / "legenda.srt",
+        )
+        texto = destino.read_text(encoding="utf-8")
+        self.assertIn("1\n00:00:00,000 --> 00:00:01,500\nprimeira", texto)
+        self.assertIn("2\n00:00:01,500 --> 00:00:03,250\nsegunda", texto)
+
+    def test_trecho_sem_duracao_ganha_tempo_minimo(self):
+        """Início igual ao fim apareceria e sumiria no mesmo quadro."""
+        from transcriber import Fala, escrever_srt
+
+        destino = escrever_srt([Fala(inicio=2.0, fim=2.0, texto="piscou")], self.tmp / "x.srt")
+        self.assertIn("00:00:02,000 --> 00:00:03,200", destino.read_text(encoding="utf-8"))
+
+    def test_transcricao_de_arquivo_inexistente_nao_levanta(self):
+        from transcriber import transcrever_com_tempos
+
+        self.assertEqual([], transcrever_com_tempos(self.tmp / "nao-existe.mp4"))
+
+    def test_caminho_do_windows_e_escapado_para_o_filtro(self):
+        """Dois-pontos e barra invertida são sintaxe dentro do filtro subtitles."""
+        escapado = adapt._escapar_para_filtro(Path(r"C:\videos\meu:corte.srt"))
+        self.assertNotIn("\\v", escapado)
+        self.assertIn("C\\:/videos/meu\\:corte.srt", escapado)
+
+    def test_sem_intro_nem_outro_nao_chama_ffmpeg(self):
+        with mock.patch("subprocess.run", side_effect=AssertionError("não deveria rodar")):
+            resultado = adapt.juntar_intro_outro(self.video, {"intro_path": "", "outro_path": ""}, "abc")
+        self.assertEqual("", resultado["intro_outro_error"])
+
+    def test_material_sem_fala_vira_aviso_e_nao_derruba(self):
+        with mock.patch("transcriber.transcrever_com_tempos", return_value=[]):
+            resultado = adapt.queimar_legendas(self.video, "abc")
+        self.assertIn("nenhuma fala", resultado["subtitle_error"])
+        self.assertEqual("", resultado["subtitle_path"])
+        self.assertTrue(self.video.exists())
+
+    def test_falha_do_ffmpeg_na_legenda_preserva_o_video(self):
+        from transcriber import Fala
+
+        falso = mock.Mock(returncode=1, stderr="erro do ffmpeg")
+        with mock.patch("transcriber.transcrever_com_tempos",
+                        return_value=[Fala(0.0, 1.0, "oi")]), \
+             mock.patch("subprocess.run", return_value=falso):
+            resultado = adapt.queimar_legendas(self.video, "abc")
+        self.assertIn("erro do ffmpeg", resultado["subtitle_error"])
+        self.assertEqual(b"video", self.video.read_bytes())
+
+    def test_montagem_normaliza_partes_e_poe_silencio_na_parte_muda(self):
+        intro = self.tmp / "intro.mp4"
+        intro.write_bytes(b"intro")
+        medidas = {
+            str(self.video): {"largura": 1080, "altura": 1920, "fps": 30, "tem_audio": True, "duracao": 30.0},
+            str(intro): {"largura": 1280, "altura": 720, "fps": 24, "tem_audio": False, "duracao": 2.0},
+        }
+        chamadas = {}
+
+        def falso_run(comando, **kwargs):
+            chamadas["comando"] = comando
+            Path(comando[-1]).write_bytes(b"montado")
+            return mock.Mock(returncode=0, stderr="")
+
+        with mock.patch.object(adapt, "_sonda", side_effect=lambda c: medidas[str(c)]), \
+             mock.patch("subprocess.run", side_effect=falso_run):
+            resultado = adapt.juntar_intro_outro(self.video, {"intro_path": str(intro), "outro_path": ""}, "abc")
+
+        self.assertEqual("", resultado["intro_outro_error"])
+        filtro = chamadas["comando"][chamadas["comando"].index("-filter_complex") + 1]
+        # a intro é reescalada para a resolução e o fps do principal
+        self.assertIn("scale=1080:1920", filtro)
+        self.assertIn("fps=30", filtro)
+        # e ganha faixa de silêncio da própria duração, senão o concat falharia
+        self.assertIn("anullsrc", " ".join(chamadas["comando"]))
+        self.assertIn("concat=n=2:v=1:a=1", filtro)
+        self.assertEqual(b"montado", self.video.read_bytes())
+
+    def test_falha_na_montagem_preserva_o_video_adaptado(self):
+        outro = self.tmp / "outro.mp4"
+        outro.write_bytes(b"outro")
+        medidas = {"largura": 1080, "altura": 1920, "fps": 30, "tem_audio": True, "duracao": 5.0}
+        with mock.patch.object(adapt, "_sonda", return_value=medidas), \
+             mock.patch("subprocess.run", return_value=mock.Mock(returncode=1, stderr="falhou")):
+            resultado = adapt.juntar_intro_outro(self.video, {"intro_path": "", "outro_path": str(outro)}, "abc")
+        self.assertIn("falhou", resultado["intro_outro_error"])
+        self.assertEqual(b"video", self.video.read_bytes())

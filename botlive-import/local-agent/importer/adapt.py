@@ -225,6 +225,162 @@ def _gerar_extras(plano: dict, video: Path, adaptation_id: str) -> dict:
     return extras
 
 
+def _ffmpeg() -> str:
+    import os
+
+    return os.getenv("IMPORT_FFMPEG", "ffmpeg")
+
+
+def _sonda(caminho: Path) -> dict:
+    """Medidas da parte de video. Sem elas nao da para juntar intro e outro."""
+    import os
+    import subprocess
+
+    comando = [
+        os.getenv("IMPORT_FFPROBE", "ffprobe"), "-v", "error",
+        "-show_streams", "-show_format", "-of", "json", str(caminho),
+    ]
+    dados = json.loads(subprocess.run(comando, capture_output=True, text=True,
+                                      check=True, timeout=120).stdout)
+    streams = dados.get("streams", [])
+    video = next((s for s in streams if s.get("codec_type") == "video"), {})
+    fps = video.get("r_frame_rate") or "30/1"
+    try:
+        num, den = fps.split("/")
+        fps_valor = round(float(num) / float(den or 1), 3) or 30
+    except Exception:
+        fps_valor = 30
+    return {
+        "largura": int(video.get("width") or 0),
+        "altura": int(video.get("height") or 0),
+        "fps": fps_valor,
+        "tem_audio": any(s.get("codec_type") == "audio" for s in streams),
+        "duracao": float(dados.get("format", {}).get("duration") or 0),
+    }
+
+
+def _escapar_para_filtro(caminho: Path) -> str:
+    """O filtro `subtitles` do FFmpeg le o caminho como expressao.
+
+    Dois-pontos separa opcoes e barra invertida escapa - num caminho do Windows
+    ambos aparecem. Sem isto, `C:\\videos\\x.srt` vira opcao invalida e o render
+    inteiro falha por causa da legenda.
+    """
+    texto = str(caminho).replace("\\", "/")
+    return texto.replace(":", "\\:").replace("'", "\\'")
+
+
+def queimar_legendas(video: Path, adaptation_id: str) -> dict:
+    """Transcreve a fala e queima a legenda no video.
+
+    Usa o mesmo faster-whisper que o pipeline ja roda na CPU. O SRT fica ao
+    lado do video: serve para conferir o texto e para plataformas que aceitam
+    legenda como arquivo.
+
+    Falhar aqui NAO derruba a adaptacao - o video sem legenda continua valido.
+    """
+    import subprocess
+
+    resultado = {"subtitle_path": "", "subtitle_error": ""}
+    try:
+        sys.path.insert(0, str(REPO_ROOT)) if str(REPO_ROOT) not in sys.path else None
+        from transcriber import escrever_srt, transcrever_com_tempos
+
+        falas = transcrever_com_tempos(video)
+        if not falas:
+            resultado["subtitle_error"] = "nenhuma fala reconhecida no material"
+            return resultado
+
+        srt = escrever_srt(falas, video.parent / f"{adaptation_id}.srt")
+        temporario = video.parent / f"{adaptation_id}_legendado.mp4"
+        estilo = "FontSize=18,OutlineColour=&H80000000,BorderStyle=3,Outline=1,Alignment=2,MarginV=60"
+        comando = [
+            _ffmpeg(), "-y", "-i", str(video),
+            "-vf", f"subtitles='{_escapar_para_filtro(srt)}':force_style='{estilo}'",
+            "-c:a", "copy", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            str(temporario),
+        ]
+        processo = subprocess.run(comando, capture_output=True, text=True, timeout=1800)
+        if processo.returncode != 0 or not temporario.exists():
+            resultado["subtitle_error"] = (processo.stderr or "")[-200:].strip() or "ffmpeg recusou a legenda"
+            temporario.unlink(missing_ok=True)
+            return resultado
+
+        temporario.replace(video)
+        resultado["subtitle_path"] = str(srt)
+    except Exception as erro:
+        resultado["subtitle_error"] = str(erro)[:200]
+    return resultado
+
+
+def juntar_intro_outro(video: Path, plano: dict, adaptation_id: str) -> dict:
+    """Cola intro e/ou outro no material adaptado.
+
+    Cada parte e normalizada para a resolucao e o fps do video principal antes
+    do concat - o filtro exige isso, e um outro em 720p num video 1080x1920
+    quebraria a montagem.
+
+    Parte sem faixa de audio ganha silencio da propria duracao: sem isso o
+    concat com audio falha e o lote inteiro para por causa de uma vinheta muda.
+    """
+    import subprocess
+
+    resultado = {"intro_outro_error": ""}
+    intro = Path(plano["intro_path"]) if plano.get("intro_path") else None
+    outro = Path(plano["outro_path"]) if plano.get("outro_path") else None
+    if not intro and not outro:
+        return resultado
+
+    try:
+        principal = _sonda(video)
+        largura, altura = principal["largura"], principal["altura"]
+        fps = principal["fps"]
+        partes = [p for p in (intro, video, outro) if p]
+
+        entradas, filtros, rotulos = [], [], []
+        silencios = []
+        for indice, parte in enumerate(partes):
+            medida = _sonda(parte)
+            entradas += ["-i", str(parte)]
+            filtros.append(
+                f"[{indice}:v]scale={largura}:{altura}:force_original_aspect_ratio=decrease,"
+                f"pad={largura}:{altura}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}[v{indice}]"
+            )
+            if medida["tem_audio"]:
+                filtros.append(f"[{indice}:a]aresample=async=1,aformat=sample_rates=44100:channel_layouts=stereo[a{indice}]")
+                rotulos.append((f"v{indice}", f"a{indice}"))
+            else:
+                silencios.append((indice, medida["duracao"] or 1.0))
+                rotulos.append((f"v{indice}", f"mudo{indice}"))
+
+        base_silencio = len(partes)
+        for posicao, (indice, duracao) in enumerate(silencios):
+            entradas += ["-f", "lavfi", "-t", f"{duracao:.3f}",
+                         "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
+            filtros.append(f"[{base_silencio + posicao}:a]aformat=sample_rates=44100:channel_layouts=stereo[mudo{indice}]")
+
+        cadeia = "".join(f"[{v}][{a}]" for v, a in rotulos)
+        filtros.append(f"{cadeia}concat=n={len(partes)}:v=1:a=1[vfinal][afinal]")
+
+        destino = video.parent / f"{adaptation_id}_completo.mp4"
+        comando = [
+            _ffmpeg(), "-y", *entradas,
+            "-filter_complex", ";".join(filtros),
+            "-map", "[vfinal]", "-map", "[afinal]",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(destino),
+        ]
+        processo = subprocess.run(comando, capture_output=True, text=True, timeout=3600)
+        if processo.returncode != 0 or not destino.exists():
+            resultado["intro_outro_error"] = (processo.stderr or "")[-200:].strip() or "ffmpeg recusou a montagem"
+            destino.unlink(missing_ok=True)
+            return resultado
+        destino.replace(video)
+    except Exception as erro:
+        resultado["intro_outro_error"] = str(erro)[:200]
+    return resultado
+
+
 def executar(adaptation_id: str) -> dict:
     """Renderiza a adaptacao e valida a saida.
 
@@ -259,6 +415,15 @@ def executar(adaptation_id: str) -> dict:
         if config.enabled:
             overlay.aplicar_overlay_no_video(destino, config, destino)
 
+        # Legenda antes da montagem: o SRT tem os tempos do material adaptado,
+        # e colar a intro primeiro empurraria todas as falas para frente.
+        acabamento = {}
+        if plano.get("subtitles"):
+            acabamento.update(queimar_legendas(destino, adaptation_id))
+        acabamento.update(juntar_intro_outro(destino, plano, adaptation_id))
+
+        # Valida depois do acabamento: intro e outro mudam duracao e podem
+        # mudar dimensao, entao validar antes conferiria outro arquivo.
         validacao = clipper.validar_video_final(destino, require_audio=False)
         if not validacao.valid:
             raise ImportError_(f"Saida invalida: {validacao.reason}")
@@ -280,6 +445,11 @@ def executar(adaptation_id: str) -> dict:
     from .library import sha256
 
     extras = _gerar_extras(plano, destino, adaptation_id)
+    # Legenda e vinheta sao acabamento: falha nelas vira aviso ao lado do
+    # video pronto, nunca adaptacao perdida.
+    avisos = [extras.get("extras_error", ""), acabamento.get("subtitle_error", ""),
+              acabamento.get("intro_outro_error", "")]
+    extras["extras_error"] = "; ".join(x for x in avisos if x)
 
     return atualizar(
         "import_adaptations",
@@ -297,6 +467,10 @@ def executar(adaptation_id: str) -> dict:
                     "width": validacao.width,
                     "height": validacao.height,
                     "has_audio": validacao.has_audio,
+                    # Acabamento entra aqui e nao em coluna propria: banco ja em
+                    # producao, e ALTER TABLE por causa de dois campos opcionais
+                    # nao se paga.
+                    "subtitle_path": acabamento.get("subtitle_path", ""),
                 },
                 ensure_ascii=False,
             ),

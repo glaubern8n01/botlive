@@ -162,11 +162,12 @@ function Biblioteca({ rows, fontes, request, run, refresh, aviso }: Acoes & { ro
 }
 
 function Adaptacao({ rows, itens, request, run, refresh, aviso }: Acoes & { rows: Row[]; itens: Row[]; aviso: (x: string) => void }) {
-    const vazio = { item_id: "", channel_id: "", plan: { layout: "vertical-fit", title: "", description: "", brand: "", cta: "" } };
+    const vazio = { item_id: "", channel_id: "", plan: { layout: "vertical-fit", title: "", description: "", brand: "", cta: "", subtitles: false, intro_path: "", outro_path: "" } };
     const [form, setForm] = useState<any>(vazio);
     return <section className={`${panel} space-y-4`}>
         <h2 className="text-lg font-bold">Adaptação e fila por canal</h2>
         <p className="text-sm text-zinc-400">O crédito da origem é mantido — o plano não aceita opção de remover autoria ou proteção.</p>
+        <p className="text-xs text-zinc-500">A legenda sai da fala do próprio vídeo (Whisper local, na CPU) e o .srt fica ao lado do arquivo. Intro e outro são reescalados para o formato do vídeo antes de colar. Se o acabamento falhar, o vídeo adaptado continua válido e o motivo aparece no card.</p>
         <form onSubmit={(e) => { e.preventDefault(); void run(async () => { await request("/import/v1/adaptations", { method: "POST", body: JSON.stringify(form) }); setForm(vazio); await refresh(); }); }} className="grid gap-2 md:grid-cols-3">
             <select className={input} value={form.item_id} onChange={e => setForm({ ...form, item_id: e.target.value })} required>
                 <option value="">Item da biblioteca</option>{itens.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
@@ -178,6 +179,12 @@ function Adaptacao({ rows, itens, request, run, refresh, aviso }: Acoes & { rows
             <input className={input} placeholder="Título / tarja" value={form.plan.title} onChange={e => setForm({ ...form, plan: { ...form.plan, title: e.target.value } })} />
             <input className={input} placeholder="Identidade / marca" value={form.plan.brand} onChange={e => setForm({ ...form, plan: { ...form.plan, brand: e.target.value } })} />
             <input className={input} placeholder="CTA" value={form.plan.cta} onChange={e => setForm({ ...form, plan: { ...form.plan, cta: e.target.value } })} />
+            <input className={input} placeholder="Caminho da intro (opcional)" value={form.plan.intro_path} onChange={e => setForm({ ...form, plan: { ...form.plan, intro_path: e.target.value } })} />
+            <input className={input} placeholder="Caminho do outro (opcional)" value={form.plan.outro_path} onChange={e => setForm({ ...form, plan: { ...form.plan, outro_path: e.target.value } })} />
+            <label className="flex items-center gap-2 text-sm text-zinc-300">
+                <input type="checkbox" checked={form.plan.subtitles} onChange={e => setForm({ ...form, plan: { ...form.plan, subtitles: e.target.checked } })} />
+                Queimar legenda automática
+            </label>
             <button className={button}>Planejar adaptação</button>
         </form>
         {!rows.length && <p className="rounded-xl border border-dashed border-zinc-700 p-6 text-center text-zinc-400">Nenhuma adaptação planejada.</p>}
