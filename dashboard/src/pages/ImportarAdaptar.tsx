@@ -187,6 +187,7 @@ function Adaptacao({ rows, itens, request, run, refresh, aviso }: Acoes & { rows
             </label>
             <button className={button}>Planejar adaptação</button>
         </form>
+        <FilaDeRender request={request} run={run} aviso={aviso} />
         {!rows.length && <p className="rounded-xl border border-dashed border-zinc-700 p-6 text-center text-zinc-400">Nenhuma adaptação planejada.</p>}
         <div className="grid gap-3 md:grid-cols-2">
             {rows.map(x => <article key={x.id} className="rounded-xl border border-zinc-800 p-3">
@@ -194,12 +195,39 @@ function Adaptacao({ rows, itens, request, run, refresh, aviso }: Acoes & { rows
                 <p className="text-sm text-zinc-400">{x.width || "?"}×{x.height || "?"} · canal {x.channel_id || "—"}</p>
                 {x.error && <p className="text-xs text-red-300">{x.error}</p>}
                 <div className="mt-2 flex flex-wrap gap-3">
-                    {x.status === "planned" && <button className="underline" onClick={() => run(async () => { await request(`/import/v1/adaptations/${x.id}/render`, { method: "POST" }); await refresh(); })}>Renderizar</button>}
+                    {["planned", "failed"].includes(x.status) && <button className="underline" onClick={() => run(async () => { await request(`/import/v1/adaptations/${x.id}/render`, { method: "POST" }); aviso("Na fila de render. Aperte 'Rodar fila' para processar."); await refresh(); })}>Renderizar</button>}
+                    {x.status === "render_queued" && <span className="text-xs text-amber-300">na fila de render</span>}
                     {["rendered", "queued"].includes(x.status) && <button className="underline" onClick={() => run(async () => { const out = await request(`/import/v1/adaptations/${x.id}/queue`, { method: "POST", body: JSON.stringify({ caption: "" }) }); aviso(`${out.total} job(s) em draft no VexPublish, aguardando aprovação`); await refresh(); })}>Enviar para a fila do canal</button>}
                 </div>
             </article>)}
         </div>
     </section>;
+}
+
+function FilaDeRender({ request, run, aviso }: { request: any; run: any; aviso: (x: string) => void }) {
+    const [fila, setFila] = useState<Row | null>(null);
+    async function carregar() { setFila(await request("/import/v1/jobs?limit=50")); }
+    useEffect(() => { void run(carregar); }, []);
+
+    const resumo = fila?.resumo || {};
+    const pendentes = (resumo.queued || 0) + (resumo.running || 0);
+    return <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm">
+                Fila de render: <strong className="text-cyan-400">{pendentes}</strong> pendente(s)
+                {resumo.done ? ` · ${resumo.done} pronto(s)` : ""}
+                {resumo.failed ? ` · ${resumo.failed} falhou` : ""}
+            </p>
+            <div className="flex gap-2">
+                <button className="min-h-10 rounded-lg border border-zinc-700 px-3" onClick={() => run(carregar)}>Atualizar</button>
+                <button className="min-h-10 rounded-lg bg-cyan-500 px-4 font-bold text-zinc-950" onClick={() => run(async () => {
+                    const r = await request("/import/v1/jobs/run?maximo=3", { method: "POST" });
+                    aviso(`${r.processados} render(s) processado(s)`); await carregar();
+                })}>Rodar fila</button>
+            </div>
+        </div>
+        <p className="mt-1 text-xs text-zinc-500">O render sai da requisição: FFmpeg em lote longo estourava o tempo do navegador. Item que falha volta para a fila com espera crescente e desiste na terceira tentativa.</p>
+    </div>;
 }
 
 function Auditoria({ rows }: { rows: Row[] }) {

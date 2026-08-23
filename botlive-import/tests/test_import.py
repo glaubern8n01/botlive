@@ -580,3 +580,82 @@ class AcabamentoTests(unittest.TestCase):
             resultado = adapt.juntar_intro_outro(self.video, {"intro_path": "", "outro_path": str(outro)}, "abc")
         self.assertIn("falhou", resultado["intro_outro_error"])
         self.assertEqual(b"video", self.video.read_bytes())
+
+
+class FilaDeRenderTests(unittest.TestCase):
+    """A tabela import_jobs existia desde a Fase 5 e não tinha dono. Agora tem."""
+
+    def setUp(self):
+        from importer import fila
+
+        self.fila = fila
+        with store.conectar() as db:
+            db.execute("DELETE FROM import_jobs")
+
+    def test_enfileira_uma_vez_so(self):
+        primeiro = self.fila.enfileirar("render", "adaptacao-1")
+        segundo = self.fila.enfileirar("render", "adaptacao-1")
+        self.assertEqual(primeiro["id"], segundo["id"])
+        self.assertEqual(1, self.fila.resumo().get("queued"))
+
+    def test_tipo_desconhecido_e_recusado(self):
+        with self.assertRaises(store.ImportError_):
+            self.fila.enfileirar("renderizar-tudo", "x")
+
+    def test_dois_workers_nao_pegam_o_mesmo_job(self):
+        self.fila.enfileirar("render", "adaptacao-2")
+        primeiro = self.fila.reivindicar("worker-a")
+        segundo = self.fila.reivindicar("worker-b")
+        self.assertIsNotNone(primeiro)
+        self.assertIsNone(segundo)
+        self.assertEqual("running", store.obter("import_jobs", primeiro["id"])["status"])
+
+    def test_sucesso_marca_done(self):
+        self.fila.enfileirar("render", "adaptacao-3")
+        with mock.patch("importer.adapt.executar", return_value={"status": "rendered"}):
+            resultado = self.fila.processar_um("worker-a")
+        self.assertEqual("done", resultado["status"])
+        self.assertEqual(1, resultado["attempts"])
+
+    def test_falha_volta_para_a_fila_com_espera(self):
+        self.fila.enfileirar("render", "adaptacao-4")
+        with mock.patch("importer.adapt.executar", side_effect=RuntimeError("ffmpeg morreu")):
+            resultado = self.fila.processar_um("worker-a")
+        self.assertEqual("queued", resultado["status"])
+        self.assertIn("ffmpeg morreu", resultado["error"])
+        # com espera no futuro, senão o worker giraria em vazio no mesmo erro
+        self.assertIsNotNone(resultado["run_after"])
+        self.assertIsNone(self.fila.reivindicar("worker-b"))
+
+    def test_falha_repetida_desiste_no_teto(self):
+        self.fila.enfileirar("render", "adaptacao-5")
+        with mock.patch("importer.adapt.executar", side_effect=RuntimeError("quebrou")):
+            for _ in range(3):
+                job = store.listar("import_jobs", 10, where="entity_id=?", params=("adaptacao-5",))[0]
+                # limpa a espera para conseguir reivindicar de novo no teste
+                store.atualizar("import_jobs", job["id"], {"run_after": None})
+                self.fila.processar_um("worker-a")
+        final = store.listar("import_jobs", 10, where="entity_id=?", params=("adaptacao-5",))[0]
+        self.assertEqual("failed", final["status"])
+        self.assertEqual(3, final["attempts"])
+
+    def test_job_que_falhou_pode_ser_reenfileirado(self):
+        job = self.fila.enfileirar("render", "adaptacao-6")
+        store.atualizar("import_jobs", job["id"], {"status": "failed", "attempts": 3, "error": "x"})
+        voltou = self.fila.enfileirar("render", "adaptacao-6")
+        self.assertEqual("queued", voltou["status"])
+        self.assertEqual(0, voltou["attempts"])
+
+    def test_orfao_de_worker_morto_volta_para_a_fila(self):
+        self.fila.enfileirar("render", "adaptacao-7")
+        job = self.fila.reivindicar("worker-que-morreu")
+        store.atualizar("import_jobs", job["id"], {"claimed_at": "2020-01-01T00:00:00+00:00"})
+        self.assertEqual(1, self.fila.recuperar_orfaos(segundos=60))
+        self.assertEqual("queued", store.obter("import_jobs", job["id"])["status"])
+
+    def test_rodar_processa_ate_o_maximo_e_para_quando_acaba(self):
+        for indice in range(2):
+            self.fila.enfileirar("render", f"adaptacao-lote-{indice}")
+        with mock.patch("importer.adapt.executar", return_value={"status": "rendered"}):
+            resultado = self.fila.rodar(maximo=5)
+        self.assertEqual(2, resultado["processados"])

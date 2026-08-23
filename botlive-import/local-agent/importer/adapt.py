@@ -392,6 +392,10 @@ def executar(adaptation_id: str) -> dict:
         raise ImportError_("Adaptacao inexistente")
     if adaptacao["status"] == "rendered":
         return adaptacao
+    if adaptacao["status"] not in {"planned", "render_queued", "failed"}:
+        raise ImportError_(
+            f"Adaptacao em {adaptacao['status']} nao pode ser renderizada de novo"
+        )
 
     item = exigir_item(adaptacao["item_id"])
     plano = json.loads(adaptacao["plan"])
