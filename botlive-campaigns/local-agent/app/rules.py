@@ -170,6 +170,24 @@ def _texto(campaign, candidate):
     return checks
 
 
+def _selo(campaign, metadata):
+    """Selo dentro do corte. GabePeixe exige o lower embaixo do rosto durante
+    todo o corte; Juninho exige a Kick NO CORTE, nao na legenda. Campanha que
+    nao pede nada passa direto."""
+    exigido = bool((campaign.get("rules") or {}).get("selo"))
+    aplicado = bool((metadata.get("selo") or {}).get("aplicado"))
+    if not exigido:
+        return _check("selo", "approved", "warning", "Campanha nao exige selo", {})
+    return _check(
+        "selo",
+        "approved" if aplicado else "rejected",
+        "critical",
+        "Selo obrigatorio aplicado no corte" if aplicado
+        else "Campanha exige selo dentro do corte e ele nao foi aplicado",
+        metadata.get("selo") or {},
+    )
+
+
 def evaluate(campaign, candidate, metadata, momento=None):
     """Roda todas as regras. metadata vem do render (largura, altura, audio) e
     do worker (authorized, duplicate_of)."""
@@ -180,6 +198,7 @@ def evaluate(campaign, candidate, metadata, momento=None):
         _audio(campaign, metadata),
         _prazo(campaign, momento),
         _duplicidade(campaign, metadata),
+        _selo(campaign, metadata),
     ]
     checks.extend(_texto(campaign, candidate))
     checks.append(
