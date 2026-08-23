@@ -38,8 +38,17 @@ def connect():
  try:yield db;db.commit()
  except Exception:db.rollback();raise
  finally:db.close()
+# Colunas nascidas depois da primeira versao do banco. CREATE TABLE IF NOT
+# EXISTS nao mexe em tabela que ja existe, entao coluna nova so chega aqui - foi
+# assim que "desde" subiu para producao sem existir no banco de la e derrubou
+# todo cadastro de fonte com 500.
+COLUNAS_NOVAS=[("campaign_sources","desde","TEXT DEFAULT ''")]
 def migrate():
- with connect() as db:db.executescript(SCHEMA)
+ with connect() as db:
+  db.executescript(SCHEMA)
+  for tabela,coluna,tipo in COLUNAS_NOVAS:
+   existentes={x["name"] for x in db.execute(f"PRAGMA table_info({tabela})")}
+   if coluna not in existentes:db.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
 def rows(table,limit=100,offset=0,where="",params=()):
  if table not in TABLES:raise ValueError("Tabela inválida")
  sql=f"SELECT * FROM {table}"+(f" WHERE {where}" if where else "")+" ORDER BY rowid DESC LIMIT ? OFFSET ?"
