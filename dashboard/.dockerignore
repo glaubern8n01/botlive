@@ -1,0 +1,14 @@
+# O Dockerfile faz `npm ci` e depois `COPY . .`. Sem esta lista, o node_modules
+# da maquina de quem builda entra por cima do que o npm ci instalou - e se essa
+# maquina for Windows, o build morre em "Cannot find module
+# @rollup/rollup-linux-x64-gnu", porque o binario nativo instalado e o do
+# Windows. Na VPS nunca apareceu: la o codigo chega por `git archive`, que nao
+# carrega node_modules.
+node_modules
+dist
+
+# Nada disso muda a imagem, e cada arquivo a mais invalida o cache do build.
+.git
+.env
+.env.*
+*.log

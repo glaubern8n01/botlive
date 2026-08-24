@@ -9,7 +9,11 @@ FROM node:20-slim AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+# --no-audit --no-fund: as duas etapas sao pura rede e nao mudam a imagem. Sem
+# elas o npm ci morreu em "Exit handler never called!" no PC e em timeout de
+# rede na VPS - as duas vezes por causa de chamadas que nao serviam para nada
+# aqui.
+RUN npm ci --no-audit --no-fund
 
 # As VITE_* sao lidas em tempo de BUILD (viram texto dentro do bundle).
 # Chegam como build-arg porque no runtime ja e tarde.
@@ -42,7 +46,9 @@ FROM node:20-slim
 WORKDIR /app
 ENV NODE_ENV=production PORT=80
 
-COPY --from=build /app/node_modules ./node_modules
+# O server.mjs importa so modulos nativos do Node (fs, http, path, url), entao
+# nao ha o que carregar de node_modules em producao. Copiar a pasta inteira
+# levava 140 MB de dependencia de build para dentro da imagem final.
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server.mjs ./server.mjs
 COPY --from=build /app/package.json ./package.json
