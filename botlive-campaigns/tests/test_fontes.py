@@ -280,3 +280,61 @@ class FonteDaCampanhaTests(unittest.TestCase):
         primeira = f"{item['video_id']}-ao-vivo-2026-08-23T18"
         segunda = f"{item['video_id']}-ao-vivo-2026-08-23T19"
         self.assertNotEqual(primeira, segunda)
+
+    def test_vod_longo_pula_a_abertura_e_para_no_teto(self):
+        """Um VOD do GabePeixe baixou 34 GB e ainda estourou o tempo, duas
+        vezes. Ninguem precisa da maratona inteira para tirar um corte."""
+        trecho = fontes._trecho({"duracao": 6 * 3600})
+        inicio, fim = trecho.lstrip("*").split("-")
+        self.assertEqual(fontes.PULA_ABERTURA, int(inicio))
+        self.assertEqual(fontes.PULA_ABERTURA + fontes.MINUTOS_DE_VOD * 60, int(fim))
+
+    def test_video_curto_vem_do_comeco(self):
+        self.assertTrue(fontes._trecho({"duracao": 300}).startswith("*0-"))
+
+    def test_duracao_desconhecida_vem_do_comeco(self):
+        self.assertTrue(fontes._trecho({}).startswith("*0-"))
+
+    def test_download_de_vod_corta_o_trecho_e_limita_a_resolucao(self):
+        fonte = self._fonte(url="https://www.twitch.tv/x/videos", network="twitch")
+        chamadas = []
+
+        def falso(comando, **kwargs):
+            chamadas.append(comando)
+            saida = '{"id":"v1","title":"maratona","duration":21600}' if len(chamadas) == 1 else ""
+            return mock.Mock(returncode=1, stdout=saida, stderr="")
+
+        with mock.patch.object(fontes, "comando_ytdlp", return_value=["yt-dlp"]), \
+             mock.patch("subprocess.run", side_effect=falso):
+            fontes.buscar(fonte["id"])
+
+        download = chamadas[-1]
+        self.assertIn("--download-sections", download)
+        self.assertIn("-f", download)
+        self.assertIn("height<=1080", " ".join(download))
+
+    def test_download_ao_vivo_nao_usa_download_sections(self):
+        fonte = self._fonte(url="https://kick.com/y", network="kick")
+        chamadas = []
+
+        def falso(comando, **kwargs):
+            chamadas.append(comando)
+            saida = '{"id":"live","title":"agora","is_live":true}' if len(chamadas) == 1 else ""
+            return mock.Mock(returncode=1, stdout=saida, stderr="")
+
+        with mock.patch.object(fontes, "comando_ytdlp", return_value=["yt-dlp"]), \
+             mock.patch("subprocess.run", side_effect=falso):
+            fontes.buscar(fonte["id"])
+        self.assertNotIn("--download-sections", chamadas[-1])
+
+    def test_download_que_falha_nao_deixa_parcial_no_disco(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as pasta:
+            alvo = Path(pasta) / "v123.mp4"
+            alvo.write_bytes(b"metade")
+            (Path(pasta) / "v123.temp.mp4").write_bytes(b"resto")
+            (Path(pasta) / "outro.mp4").write_bytes(b"nao e meu")
+            fontes._limpar_parciais(alvo)
+            self.assertFalse(alvo.exists())
+            self.assertFalse((Path(pasta) / "v123.temp.mp4").exists())
+            self.assertTrue((Path(pasta) / "outro.mp4").exists())

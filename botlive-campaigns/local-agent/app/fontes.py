@@ -43,6 +43,18 @@ POR_RODADA = int(os.getenv("CAMPAIGNS_FETCH_POR_RODADA", "1"))
 # yt-dlp fica preso ate o cara desligar e o job estoura o timeout sem entregar
 # nada. Meia hora ja da material de sobra para varios cortes.
 MINUTOS_DE_LIVE = int(os.getenv("CAMPAIGNS_LIVE_MINUTOS", "30"))
+# Quanto pegar de um VOD. Live de Twitch e Kick dura horas: um VOD do GabePeixe
+# baixou 34 GB e ainda assim estourou o tempo limite, duas vezes, deixando dois
+# arquivos parciais de 58 GB no disco. Nenhum corte precisa da maratona inteira.
+MINUTOS_DE_VOD = int(os.getenv("CAMPAIGNS_VOD_MINUTOS", "45"))
+# Os primeiros minutos de uma transmissao sao tela de espera e "bom dia, ja da
+# pra ouvir?". O trecho bom comeca depois.
+PULA_ABERTURA = int(os.getenv("CAMPAIGNS_PULAR_ABERTURA_SEGUNDOS", "600"))
+# Fonte 4K existe e nao serve para nada num corte 1080x1920 - so multiplica o
+# arquivo e o tempo de render.
+FORMATO = os.getenv(
+    "CAMPAIGNS_FORMATO",
+    "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b")
 
 
 def comando_ytdlp() -> list:
@@ -147,6 +159,20 @@ def _ja_baixado(campaign_id: str, video_id: str) -> bool:
     return bool(linha)
 
 
+def _trecho(item: dict) -> str:
+    """Pedaco do VOD que vale a pena baixar.
+
+    Video curto vem inteiro. Transmissao longa entra depois da abertura, que e
+    tela de espera e teste de microfone - e para no teto, porque baixar seis
+    horas para tirar um minuto e desperdicio de disco, banda e tempo.
+    """
+    janela = MINUTOS_DE_VOD * 60
+    duracao = item.get("duracao") or 0
+    if duracao and duracao > PULA_ABERTURA + janela:
+        return f"*{PULA_ABERTURA}-{PULA_ABERTURA + janela}"
+    return f"*0-{janela}"
+
+
 def _desde(fonte: dict) -> list:
     valor = (fonte.get("desde") or "").strip()
     return ["--dateafter", valor] if valor else []
@@ -201,6 +227,18 @@ def listar_disponiveis(fonte: dict, limite: int = 5) -> list:
     return achados
 
 
+def _limpar_parciais(alvo: Path) -> int:
+    """Apaga o alvo e os restos que o yt-dlp deixa (.temp, .part, .ytdl)."""
+    liberado = 0
+    for arquivo in alvo.parent.glob(alvo.stem + "*"):
+        try:
+            liberado += arquivo.stat().st_size
+            arquivo.unlink()
+        except OSError:
+            continue
+    return liberado
+
+
 def buscar(source_id: str, limite: int = POR_RODADA) -> dict:
     """Baixa o que ainda nao foi cortado e registra como material da campanha.
 
@@ -244,15 +282,23 @@ def buscar(source_id: str, limite: int = POR_RODADA) -> dict:
             "--merge-output-format", "mp4", "--restrict-filenames",
             *_desde(fonte), *_cookies(),
         ]
+        comando += ["-f", FORMATO]
         if item.get("ao_vivo"):
             # Grava uma janela e para sozinho. O -t vai para o ffmpeg que o
             # yt-dlp usa como downloader; sem ele a gravacao so termina quando
             # a live termina.
             comando += ["--downloader", "ffmpeg",
                         "--downloader-args", f"ffmpeg_i:-t {MINUTOS_DE_LIVE * 60}"]
+        else:
+            comando += ["--download-sections", _trecho(item)]
         comando += ["-o", str(alvo), item["url"] or fonte["url"]]
         processo = subprocess.run(comando, capture_output=True, text=True, timeout=TIMEOUT_BUSCA)
         if processo.returncode != 0 or not alvo.exists():
+            # Download que morre no meio deixa o arquivo pela metade e os .temp
+            # e .part do yt-dlp. Como nao existe material no banco apontando
+            # para eles, a faxina nunca os veria: dois parciais de um VOD do
+            # GabePeixe ocuparam 58 GB em silencio.
+            _limpar_parciais(alvo)
             update("campaign_sources", source_id, {
                 "last_error": (processo.stderr or "")[-300:].strip() or "download falhou",
                 "last_checked_at": now(),

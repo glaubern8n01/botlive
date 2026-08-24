@@ -76,5 +76,44 @@ class TestLimpeza(unittest.TestCase):
         self.assertEqual(0, limpeza.limpar(dias=3, teto_gb=999)["apagados"])
 
 
+
+
+class TestOrfaos(unittest.TestCase):
+    def setUp(self):
+        self.pasta = tempfile.TemporaryDirectory()
+        self.addCleanup(self.pasta.cleanup)
+        self.raiz = Path(self.pasta.name)
+        patch = mock.patch.object(store, "DB_PATH", self.raiz / "campanhas.db")
+        patch.start()
+        self.addCleanup(patch.stop)
+        store.migrate()
+        self.midia = self.raiz / "midia"
+        self.midia.mkdir()
+        self.campanha = store.insert("campaign_campaigns", {
+            "platform": "viewx", "name": "Teste", "created_at": store.now(),
+            "updated_at": store.now()})
+
+    def test_arquivo_sem_material_no_banco_e_apagado(self):
+        """Foi assim que dois parciais de um VOD ocuparam 58 GB calados: sem
+        linha no banco, as travas de idade e de teto nao os enxergam."""
+        orfao = self.midia / "v2814440962.temp.mp4"
+        orfao.write_bytes(b"\0" * 2048)
+        resultado = limpeza.varrer_orfaos(self.midia)
+        self.assertEqual(1, resultado["apagados"])
+        self.assertFalse(orfao.exists())
+
+    def test_arquivo_de_material_registrado_nao_e_tocado(self):
+        arquivo = self.midia / "bom.mp4"
+        arquivo.write_bytes(b"\0" * 512)
+        store.insert("campaign_materials", {
+            "campaign_id": self.campanha["id"], "name": "bom.mp4",
+            "local_path": str(arquivo), "sha256": "abc", "created_at": store.now()})
+        limpeza.varrer_orfaos(self.midia)
+        self.assertTrue(arquivo.exists())
+
+    def test_pasta_inexistente_nao_quebra(self):
+        self.assertEqual(0, limpeza.varrer_orfaos(self.raiz / "nao-existe")["apagados"])
+
+
 if __name__ == "__main__":
     unittest.main()

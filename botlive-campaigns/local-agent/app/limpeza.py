@@ -63,6 +63,33 @@ def _apagar(material: dict, motivo: str) -> int:
     return tamanho
 
 
+def varrer_orfaos(raiz=None) -> dict:
+    """Apaga arquivo em disco que nenhum material aponta.
+
+    Download que morre no meio deixa o arquivo pela metade sem linha no banco -
+    e a faxina por idade e por teto, que olham o banco, nunca o veriam. Foi
+    assim que dois parciais de um VOD do GabePeixe ocuparam 58 GB calados.
+    """
+    raiz = Path(raiz or os.getenv("CAMPAIGNS_MEDIA_ROOT", "")).resolve()
+    if not raiz.is_dir():
+        return {"apagados": 0, "liberado_gb": 0.0}
+    with connect() as db:
+        conhecidos = {Path(x["local_path"]).resolve()
+                      for x in db.execute("SELECT local_path FROM campaign_materials "
+                                          "WHERE local_path!=''")}
+    apagados = liberado = 0
+    for arquivo in raiz.rglob("*"):
+        if not arquivo.is_file() or arquivo.resolve() in conhecidos:
+            continue
+        try:
+            liberado += arquivo.stat().st_size
+            arquivo.unlink()
+            apagados += 1
+        except OSError:
+            continue
+    return {"apagados": apagados, "liberado_gb": round(liberado / 1e9, 2)}
+
+
 def limpar(dias: int | None = None, teto_gb: float | None = None,
            agora=None) -> dict:
     """Roda as duas travas e devolve o que foi liberado."""
@@ -102,5 +129,8 @@ def limpar(dias: int | None = None, teto_gb: float | None = None,
         total -= int(material["size_bytes"] or tamanho)
         apagados.append(material["id"])
 
-    return {"apagados": len(apagados), "liberado_gb": round(liberados / 1e9, 2),
+    orfaos = varrer_orfaos()
+    return {"apagados": len(apagados) + orfaos["apagados"],
+            "liberado_gb": round(liberados / 1e9 + orfaos["liberado_gb"], 2),
+            "orfaos": orfaos["apagados"],
             "restante_gb": round(total / 1e9, 2)}

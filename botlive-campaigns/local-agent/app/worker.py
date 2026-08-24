@@ -8,9 +8,12 @@ from . import engine, media, selo
 # embaixo - o corte usava um terco do 1080x1920. Shorts, Reels e TikTok
 # entregam menos quem nao preenche a tela. "crop" preenche.
 LAYOUT_PADRAO=os.getenv("CAMPAIGNS_LAYOUT","vertical-crop")
+# Quantos cortes por material saem sozinhos. O resto fica detectado, pronto
+# para render sob demanda - renderizar tudo entope a maquina sem necessidade.
+RENDER_AUTO=int(os.getenv("CAMPAIGNS_RENDER_AUTO","2"))
 from .queue import claim,enqueue,heartbeat,recover_orphans,transition
 from .rules import evaluate,summary
-from .store import ROOT,audit,connect,get,insert,now,uid,update
+from .store import ROOT,audit,connect,get,insert,now,rows,uid,update
 
 def duplicado(candidate,output_sha256):
     """Procura outro candidato que ja represente o mesmo corte.
@@ -59,7 +62,13 @@ def process(job,worker_id):
    end=item.get("fim") if item.get("fim") is not None else start+duration
    key=f"{material['id']}:{round(start,2)}:{round(end-start,2)}:{payload.get('layout',LAYOUT_PADRAO)}"
    candidate=insert("campaign_candidates",{"campaign_id":campaign["id"],"material_id":material["id"],"source_start":start,"source_end":end,"score":item["score"],"algorithm_version":(__import__("app.fala",fromlist=["ALGORITMO"]).ALGORITMO if item.get("inicio") is not None else engine.ALGORITHM_VERSION),"parameters":json.dumps(payload),"version":1,"caption":" ".join(json.loads(campaign["hashtags"]) + json.loads(campaign["mentions"])),"hook":"","layout":payload.get("layout",LAYOUT_PADRAO),"status":"detected","checklist_status":"pending","idempotency_key":key,"created_at":now(),"updated_at":now()});heartbeat(job["id"],worker_id,.1+.8*(index+1)/max(len(items),1));audit("candidate.detected","candidate",candidate["id"],item)
-  return {"candidates":len(items)}
+  # Sem isto o bot para aqui: detecta e espera alguem pedir o render pela API.
+  # Rodando sozinho, "esperar alguem" quer dizer nunca - 80 candidatos ficaram
+  # detectados e nenhum virou arquivo.
+  renderizados=0
+  for candidate in sorted(rows("campaign_candidates",200,0,"material_id=? AND status='detected'",(material["id"],)),key=lambda x:-float(x["score"]))[:RENDER_AUTO]:
+   if enqueue("render",candidate["id"],{},f"render:{candidate['id']}")["status"]=="queued":renderizados+=1
+  return {"candidates":len(items),"renders_enfileirados":renderizados}
  if job["kind"]=="render":
   candidate=get("campaign_candidates",job["entity_id"]);material=get("campaign_materials",candidate["material_id"]);campaign=get("campaign_campaigns",candidate["campaign_id"]);out=media.output_root()/campaign["id"]/f"{candidate['id']}.mp4";mentions=json.loads(campaign["mentions"]);rules=json.loads(campaign["rules"]);result=engine.render(material["local_path"],out,candidate["source_start"],candidate["source_end"],candidate["layout"],candidate["caption"],candidate["hook"]," ".join(mentions),rules.get("cta", ""));marca=selo.aplicar(result["path"],rules.get("selo") or {});result["selo"]=marca
   if marca["aplicado"]:result["sha256"]=media.sha256(result["path"])
