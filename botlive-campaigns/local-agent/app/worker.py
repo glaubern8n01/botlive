@@ -97,11 +97,22 @@ def agendar_fontes():
   hora=datetime.now(timezone.utc).strftime("%Y%m%d%H")
   if enqueue("capturar",fonte["id"],{"limite":1},f"capturar:{fonte['id']}:{hora}")["status"]=="queued":agendados+=1
  return agendados
+def faxina():
+ """Libera o material bruto que ja rendeu corte. Uma hora de live gravada sao
+ centenas de MB; sem isto o disco enche calado, como aconteceu com a VPS."""
+ from . import limpeza
+ return limpeza.limpar()
 def main():
  if os.getenv("CAMPAIGNS_ENABLED","false").lower()!="true":raise SystemExit("Campanhas desativadas")
- ultima_varredura=0.0
+ ultima_varredura=0.0;ultima_faxina=0.0
  while True:
   if os.getenv("CAMPAIGNS_PAUSED","false").lower()=="true":time.sleep(2);continue
+  if time.monotonic()-ultima_faxina>3600:
+   try:
+    resultado=faxina()
+    if resultado["apagados"]:print(f"[campanhas] faxina: {resultado['apagados']} bruto(s), {resultado['liberado_gb']} GB liberados")
+   except Exception as exc:print(f"[campanhas] faxina falhou: {exc}")
+   ultima_faxina=time.monotonic()
   # A cada 10 minutos olha se ha fonte para checar; no resto do tempo o worker
   # so consome a fila.
   if time.monotonic()-ultima_varredura>600:
