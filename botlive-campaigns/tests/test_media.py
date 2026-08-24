@@ -1,7 +1,9 @@
-import json,subprocess,sys,tempfile,unittest
+import json,os,subprocess,sys,tempfile,unittest
 from pathlib import Path
+from unittest import mock
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"local-agent"))
+from app import media
 from app.media import probe,signature
 class MediaTests(unittest.TestCase):
  def test_signatures_reject_disguised_files(self):self.assertTrue(signature(".mp4",b"\x00\x00\x00\x18ftypisom0000"));self.assertFalse(signature(".mp4",b"not a video"));self.assertTrue(signature(".webm",b"\x1a\x45\xdf\xa3rest"))
@@ -16,3 +18,15 @@ class MediaTests(unittest.TestCase):
   run.return_value.stdout=json.dumps({"format":{"duration":"12"},"streams":[{"codec_type":"audio","codec_name":"aac"}]})
   with self.assertRaisesRegex(ValueError,"vídeo ausente"):probe(Path("fixture.mp4"))
 if __name__=="__main__":unittest.main()
+
+
+class TestPastaDeSaida(unittest.TestCase):
+    def test_sem_variavel_grava_dentro_do_projeto(self):
+        with mock.patch.dict(os.environ, {"CAMPAIGNS_OUTPUT_ROOT": ""}, clear=False):
+            self.assertTrue(str(media.output_root()).endswith(os.path.join("data", "outputs")))
+
+    def test_com_variavel_grava_no_disco_de_dados(self):
+        """No PC o render mora num disco de dados, nao dentro do checkout."""
+        with tempfile.TemporaryDirectory() as pasta:
+            with mock.patch.dict(os.environ, {"CAMPAIGNS_OUTPUT_ROOT": pasta}, clear=False):
+                self.assertEqual(Path(pasta).resolve(), media.output_root())

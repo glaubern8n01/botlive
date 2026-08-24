@@ -7,6 +7,13 @@ from .store import ROOT
 
 ALLOWED={".mp4":{"video/mp4","application/mp4"},".mov":{"video/quicktime"},".webm":{"video/webm"},".mkv":{"video/x-matroska","application/octet-stream"}}
 CODECS={"h264","hevc","vp8","vp9","av1","mpeg4"}
+def output_root():
+ """Onde os cortes prontos sao gravados.
+
+ Fora do repo quando CAMPAIGNS_OUTPUT_ROOT esta definido: no PC do Glauber o
+ render mora num disco de dados, nao dentro do checkout do git.
+ """
+ return Path(os.getenv("CAMPAIGNS_OUTPUT_ROOT","")).resolve() if os.getenv("CAMPAIGNS_OUTPUT_ROOT","").strip() else ROOT/"data"/"outputs"
 def media_root():
  root=Path(os.getenv("CAMPAIGNS_MEDIA_ROOT",ROOT/"data"/"media")).resolve();root.mkdir(parents=True,exist_ok=True);return root
 def quarantine_root():
