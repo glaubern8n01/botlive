@@ -55,15 +55,34 @@ def _filtro_imagem(config: dict) -> str:
             ":eval=init[v]")
 
 
+def _caminho_de_fonte(config: dict) -> str:
+    """Fonte do selo, no formato que o drawtext aceita.
+
+    Sem fontfile o ffmpeg cai numa serifada padrao que destoa de todo o resto
+    do BotLive - a Anton embarcada no repo e a mesma do overlay_editor, entao
+    o corte de campanha sai com a mesma cara dos outros.
+
+    O caminho do Windows precisa de tratamento: no drawtext a barra invertida e
+    escape e os dois-pontos de "G:" separam parametros do filtro.
+    """
+    escolhida = (config.get("fonte") or "").strip()
+    if not escolhida:
+        padrao = Path(__file__).resolve().parents[3] / "fonts" / "Anton-Regular.ttf"
+        if not padrao.exists():
+            return ""
+        escolhida = str(padrao)
+    return escolhida.replace("\\", "/").replace(":", r"\:")
+
+
 def _filtro_texto(config: dict) -> str:
     texto = _escapar(str(config.get("texto", "")).strip())
     altura = float(config.get("altura_pct", ALTURA_PADRAO))
-    fonte = config.get("fonte") or ""
+    fonte = _caminho_de_fonte(config)
     arquivo = f"fontfile='{fonte}':" if fonte else ""
-    # Caixa preta atras: o requisito e ser LEGIVEL, e texto branco sobre
-    # gameplay claro some.
+    # Caixa atras do texto: o requisito das campanhas e ser LEGIVEL o corte
+    # inteiro, e texto branco sozinho some em cena clara.
     return (f"[0:v]drawtext={arquivo}text='{texto}':fontcolor=white:"
-            f"fontsize=h/26:box=1:boxcolor=black@0.55:boxborderw=18:"
+            f"fontsize=h/24:box=1:boxcolor=black@0.6:boxborderw=16:"
             f"x=(w-text_w)/2:y=h*{altura}[v]")
 
 

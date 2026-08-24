@@ -33,6 +33,23 @@ class TestSelo(unittest.TestCase):
         filtro = selo.montar_filtro({"tipo": "texto", "texto": "https://kick.com/x"})
         self.assertIn(r"https\://kick.com/x", filtro)
 
+    def test_usa_a_fonte_do_botlive_e_nao_a_serifada_do_ffmpeg(self):
+        filtro = selo.montar_filtro({"tipo": "texto", "texto": "kick.com/x"})
+        self.assertIn("fontfile=", filtro)
+        self.assertIn("Anton-Regular.ttf", filtro)
+
+    def test_caminho_do_windows_vai_escapado_para_o_drawtext(self):
+        """Sem escapar, o "G:" do caminho separa parametros do filtro e o
+        drawtext le "G" como um valor solto."""
+        barra = chr(92)
+        caminho = f"G:{barra}botlive{barra}fonts{barra}Anton-Regular.ttf"
+        filtro = selo.montar_filtro({"tipo": "texto", "texto": "x", "fonte": caminho})
+        self.assertIn(r"G\:/botlive/fonts/Anton-Regular.ttf", filtro)
+
+    def test_texto_tem_caixa_atras_para_ficar_legivel(self):
+        filtro = selo.montar_filtro({"tipo": "texto", "texto": "x"})
+        self.assertIn("box=1", filtro)
+
     def test_selo_de_texto_sem_texto_e_erro_de_cadastro(self):
         with self.assertRaises(ValueError):
             selo.montar_filtro({"tipo": "texto", "texto": "   "})
