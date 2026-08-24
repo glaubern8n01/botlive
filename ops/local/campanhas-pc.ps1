@@ -17,11 +17,32 @@
 param(
     [string]$Dados = "G:\botlive-campanhas",
     [int]$Porta = 8775,
+    [int]$Atraso = 0,
     [switch]$SoWorker,
     [switch]$SoApi
 )
 
 $ErrorActionPreference = "Stop"
+
+# Usado pelo atalho do startup. O boot desta maquina caiu de 5 min para 40s
+# depois que o autostart foi limpo; nada nosso pode entrar competindo com o
+# logon. Espera o desktop assentar e so entao comeca.
+if ($Atraso -gt 0) {
+    Write-Host "Esperando $Atraso s antes de subir (boot)."
+    Start-Sleep -Seconds $Atraso
+}
+# Ja tem uma instancia de pe? Sai calado. O atalho do startup dispara a cada
+# logon, e sem esta checagem um logoff/logon subiria um segundo worker que
+# so ia brigar pela mesma fila e falhar ao abrir a porta.
+try {
+    $viva = Invoke-WebRequest -Uri "http://127.0.0.1:$Porta/campaigns/v1/health" `
+        -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
+    if ($viva.StatusCode -eq 200) {
+        Write-Host "Ja tem campanha rodando na porta $Porta. Nada a fazer."
+        exit 0
+    }
+} catch { }
+
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $agente = Join-Path $repo "botlive-campaigns\local-agent"
 
