@@ -348,12 +348,19 @@ def buscar(source_id: str, limite: int = POR_RODADA) -> dict:
 
 
 def fontes_para_checar(limite: int = 5) -> list:
-    """Fontes ativas de campanhas ativas, mais antigas primeiro."""
+    """Fontes ativas de campanhas ATIVAS, mais antigas primeiro.
+
+    Rascunho ficava de fora so no papel: o catalogo tem dezenas de
+    "ViewX - Fulano" em draft, e o de Lucas Clash ON apontava para o mesmo canal
+    da campanha de verdade. Resultado: o bot baixou, transcreveu e renderizou o
+    mesmo material duas vezes, e a copia do rascunho nao servia para nada -
+    rascunho nao tem hashtag, mencao nem selo.
+    """
     with connect() as db:
         linhas = db.execute(
             "SELECT s.* FROM campaign_sources s "
             "JOIN campaign_campaigns c ON c.id = s.campaign_id "
-            "WHERE s.enabled=1 AND c.status IN ('active','draft') "
+            "WHERE s.enabled=1 AND c.status='active' "
             "ORDER BY COALESCE(s.last_checked_at,'') ASC LIMIT ?",
             (max(1, limite),),
         ).fetchall()

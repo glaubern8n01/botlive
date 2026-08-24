@@ -87,5 +87,37 @@ class TestRegraDoSelo(unittest.TestCase):
         self.assertEqual("warning", check["severity"])
 
 
+
+
+class TestConferirAntesDeRenderizar(unittest.TestCase):
+    """Sem esta conferencia o corte era renderizado inteiro - minutos de CPU -
+    so para morrer no passo do selo, e ainda tres vezes por causa das
+    tentativas do job. Aconteceu com o GabePeixe."""
+
+    def test_campanha_sem_selo_passa_direto(self):
+        selo.conferir({})
+
+    def test_imagem_ausente_reprova_antes_do_render(self):
+        with self.assertRaises(FileNotFoundError):
+            selo.conferir({"tipo": "imagem", "arquivo": "/data/agents/selos/nao-existe.png"})
+
+    def test_texto_invalido_reprova_antes_do_render(self):
+        with self.assertRaises(ValueError):
+            selo.conferir({"tipo": "texto", "texto": "  "})
+
+    def test_selo_da_vps_e_encontrado_na_pasta_desta_maquina(self):
+        """A campanha e cadastrada na VPS e guarda o caminho de la; quem
+        renderiza e o PC, onde esse caminho nao existe."""
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as pasta:
+            (Path(pasta) / "gabepeixe-lower.png").write_bytes(b"x")
+            with mock.patch.dict(os.environ, {"CAMPAIGNS_SELOS_DIR": pasta}, clear=False):
+                achado = selo.achar_arquivo("/data/agents/selos/gabepeixe-lower.png")
+                self.assertIsNotNone(achado)
+                self.assertEqual("gabepeixe-lower.png", achado.name)
+                selo.conferir({"tipo": "imagem", "arquivo": "/data/agents/selos/gabepeixe-lower.png"})
+
+
 if __name__ == "__main__":
     unittest.main()

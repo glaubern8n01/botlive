@@ -41,6 +41,46 @@ def _ffmpeg():
     return os.getenv("CAMPAIGNS_FFMPEG", "ffmpeg")
 
 
+def achar_arquivo(caminho: str) -> Path | None:
+    """Acha o arquivo do selo, aqui ou na pasta de selos desta maquina.
+
+    A campanha e cadastrada na VPS e guarda um caminho de la
+    (/data/agents/selos/...). Quem renderiza e o PC, onde esse caminho nao
+    existe. Em vez de exigir cadastro por maquina, procura o mesmo nome de
+    arquivo em CAMPAIGNS_SELOS_DIR.
+    """
+    if not caminho:
+        return None
+    direto = Path(caminho)
+    if direto.is_file():
+        return direto
+    pasta = os.getenv("CAMPAIGNS_SELOS_DIR", "").strip()
+    if pasta:
+        aqui = Path(pasta) / direto.name
+        if aqui.is_file():
+            return aqui
+    return None
+
+
+def conferir(config: dict) -> None:
+    """Levanta erro se a campanha exige selo e ele nao esta disponivel.
+
+    Serve para checar ANTES de renderizar: sem isto o corte era renderizado
+    inteiro - minutos de CPU - so para morrer no passo seguinte, e ainda tres
+    vezes, por causa das tentativas do job.
+    """
+    if not config:
+        return
+    tipo = (config.get("tipo") or ("imagem" if config.get("arquivo") else "texto")).lower()
+    if tipo != "imagem":
+        montar_filtro(config)
+        return
+    if achar_arquivo(config.get("arquivo") or "") is None:
+        raise FileNotFoundError(
+            f"Selo obrigatorio nao encontrado: {config.get('arquivo')}"
+            " (coloque o arquivo em CAMPAIGNS_SELOS_DIR)")
+
+
 def _escapar(texto: str) -> str:
     """No drawtext, dois-pontos, barra e aspa simples sao sintaxe do filtro."""
     return (texto.replace("\\", r"\\").replace(":", r"\:")
@@ -113,11 +153,13 @@ def aplicar(video: str | Path, config: dict) -> dict:
     tipo = (config.get("tipo") or ("imagem" if config.get("arquivo") else "texto")).lower()
     arquivo = config.get("arquivo")
     if tipo == "imagem":
-        if not arquivo or not Path(arquivo).exists():
-            # Acontece de verdade: o lower do GabePeixe vem de uma pasta no
-            # Drive e alguem precisa baixar. Falhar aqui trava a publicacao,
-            # que e melhor que publicar corte desclassificado.
+        # Acontece de verdade: o lower do GabePeixe vem de uma pasta no Drive e
+        # alguem precisa baixar. Travar aqui e melhor que publicar corte
+        # desclassificado.
+        encontrado = achar_arquivo(arquivo or "")
+        if encontrado is None:
             raise FileNotFoundError(f"Selo obrigatorio nao encontrado: {arquivo}")
+        arquivo = str(encontrado)
 
     filtro = montar_filtro(config)
     saida = video.with_name(video.stem + "-selo.mp4")

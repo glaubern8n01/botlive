@@ -338,3 +338,17 @@ class FonteDaCampanhaTests(unittest.TestCase):
             self.assertFalse(alvo.exists())
             self.assertFalse((Path(pasta) / "v123.temp.mp4").exists())
             self.assertTrue((Path(pasta) / "outro.mp4").exists())
+
+    def test_rascunho_nao_gera_trabalho(self):
+        """O catalogo tem dezenas de "ViewX - Fulano" em draft, e o de Lucas
+        Clash ON aponta para o mesmo canal da campanha de verdade: o bot baixou,
+        transcreveu e renderizou o mesmo material duas vezes."""
+        rascunho = store.insert("campaign_campaigns", {
+            "platform": "viewx", "name": "ViewX - Lucas Clash ON", "status": "draft",
+            "created_at": store.now(), "updated_at": store.now()})
+        self._fonte(url="https://www.youtube.com/@daativa/videos", network="youtube")
+        fontes.registrar(rascunho["id"], "youtube", "https://www.youtube.com/@dorascunho/videos",
+                         "B", "regra")
+        urls = [f["url"] for f in fontes.fontes_para_checar(limite=10)]
+        self.assertIn("https://www.youtube.com/@daativa/videos", urls)
+        self.assertNotIn("https://www.youtube.com/@dorascunho/videos", urls)
