@@ -1,5 +1,6 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, Copy, Download, HelpCircle, Plus, RefreshCw, Save, ShieldAlert, Smartphone } from 'lucide-react';
+import CookieYoutube from '../components/CookieYoutube';
 import { supabase } from '../lib/supabase';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -215,6 +216,7 @@ export function KwaiCut() {
       <div><h2 className="text-2xl font-bold">Kwai CUT</h2><p className="text-zinc-400">Futebol real · prepare_only · nenhuma postagem externa automática</p></div>
       <Button variant="outline" onClick={load} disabled={loading}><RefreshCw className="mr-2 h-4 w-4" />Atualizar</Button>
     </div>
+    <CookieYoutube />
     {error && <div className="flex gap-2 rounded-lg border border-amber-800 bg-amber-950/30 p-3 text-amber-300"><AlertCircle className="h-5 w-5 shrink-0" />{error}</div>}
     {notice && <div className="flex gap-2 rounded-lg border border-emerald-800 bg-emerald-950/30 p-3 text-emerald-300"><CheckCircle2 className="h-5 w-5 shrink-0" />{notice}</div>}
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">

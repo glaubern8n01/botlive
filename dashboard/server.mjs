@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
-import { realpath, stat, unlink } from 'node:fs/promises';
+import { copyFile, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { pathToFileURL } from 'node:url';
 import { extname, isAbsolute, join, resolve, sep } from 'node:path';
 
 const port = Number(process.env.PORT || 3000);
@@ -543,6 +544,86 @@ async function agentesRoute(request, response, url) {
   return true;
 }
 
+// Cookie do YouTube: estado e troca pelo painel.
+//
+// Antes o Glauber exportava o cookie do navegador e mandava por chat para
+// alguem copiar na VPS a mao. O cookie vence, o Kwai CUT para de descobrir
+// canal (117 de 120 com erro numa rodada) e ninguem descobre ate faltar video.
+//
+// O painel ja monta o mesmo volume do vigia e do produtor, entao ele escreve o
+// arquivo direto. Nao ha rede nova nem segredo novo: o acesso continua sendo o
+// Basic Auth que ja protege o painel inteiro.
+const cookiePath = resolve(process.env.BOTLIVE_COOKIES_FILE || join(mediaRoot, 'cookies-youtube.txt'));
+
+// Cookies que realmente autenticam. Se um destes vence, o yt-dlp volta a levar
+// "Sign in to confirm you're not a bot" - os outros sao preferencia e telemetria.
+const cookiesDeSessao = new Set(['SID', '__Secure-1PSID', '__Secure-3PSID', 'LOGIN_INFO', 'SAPISID']);
+
+export function lerCookies(texto) {
+  const linhas = String(texto || '').split(/\r?\n/);
+  const entradas = [];
+  for (const linha of linhas) {
+    if (!linha || linha.startsWith('#')) continue;
+    const campos = linha.split('\t');
+    if (campos.length < 7) continue;
+    entradas.push({ dominio: campos[0], expira: Number(campos[4]) || 0, nome: campos[5] });
+  }
+  return entradas;
+}
+
+export function avaliarCookies(texto, agora = Date.now()) {
+  const entradas = lerCookies(texto);
+  const doYoutube = entradas.filter((x) => x.dominio.includes('youtube.com'));
+  if (!doYoutube.length) {
+    return { estado: 'invalido', motivo: 'Nenhum cookie de youtube.com no arquivo', entradas: entradas.length };
+  }
+  // expira 0 = cookie de sessao, que nao vence por data; nao entra na conta.
+  const sessao = doYoutube.filter((x) => cookiesDeSessao.has(x.nome) && x.expira > 0);
+  if (!sessao.length) {
+    return { estado: 'invalido', motivo: 'Falta o cookie de login (SID / LOGIN_INFO)', entradas: doYoutube.length };
+  }
+  const vence = Math.min(...sessao.map((x) => x.expira)) * 1000;
+  const diasQueFaltam = Math.floor((vence - agora) / 86400000);
+  const estado = diasQueFaltam < 0 ? 'vencido' : diasQueFaltam <= 7 ? 'vencendo' : 'ok';
+  return { estado, vence: new Date(vence).toISOString(), dias_que_faltam: diasQueFaltam, entradas: doYoutube.length };
+}
+
+async function cookieRoute(request, response, url) {
+  if (url.pathname !== '/api/cookies/youtube') return false;
+  if (!adminKey) return json(response, 503, { error: 'Backend administrativo não configurado' }), true;
+
+  if (request.method === 'GET') {
+    try {
+      const info = await stat(cookiePath);
+      const texto = await readFile(cookiePath, 'utf8');
+      return json(response, 200, {
+        ...avaliarCookies(texto),
+        atualizado_em: info.mtime.toISOString(),
+        caminho: cookiePath,
+      }), true;
+    } catch {
+      return json(response, 200, { estado: 'ausente', motivo: 'Nenhum cookie instalado', caminho: cookiePath }), true;
+    }
+  }
+
+  if (request.method !== 'POST') return json(response, 405, { error: 'Método não permitido' }), true;
+
+  const corpo = await readJsonBody(request);
+  const conteudo = String(corpo?.conteudo || '');
+  const leitura = avaliarCookies(conteudo);
+  // Arquivo ruim nao entra: substituir um cookie que funciona por lixo
+  // derrubaria a descoberta sem ninguem perceber.
+  if (leitura.estado === 'invalido') return json(response, 400, { error: leitura.motivo }), true;
+  if (leitura.estado === 'vencido') return json(response, 400, { error: 'Esse cookie já está vencido' }), true;
+
+  try {
+    await copyFile(cookiePath, `${cookiePath}.anterior`);
+  } catch { /* primeira instalacao: nao ha anterior para guardar */ }
+  const comQuebra = conteudo.endsWith('\n') ? conteudo : conteudo + '\n';
+  await writeFile(cookiePath, comQuebra, { mode: 0o600 });
+  return json(response, 200, { ...leitura, atualizado_em: new Date().toISOString() }), true;
+}
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
@@ -555,6 +636,7 @@ const server = createServer(async (request, response) => {
     if (await cleanupRoute(request, response, url)) return;
     if (await mediaRoute(request, response, url)) return;
     if (await agentesRoute(request, response, url)) return;
+    if (await cookieRoute(request, response, url)) return;
     const requested = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\/+/, '');
     let path = resolve(join(distRoot, requested));
     if (path !== distRoot && !path.startsWith(`${distRoot}${sep}`)) return json(response, 403, { error: 'Caminho inválido' });
@@ -569,6 +651,12 @@ const server = createServer(async (request, response) => {
   }
 });
 
-server.listen(port, '0.0.0.0', () => {
-  console.log(`[dashboard] disponível em 0.0.0.0:${port}; mídia em modo prepare_only`);
-});
+// Só escuta quando é o processo principal. Sem esta guarda, importar o arquivo
+// num teste sobe um servidor e o teste nunca termina.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  server.listen(port, '0.0.0.0', () => {
+    console.log(`[dashboard] disponível em 0.0.0.0:${port}; mídia em modo prepare_only`);
+  });
+}
+
+export { server };
