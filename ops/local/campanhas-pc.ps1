@@ -57,6 +57,7 @@ $env:CAMPAIGNS_DATABASE_PATH = Join-Path $Dados "campaigns.db"
 $env:CAMPAIGNS_MEDIA_ROOT   = Join-Path $Dados "midia"
 $env:CAMPAIGNS_OUTPUT_ROOT  = Join-Path $Dados "saidas"
 $env:CAMPAIGNS_LAYOUT       = "vertical-crop"
+$env:CAMPAIGNS_SELOS_DIR    = Join-Path $Dados "selos"
 $env:PYTHONUNBUFFERED       = "1"
 $env:PYTHONUTF8             = "1"
 
