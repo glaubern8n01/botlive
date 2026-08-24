@@ -103,6 +103,14 @@ def agendar_fontes():
  from . import fontes
  agendados=0
  for fonte in fontes.fontes_para_checar(limite=5):
+  # Campanha sem o selo que ela exige nao pode entregar corte nenhum. Sem esta
+  # checagem o bot baixava a live inteira, transcrevia e so entao falhava no
+  # render - foram 13 falhas seguidas do GabePeixe esperando um PNG que ainda
+  # nao foi baixado do Drive.
+  campanha=get("campaign_campaigns",fonte["campaign_id"])
+  try:selo.conferir(json.loads(campanha["rules"]).get("selo") or {})
+  except Exception as exc:
+   print(f"[campanhas] {campanha['name']}: pulando, {exc}");continue
   hora=datetime.now(timezone.utc).strftime("%Y%m%d%H")
   if enqueue("capturar",fonte["id"],{"limite":1},f"capturar:{fonte['id']}:{hora}")["status"]=="queued":agendados+=1
  return agendados

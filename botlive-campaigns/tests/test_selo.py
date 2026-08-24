@@ -119,5 +119,37 @@ class TestConferirAntesDeRenderizar(unittest.TestCase):
                 selo.conferir({"tipo": "imagem", "arquivo": "/data/agents/selos/gabepeixe-lower.png"})
 
 
+
+
+class TestNaoAgendarSemSelo(unittest.TestCase):
+    """Campanha sem o selo que exige nao entrega corte nenhum: baixar a live e
+    transcrever antes de descobrir isso e desperdicio puro. Foram 13 falhas
+    seguidas do GabePeixe esperando um PNG do Drive."""
+
+    def test_campanha_sem_selo_e_barrada_antes_da_captura(self):
+        from app import worker
+        fonte = {"id": "f1", "campaign_id": "c1"}
+        campanha = {"id": "c1", "name": "GabePeixe",
+                    "rules": '{"selo": {"tipo": "imagem", "arquivo": "/nao/existe.png"}}'}
+        from app import fontes
+        with mock.patch.object(fontes, "fontes_para_checar", return_value=[fonte]), \
+             mock.patch.object(worker, "get", return_value=campanha), \
+             mock.patch.object(worker, "enqueue") as enfileirar:
+            self.assertEqual(0, worker.agendar_fontes())
+        enfileirar.assert_not_called()
+
+    def test_campanha_com_selo_ok_segue_normal(self):
+        from app import worker
+        fonte = {"id": "f1", "campaign_id": "c1"}
+        campanha = {"id": "c1", "name": "Juninho",
+                    "rules": '{"selo": {"tipo": "texto", "texto": "kick.com/x"}}'}
+        from app import fontes
+        with mock.patch.object(fontes, "fontes_para_checar", return_value=[fonte]), \
+             mock.patch.object(worker, "get", return_value=campanha), \
+             mock.patch.object(worker, "enqueue", return_value={"status": "queued"}) as enfileirar:
+            self.assertEqual(1, worker.agendar_fontes())
+        enfileirar.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
