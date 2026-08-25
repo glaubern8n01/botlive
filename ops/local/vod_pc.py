@@ -45,9 +45,16 @@ sys.path.insert(0, str(REPO))
 
 from watcher import CONFIG_TABLE, STREAMS_TABLE, VigiaConfig, montar_comando_vod  # noqa: E402
 
-# Estado próprio: o vigia da VPS varre órfãos procurando "running" e marcaria
-# como failed um job que está saudável aqui. "running_pc" passa longe disso.
-EM_ANDAMENTO = "running_pc"
+# A coluna vod_job_status tem CHECK no banco: valor inventado e recusado com
+# "violates check constraint". Entao o estado e o mesmo "running" de sempre, e
+# quem diz que o job e DESTE PC (e desde quando) e a marca no error_message.
+#
+# Efeito colateral conhecido: a varredura de orfaos do vigia marca como failed
+# toda linha em "running" quando ele reinicia. Nao e grave - quem escreve o
+# resultado final e este runner, no fim do processamento - mas e o motivo de a
+# recuperacao aqui olhar a MARCA, e nao so o estado.
+EM_ANDAMENTO = "running"
+MARCA_DO_PC = "running_pc@"
 
 # Quanto tempo um job pode ficar "running_pc" sem sinal de vida antes de ser
 # considerado abandonado. Se o PC desligar no meio de um VOD, sem isso a linha
@@ -66,7 +73,7 @@ def _marca_de_posse() -> str:
     """
     import socket
 
-    return f"{EM_ANDAMENTO}@{socket.gethostname()}|{datetime.now(timezone.utc).isoformat()}"
+    return f"{MARCA_DO_PC}{socket.gethostname()}|{datetime.now(timezone.utc).isoformat()}"
 
 
 def visto_em(linha: dict):
@@ -93,6 +100,7 @@ def abandonados(client) -> list:
         client.table(STREAMS_TABLE)
         .select("stream_id, updated_at, error_message")
         .eq("vod_job_status", EM_ANDAMENTO)
+        .like("error_message", f"{MARCA_DO_PC}%")
         .execute()
         .data
         or []
@@ -118,6 +126,7 @@ def devolver_abandonados(client, log) -> int:
             # Só devolve se ainda estiver como a gente viu: se outro PC pegou
             # neste meio tempo, quem manda é ele.
             .eq("vod_job_status", EM_ANDAMENTO)
+            .eq("error_message", linha.get("error_message") or "")
             .execute()
         )
         if resposta.data:
@@ -258,19 +267,41 @@ def processar(client, config: VigiaConfig, linha: dict, log) -> bool:
         log(f"{linha['channel_login']}: outro processo pegou este VOD antes")
         return False
 
+    # Cada job tem seu proprio log. Sem isto, um job que falha em 8 minutos nao
+    # deixa pista nenhuma - e foi exatamente o que aconteceu na primeira
+    # tentativa real.
+    pasta = Path(os.getenv("VOD_PC_LOGS", "G:/botlive-campanhas/logs-vod"))
+    pasta.mkdir(parents=True, exist_ok=True)
+    arquivo = pasta / f"vigia_{stream_id}_vod.log"
+
     log(f"{linha['channel_login']}: processando {vod_url}")
+    log(f"  log em {arquivo}")
     inicio = time.time()
-    processo = subprocess.run(comando, cwd=str(REPO))
+    with arquivo.open("w", encoding="utf-8", errors="replace") as saida:
+        processo = subprocess.run(comando, cwd=str(REPO), stdout=saida,
+                                  stderr=subprocess.STDOUT, text=True)
     minutos = (time.time() - inicio) / 60
 
     ok = processo.returncode == 0
+    motivo = ""
+    if not ok:
+        # A ultima linha do log costuma dizer o que houve; leva junto para o
+        # painel, senao o "failed" no banco nao explica nada.
+        try:
+            linhas_log = [x.strip() for x in
+                          arquivo.read_text(encoding="utf-8", errors="replace").splitlines()
+                          if x.strip()]
+            motivo = linhas_log[-1][:180] if linhas_log else ""
+        except OSError:
+            motivo = ""
     client.table(STREAMS_TABLE).update(
         {
             "vod_job_status": "done" if ok else "failed",
-            "error_message": "" if ok else f"vod_pc: saiu com {processo.returncode}",
+            "error_message": "" if ok else f"vod_pc saiu com {processo.returncode}: {motivo}"[:400],
         }
     ).eq("stream_id", stream_id).execute()
-    log(f"{linha['channel_login']}: {'pronto' if ok else 'FALHOU'} em {minutos:.0f} min")
+    log(f"{linha['channel_login']}: {'pronto' if ok else 'FALHOU'} em {minutos:.0f} min"
+        + (f" - {motivo[:100]}" if motivo else ""))
     return ok
 
 

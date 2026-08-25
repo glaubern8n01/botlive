@@ -93,11 +93,13 @@ class TestFilaDoPc(unittest.TestCase):
         client = self._client([{"stream_id": "1", "channel_login": "x", "dry_run": False}])
         self.assertEqual([], vod_pc.pendentes(client, _config(vod_delay_minutes=15)))
 
-    def test_estado_proprio_nao_colide_com_a_varredura_de_orfaos(self):
-        """O vigia da VPS marca como failed toda linha em 'running' quando
-        reinicia. Um job saudavel aqui nao pode cair nessa rede."""
+    def test_a_posse_do_pc_e_reconhecivel(self):
+        """A coluna vod_job_status tem CHECK no banco e recusa valor inventado,
+        entao o estado e o "running" de sempre; quem diz que o job e deste PC e
+        a marca no error_message."""
         import vod_pc
-        self.assertNotEqual("running", vod_pc.EM_ANDAMENTO)
+        self.assertEqual("running", vod_pc.EM_ANDAMENTO)
+        self.assertTrue(vod_pc._marca_de_posse().startswith(vod_pc.MARCA_DO_PC))
 
 
 if __name__ == "__main__":
@@ -151,7 +153,8 @@ class TestRecuperarJobPerdido(unittest.TestCase):
 
     def _client(self, linhas):
         client = mock.MagicMock()
-        client.table.return_value.select.return_value.eq.return_value.execute.return_value.data = linhas
+        cadeia = client.table.return_value.select.return_value.eq.return_value.like.return_value
+        cadeia.execute.return_value.data = linhas
         return client
 
     def test_job_recente_e_deixado_em_paz(self):
@@ -167,7 +170,8 @@ class TestRecuperarJobPerdido(unittest.TestCase):
         """failed nunca mais e redespachado; o VOD ficaria perdido."""
         import vod_pc
         client = self._client([self._linha(9)])
-        client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = [{}]
+        alvo = client.table.return_value.update.return_value.eq.return_value.eq.return_value.eq.return_value
+        alvo.execute.return_value.data = [{}]
         vod_pc.devolver_abandonados(client, lambda *a: None)
         patch = client.table.return_value.update.call_args.args[0]
         self.assertEqual("waiting_vod", patch["vod_job_status"])
