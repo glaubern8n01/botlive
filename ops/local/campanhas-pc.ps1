@@ -57,6 +57,9 @@ $env:CAMPAIGNS_DATABASE_PATH = Join-Path $Dados "campaigns.db"
 $env:CAMPAIGNS_MEDIA_ROOT   = Join-Path $Dados "midia"
 $env:CAMPAIGNS_OUTPUT_ROOT  = Join-Path $Dados "saidas"
 $env:CAMPAIGNS_LAYOUT       = "vertical-crop"
+# Este PC e do Glauber. Sem teto, um encode pega os 6 nucleos e a maquina
+# fica lenta para o que ele estiver fazendo. 2 deixa 4 livres.
+$env:BOTLIVE_FFMPEG_THREADS = "2"
 $env:CAMPAIGNS_SELOS_DIR    = Join-Path $Dados "selos"
 $env:PYTHONUNBUFFERED       = "1"
 $env:PYTHONUTF8             = "1"
