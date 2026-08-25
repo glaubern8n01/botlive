@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import time
@@ -46,6 +47,25 @@ def _custo_usd(model: Optional[str], tokens_in: int, tokens_out: int) -> Optiona
         return None
     preco_in, preco_out = PRECOS_USD_POR_MTOKEN[model]
     return round(tokens_in / 1e6 * preco_in + tokens_out / 1e6 * preco_out, 6)
+
+
+def _precisa_de_olho_humano(corte_path: Path) -> bool:
+    """O corte esta na pasta needs_review: o filtro de nicho ficou em duvida.
+
+    Antes, corte em duvida subia para o YouTube como unlisted e esperava
+    aprovacao manual la. Parecia seguro - unlisted e rascunho -, mas em
+    25/08/2026 quatro cortes de Counter-Strike foram parar no canal
+    "GTA6 Brasil cortes oficial", que e so de GTA. O filtro mede movimento,
+    audio e tela estatica; CS2 tem tiro e movimento igual, entao passa.
+
+    Agora corte em duvida para no disco. O vertical e o publish.json continuam
+    sendo gerados: aprovou, e so mover para ready.
+
+    BOTLIVE_POSTAR_NEEDS_REVIEW=1 volta ao comportamento anterior.
+    """
+    if os.getenv("BOTLIVE_POSTAR_NEEDS_REVIEW", "").strip() == "1":
+        return False
+    return "needs_review" in {parte.lower() for parte in corte_path.resolve().parts}
 
 
 def publicar_corte(
@@ -149,12 +169,16 @@ def publicar_corte(
     # postar_redes nunca levanta excecao, mas o try garante que nem um bug do
     # modulo social derruba a publicacao (json e videos ja estao no disco).
     if social_config is not None and getattr(social_config, "enabled", False):
-        try:
-            from social_publisher import postar_redes
+        if _precisa_de_olho_humano(corte_path):
+            print(f"[social] {corte_path.name}: em needs_review, NAO vai para as redes. "
+                  "O vertical e o publish.json ficam prontos aqui.")
+        else:
+            try:
+                from social_publisher import postar_redes
 
-            postar_redes(registro, social_config, json_path=json_path)
-        except Exception as social_exc:
-            print(f"[social][falha] {corte_path.name}: {social_exc}; pipeline segue.")
+                postar_redes(registro, social_config, json_path=json_path)
+            except Exception as social_exc:
+                print(f"[social][falha] {corte_path.name}: {social_exc}; pipeline segue.")
     return registro
 
 
