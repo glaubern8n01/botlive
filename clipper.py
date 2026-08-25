@@ -158,12 +158,28 @@ def baixar_trecho(
     return _find_downloaded_video(work_dir), precise
 
 
+def _threads_do_encode() -> int:
+    """Quantas threads o x264 pode usar num corte.
+
+    `os.cpu_count()` entregava a maquina inteira para um unico encode. Com dois
+    ou tres rodando ao mesmo tempo - o normal quando o vigia processa live e VOD
+    juntos - a VPS foi para 100% de CPU e o provedor ligou a limitacao de
+    recursos. Metade dos nucleos deixa o sistema, o painel e a API respirarem.
+
+    BOTLIVE_FFMPEG_THREADS manda quando definido.
+    """
+    escolhido = os.getenv("BOTLIVE_FFMPEG_THREADS", "").strip()
+    if escolhido.isdigit() and int(escolhido) > 0:
+        return int(escolhido)
+    return max(1, (os.cpu_count() or 4) // 2)
+
+
 def _write_clip(clip: VideoFileClip, output_path: Path, preset: str = "medium") -> None:
     kwargs: dict[str, Any] = {
         "codec": "libx264",
         "fps": min(float(getattr(clip, "fps", 30) or 30), 60),
         "preset": preset,
-        "threads": os.cpu_count() or 4,
+        "threads": _threads_do_encode(),
         "verbose": False,
         "logger": None,
     }
