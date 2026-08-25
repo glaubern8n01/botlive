@@ -127,7 +127,41 @@ def devolver_abandonados(client, log) -> int:
     return devolvidos
 
 
+# Credenciais da VPS ficam num arquivo do disco de dados, fora do repositorio.
+# Sem isto os atalhos do Windows precisariam carregar segredo na linha de
+# comando - que fica visivel no Gerenciador de Tarefas para qualquer um.
+ARQUIVO_DE_AMBIENTE = Path(os.getenv("BOTLIVE_ENV_LOCAL", "G:/botlive-campanhas/vps.env"))
+
+
+def carregar_ambiente() -> None:
+    if not ARQUIVO_DE_AMBIENTE.is_file():
+        return
+    for linha in ARQUIVO_DE_AMBIENTE.read_text(encoding="utf-8-sig").splitlines():
+        linha = linha.strip()
+        if not linha or linha.startswith("#") or "=" not in linha:
+            continue
+        chave, valor = linha.split("=", 1)
+        # Quem ja esta no ambiente manda - mas so se tiver conteudo. Variavel
+        # definida como texto vazio existe para o os.environ e faria o
+        # setdefault desistir, deixando tudo sem credencial: foi exatamente o
+        # que aconteceu na primeira tentativa.
+        if not os.environ.get(chave.strip(), "").strip():
+            os.environ[chave.strip()] = valor.strip()
+
+
 def cliente():
+    carregar_ambiente()
+    # O antivirus desta maquina (AVG) faz MITM de TLS, e o Python nao conhece a
+    # CA dele: sem isto todo acesso ao Supabase morre em CERTIFICATE_VERIFY_FAILED.
+    # `truststore` usa o cofre de certificados do Windows, que ja confia nela -
+    # continua verificando o certificado, so muda de onde vem a lista de CAs.
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except ImportError:
+        pass
+
     from supabase import create_client
 
     url = os.getenv("ROBO_SUPABASE_URL", "").strip()
