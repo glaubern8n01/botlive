@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sys
@@ -66,6 +67,26 @@ def gerar_subtitulo(transcricao: str, titulo: str, nicho: Optional[str]) -> str:
     if nicho == "gta":
         return "NINGUÉM ESPERAVA POR ISSO"
     return "VEJA O QUE ACONTECEU"
+
+
+def _precisa_de_olho_humano(corte_path: Path) -> bool:
+    """O corte esta na pasta needs_review, ou seja: o filtro de nicho ficou em
+    duvida sobre ele.
+
+    Antes, corte em duvida subia para o YouTube como unlisted e esperava
+    aprovacao manual la. Parecia seguro - unlisted e rascunho -, mas em
+    25/08/2026 quatro cortes de Counter-Strike foram parar no canal
+    "GTA6 Brasil cortes oficial", que e so de GTA. O filtro mede movimento,
+    audio e tela estatica; CS2 tem tiro e movimento igual, entao passa.
+
+    Agora corte em duvida para AQUI. O vertical e o publish.json continuam
+    sendo gerados: quando o Glauber olhar e aprovar, e so mover para ready.
+
+    BOTLIVE_POSTAR_NEEDS_REVIEW=1 volta ao comportamento anterior.
+    """
+    if os.getenv("BOTLIVE_POSTAR_NEEDS_REVIEW", "").strip() == "1":
+        return False
+    return "needs_review" in {parte.lower() for parte in corte_path.resolve().parts}
 
 
 def publicar_corte(
@@ -169,12 +190,16 @@ def publicar_corte(
     )
 
     if social_config is not None and getattr(social_config, "enabled", False):
-        try:
-            from social_publisher import postar_redes
+        if _precisa_de_olho_humano(corte_path):
+            print(f"[social] {corte_path.name}: em needs_review, NAO vai para as redes. "
+                  "O vertical e o publish.json ficam prontos aqui.")
+        else:
+            try:
+                from social_publisher import postar_redes
 
-            postar_redes(registro, social_config, json_path=json_path)
-        except Exception as social_exc:
-            print(f"[social][falha] {corte_path.name}: {social_exc}; pipeline segue.")
+                postar_redes(registro, social_config, json_path=json_path)
+            except Exception as social_exc:
+                print(f"[social][falha] {corte_path.name}: {social_exc}; pipeline segue.")
     return registro
 
 
