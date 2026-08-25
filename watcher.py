@@ -112,6 +112,46 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def montar_comando_vod(config: "VigiaConfig", row: dict, vod_url: str, post: bool) -> list:
+    """Monta o comando do vod-clips.
+
+    Vive fora da classe porque o PC tambem precisa dele: em 24/08/2026 o
+    processamento de VOD saiu da VPS - um unico job ficou 28 horas analisando um
+    VOD quadro a quadro e a Hostinger limitou a maquina. Com a montagem num
+    lugar so, os dois lados nunca divergem nos argumentos.
+    """
+    stream_id = str(row["stream_id"])
+    command = [
+        sys.executable,
+        str(REPO_DIR / "main.py"),
+        vod_url,
+        "--modo", "vod-clips",
+        "--session-id", f"vigia_{stream_id}_vod",
+        "--content-filter", config.content_filter,
+        "--max-cortes", str(config.max_cortes_vod),
+        "--clip-duration", str(config.clip_duration_seconds),
+        "--target-height", str(config.target_height),
+        "--output-layout", "original",
+        "--publish-vertical",
+        # V6: dedup live x VOD. Com o stream_id, o vod-clips consulta o
+        # vigia_clip_index (nao repete o que o live ja cortou) e grava seus
+        # proprios cortes la. Indice vazio => processa tudo (sem regressao).
+        "--dedup-stream-id", stream_id,
+        "--dedup-window-seconds", str(config.dedup_window_seconds),
+    ]
+    if post:
+        command += [
+            "--post-youtube",
+            "--post-visibilidade", config.post_visibilidade,
+            "--post-conta", "principal",
+        ]
+    credito = config.credito_streamer or f"@{row['channel_login']}"
+    command += ["--credito-streamer", credito]
+    if config.credito_canal:
+        command += ["--credito-canal", config.credito_canal]
+    return command
+
+
 @dataclass(frozen=True)
 class VigiaConfig:
     enabled: bool = False
@@ -654,34 +694,7 @@ class Vigia:
             config.post_youtube_enabled, config.max_posts_per_day, "uploads_done", uploads_expected, "vod"
         )
 
-        command = [
-            sys.executable,
-            str(REPO_DIR / "main.py"),
-            vod_url,
-            "--modo", "vod-clips",
-            "--session-id", session_id,
-            "--content-filter", config.content_filter,
-            "--max-cortes", str(config.max_cortes_vod),
-            "--clip-duration", str(config.clip_duration_seconds),
-            "--target-height", str(config.target_height),
-            "--output-layout", "original",
-            "--publish-vertical",
-            # V6: dedup live x VOD. Com o stream_id, o vod-clips consulta o
-            # vigia_clip_index (nao repete o que o live ja cortou) e grava seus
-            # proprios cortes la. Indice vazio => processa tudo (sem regressao).
-            "--dedup-stream-id", stream_id,
-            "--dedup-window-seconds", str(config.dedup_window_seconds),
-        ]
-        if post:
-            command += [
-                "--post-youtube",
-                "--post-visibilidade", config.post_visibilidade,
-                "--post-conta", "principal",
-            ]
-        credito = config.credito_streamer or f"@{row['channel_login']}"
-        command += ["--credito-streamer", credito]
-        if config.credito_canal:
-            command += ["--credito-canal", config.credito_canal]
+        command = montar_comando_vod(config, row, vod_url, post)
 
         if self.dry_run:
             print(f"[vigia][dry] dispararia VOD job: {' '.join(command)}")
@@ -802,9 +815,47 @@ class Vigia:
             except Exception as exc:  # nunca derruba o ciclo
                 print(f"[vigia][insta][falha] {json_path.name}: {exc}")
 
+    def _colher_orfaos(self) -> None:
+        """Colhe processos que cairam no nosso colo por serem orfaos.
+
+        O vigia roda como PID 1 dentro do container. Quando um subprocesso morre
+        deixando ffmpeg vivo, esse ffmpeg e re-parenteado para o PID 1 - e
+        Python como PID 1 nao colhe nada sozinho. Em 24/08/2026 eram 56 zumbis
+        acumulados, um deles com 26 horas.
+
+        So colhe o que NAO e nosso: roubar o codigo de saida de um job em voo
+        faria o poll() dele nunca mais retornar, e o ledger ficaria preso em
+        "running" para sempre.
+        """
+        if not hasattr(os, "waitid"):  # Windows: nao ha orfao para colher
+            return
+        nossos = {
+            processo.pid
+            for processo, _log, _sessao in (
+                *self._running_vod_jobs.values(),
+                *self._running_live_jobs.values(),
+            )
+        }
+        while True:
+            try:
+                info = os.waitid(os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            except (ChildProcessError, OSError):
+                return
+            if info is None:
+                return
+            if info.si_pid in nossos:
+                # E de um job em voo: quem colhe e o _colher_de. Sair daqui e
+                # seguro - os outros entram no proximo ciclo.
+                return
+            try:
+                os.waitpid(info.si_pid, os.WNOHANG)
+            except (ChildProcessError, OSError):
+                return
+
     def _colher_jobs(self) -> None:
         self._colher_de(self._running_vod_jobs, "vod_job_status", "uploads_done", "VOD")
         self._colher_de(self._running_live_jobs, "live_job_status", "uploads_done_live", "LIVE")
+        self._colher_orfaos()
 
     def _colher_de(
         self,
