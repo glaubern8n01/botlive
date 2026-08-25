@@ -102,3 +102,85 @@ class TestFilaDoPc(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReivindicacaoAtomica(unittest.TestCase):
+    """Sem o filtro por estado no UPDATE, dois PCs liam a mesma linha, os dois
+    a marcavam como sua e o mesmo VOD saia cortado e postado duas vezes."""
+
+    def _client(self, ganhou: bool):
+        client = mock.MagicMock()
+        cadeia = client.table.return_value.update.return_value.eq.return_value.eq.return_value
+        cadeia.execute.return_value.data = [{"stream_id": "1"}] if ganhou else []
+        return client
+
+    def _rodar(self, client):
+        import vod_pc
+        linha = {"stream_id": "1", "channel_login": "x", "vod_attempts": 0}
+        with mock.patch.object(vod_pc, "achar_vod", return_value="https://twitch.tv/videos/1"), \
+             mock.patch.object(vod_pc, "pode_postar", return_value=False), \
+             mock.patch.object(vod_pc.subprocess, "run") as rodou:
+            resultado = vod_pc.processar(client, _config(post_youtube_enabled=False),
+                                         linha, lambda *a: None)
+        return resultado, rodou
+
+    def test_quem_perde_a_disputa_nao_processa(self):
+        resultado, rodou = self._rodar(self._client(ganhou=False))
+        self.assertFalse(resultado)
+        rodou.assert_not_called()
+
+    def test_quem_ganha_processa(self):
+        _resultado, rodou = self._rodar(self._client(ganhou=True))
+        rodou.assert_called_once()
+
+    def test_o_update_filtra_pelo_estado_esperado(self):
+        client = self._client(ganhou=True)
+        self._rodar(client)
+        primeiro = client.table.return_value.update.return_value.eq
+        segundo = primeiro.return_value.eq
+        self.assertEqual(("stream_id", "1"), primeiro.call_args.args)
+        self.assertEqual(("vod_job_status", "waiting_vod"), segundo.call_args.args)
+
+class TestRecuperarJobPerdido(unittest.TestCase):
+    """Se o PC desliga no meio de um VOD, a linha nao pode ficar presa em
+    running_pc para sempre - nem o VOD ser cortado duas vezes."""
+
+    def _linha(self, horas_atras):
+        quando = datetime.now(timezone.utc) - timedelta(hours=horas_atras)
+        return {"stream_id": "1", "error_message": f"running_pc@PC-DO-GLAUBER|{quando.isoformat()}"}
+
+    def _client(self, linhas):
+        client = mock.MagicMock()
+        client.table.return_value.select.return_value.eq.return_value.execute.return_value.data = linhas
+        return client
+
+    def test_job_recente_e_deixado_em_paz(self):
+        import vod_pc
+        self.assertEqual([], vod_pc.abandonados(self._client([self._linha(1)])))
+
+    def test_job_sem_sinal_ha_horas_volta_para_a_fila(self):
+        import vod_pc
+        perdidos = vod_pc.abandonados(self._client([self._linha(9)]))
+        self.assertEqual(1, len(perdidos))
+
+    def test_volta_para_waiting_vod_e_nao_para_failed(self):
+        """failed nunca mais e redespachado; o VOD ficaria perdido."""
+        import vod_pc
+        client = self._client([self._linha(9)])
+        client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = [{}]
+        vod_pc.devolver_abandonados(client, lambda *a: None)
+        patch = client.table.return_value.update.call_args.args[0]
+        self.assertEqual("waiting_vod", patch["vod_job_status"])
+
+    def test_carimbo_ilegivel_nao_e_tocado(self):
+        """Mexer numa linha que nao da para julgar poderia reprocessar um VOD
+        que esta sendo cortado agora."""
+        import vod_pc
+        self.assertEqual([], vod_pc.abandonados(self._client([{"stream_id": "1",
+                                                               "error_message": "sei la"}])))
+
+    def test_marca_de_posse_tem_maquina_e_hora(self):
+        import vod_pc
+        marca = vod_pc._marca_de_posse()
+        self.assertTrue(marca.startswith("running_pc@"))
+        self.assertIsNotNone(vod_pc.visto_em({"error_message": marca}))

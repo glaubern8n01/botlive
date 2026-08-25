@@ -96,6 +96,13 @@ if (-not $SoApi) {
         -ArgumentList "-m","app.worker" -WorkingDirectory $agente
 }
 
+# Prioridade baixa: este PC e do Glauber, o bot e hospede. Render passa o
+# tempo esperando ffmpeg, entao quase nao perde velocidade - mas o
+# navegador, o editor e o jogo ganham a CPU sempre que pedirem.
+foreach ($p in $processos) {
+    try { $p.PriorityClass = 'BelowNormal' } catch { }
+}
+
 Write-Host "Ctrl+C encerra. PIDs: $($processos.Id -join ', ')"
 try {
     while ($true) {

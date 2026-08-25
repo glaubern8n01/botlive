@@ -49,6 +49,83 @@ from watcher import CONFIG_TABLE, STREAMS_TABLE, VigiaConfig, montar_comando_vod
 # como failed um job que está saudável aqui. "running_pc" passa longe disso.
 EM_ANDAMENTO = "running_pc"
 
+# Quanto tempo um job pode ficar "running_pc" sem sinal de vida antes de ser
+# considerado abandonado. Se o PC desligar no meio de um VOD, sem isso a linha
+# ficava presa para sempre e aquele VOD nunca mais seria cortado. Generoso de
+# propósito: um VOD longo leva bem mais de uma hora no PC.
+HORAS_DE_ABANDONO = float(os.getenv("VOD_PC_HORAS_ABANDONO", "4"))
+
+
+def _marca_de_posse() -> str:
+    """Quem pegou o job e quando.
+
+    Vai no `error_message`, que é texto livre e já aparece no painel: dá para
+    ver de qual máquina o job é sem inventar coluna nova numa tabela de
+    produção. O carimbo de hora é escrito por nós de propósito - depender do
+    `updated_at` seria depender de um gatilho no banco que pode não existir.
+    """
+    import socket
+
+    return f"{EM_ANDAMENTO}@{socket.gethostname()}|{datetime.now(timezone.utc).isoformat()}"
+
+
+def visto_em(linha: dict):
+    """Última vez que o dono deu sinal de vida. None quando não dá para saber."""
+    marca = str(linha.get("error_message") or "")
+    carimbo = marca.split("|", 1)[1] if "|" in marca else linha.get("updated_at")
+    if not carimbo:
+        return None
+    try:
+        return datetime.fromisoformat(str(carimbo).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def abandonados(client) -> list:
+    """Jobs que ficaram para trás quando um PC desligou no meio.
+
+    `updated_at` é da própria linha: se ninguém mexe nela há horas, o processo
+    que a reivindicou morreu. Volta para `waiting_vod`, que é a fila normal -
+    e não para `failed`, senão aquele VOD nunca mais seria processado.
+    """
+    limite = datetime.now(timezone.utc) - timedelta(hours=HORAS_DE_ABANDONO)
+    linhas = (
+        client.table(STREAMS_TABLE)
+        .select("stream_id, updated_at, error_message")
+        .eq("vod_job_status", EM_ANDAMENTO)
+        .execute()
+        .data
+        or []
+    )
+    perdidos = []
+    for linha in linhas:
+        visto = visto_em(linha)
+        # Sem carimbo legível não dá para julgar: mexer numa linha dessas
+        # poderia reprocessar um VOD que está sendo cortado agora.
+        if visto is not None and visto < limite:
+            perdidos.append(linha)
+    return perdidos
+
+
+def devolver_abandonados(client, log) -> int:
+    devolvidos = 0
+    for linha in abandonados(client):
+        resposta = (
+            client.table(STREAMS_TABLE)
+            .update({"vod_job_status": "waiting_vod",
+                     "error_message": "retomado: o PC que processava sumiu"})
+            .eq("stream_id", linha["stream_id"])
+            # Só devolve se ainda estiver como a gente viu: se outro PC pegou
+            # neste meio tempo, quem manda é ele.
+            .eq("vod_job_status", EM_ANDAMENTO)
+            .execute()
+        )
+        if resposta.data:
+            devolvidos += 1
+            log(f"stream {linha['stream_id']}: devolvido para a fila "
+                f"(sem sinal desde {visto_em(linha)})")
+    return devolvidos
+
 
 def cliente():
     from supabase import create_client
@@ -130,9 +207,22 @@ def processar(client, config: VigiaConfig, linha: dict, log) -> bool:
         log("aviso: token do YouTube nao esta neste PC; vou cortar sem postar")
 
     comando = montar_comando_vod(config, linha, vod_url, postar)
-    client.table(STREAMS_TABLE).update(
-        {"vod_job_status": EM_ANDAMENTO, "vod_url": vod_url}
-    ).eq("stream_id", stream_id).execute()
+
+    # Reivindicação atômica: o `.eq("vod_job_status", "waiting_vod")` faz o
+    # banco decidir quem ganha. Sem ele, dois PCs (ou duas cópias deste script)
+    # liam a mesma linha, os dois marcavam como sua e o mesmo VOD era cortado e
+    # postado duas vezes. Lista vazia = outro chegou primeiro.
+    reivindicacao = (
+        client.table(STREAMS_TABLE)
+        .update({"vod_job_status": EM_ANDAMENTO, "vod_url": vod_url,
+                 "error_message": _marca_de_posse()})
+        .eq("stream_id", stream_id)
+        .eq("vod_job_status", "waiting_vod")
+        .execute()
+    )
+    if not reivindicacao.data:
+        log(f"{linha['channel_login']}: outro processo pegou este VOD antes")
+        return False
 
     log(f"{linha['channel_login']}: processando {vod_url}")
     inicio = time.time()
@@ -165,6 +255,7 @@ def main(argv=None) -> int:
     while True:
         try:
             config = ler_config(client)
+            devolver_abandonados(client, log)
             fila = pendentes(client, config)
             if not fila:
                 log("nenhum VOD esperando")
