@@ -216,3 +216,32 @@ class TestAmbienteDoFilho(unittest.TestCase):
         import vod_pc
         with mock.patch.dict(os.environ, {"SSL_CERT_FILE": "C:/x.pem"}, clear=False):
             self.assertNotIn("SSL_CERT_FILE", vod_pc.ambiente_do_filho())
+
+
+class TestLimpezaDeCache(unittest.TestCase):
+    """Na VPS quem limpa o cache e o vigia, depois de colher o job. Aqui quem
+    despacha e o runner, e o vigia nunca ve o job: sem limpeza, cada VOD deixa
+    ~18 GB e a fila de 58 enche o disco na madrugada."""
+
+    def test_apaga_so_a_pasta_da_sessao(self):
+        import shutil
+        import tempfile
+        import vod_pc
+        with tempfile.TemporaryDirectory() as raiz:
+            base = Path(raiz) / "vod_blocks"
+            minha = base / "vigia_123_vod"
+            vizinha = base / "vigia_999_vod"
+            for pasta in (minha, vizinha):
+                pasta.mkdir(parents=True)
+                (pasta / "bloco.mp4").write_bytes(b"x" * 100)
+            with mock.patch.object(vod_pc, "Path", Path), \
+                 mock.patch.dict("sys.modules", {"runtime_paths": mock.Mock(
+                     vod_blocks_dir=lambda: base, live_blocks_dir=lambda: base)}):
+                vod_pc.limpar_cache("vigia_123_vod", lambda *a: None)
+            self.assertFalse(minha.exists())
+            self.assertTrue(vizinha.exists(), "cache de outro job nao pode ser tocado")
+
+    def test_falha_na_limpeza_nao_derruba_nada(self):
+        import vod_pc
+        with mock.patch.dict("sys.modules", {"runtime_paths": None}):
+            vod_pc.limpar_cache("vigia_1_vod", lambda *a: None)  # nao pode levantar

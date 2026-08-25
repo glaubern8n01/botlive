@@ -185,6 +185,35 @@ def ler_config(client) -> VigiaConfig:
     return VigiaConfig.from_row(linha)
 
 
+def limpar_cache(session_id: str, log) -> None:
+    """Apaga os blocos em cache desta sessao. O job dela ja terminou.
+
+    Na VPS quem faz isso e o vigia, depois de colher o job - mas aqui quem
+    despacha e este runner, e o vigia nunca ve o job. Sem esta limpeza cada VOD
+    deixa ~18 GB para tras: com a fila de 58, o disco enchia na madrugada.
+    (Ja aconteceu antes: em 15/07/2026, 170 GB de cache lotaram a VPS e
+    derrubaram todos os servicos.)
+
+    Cirurgico por sessao de proposito: NUNCA apagar o cache inteiro, que
+    destruiria os blocos de um job rodando em paralelo. Falha aqui nao derruba
+    nada - no pior caso sobra lixo, e o proprio vigia recolhe no boot.
+    """
+    try:
+        import shutil
+
+        from runtime_paths import live_blocks_dir, vod_blocks_dir
+
+        for base in (vod_blocks_dir(), live_blocks_dir()):
+            alvo = Path(base) / session_id
+            if not alvo.is_dir():
+                continue
+            megas = sum(f.stat().st_size for f in alvo.rglob("*") if f.is_file()) / 1e6
+            shutil.rmtree(alvo, ignore_errors=True)
+            log(f"  cache: {megas:.0f} MB liberados ({Path(base).name})")
+    except Exception as erro:
+        log(f"  cache: nao consegui limpar ({erro})")
+
+
 def ambiente_do_filho() -> dict:
     """Ambiente do `main.py`, com o remendo de TLS desta maquina.
 
@@ -326,6 +355,7 @@ def processar(client, config: VigiaConfig, linha: dict, log) -> bool:
     ).eq("stream_id", stream_id).execute()
     log(f"{linha['channel_login']}: {'pronto' if ok else 'FALHOU'} em {minutos:.0f} min"
         + (f" - {motivo[:100]}" if motivo else ""))
+    limpar_cache(f"vigia_{stream_id}_vod", log)
     return ok
 
 
