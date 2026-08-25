@@ -5,6 +5,7 @@ da VPS e pelo runner do PC. Estes testes travam o contrato: se alguem mexer nos
 argumentos de um lado, o outro nao fica para tras em silencio.
 """
 
+import os
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -188,3 +189,30 @@ class TestRecuperarJobPerdido(unittest.TestCase):
         marca = vod_pc._marca_de_posse()
         self.assertTrue(marca.startswith("running_pc@"))
         self.assertIsNotNone(vod_pc.visto_em({"error_message": marca}))
+
+
+class TestAmbienteDoFilho(unittest.TestCase):
+    """O main.py roda como outro processo: o remendo de TLS aplicado no
+    vod_pc.py nao vale la. Sem isto, o VOD escolhia os cortes e morria no fim
+    em CERTIFICATE_VERIFY_FAILED, jogando fora todo o trabalho."""
+
+    def test_pyenv_entra_no_pythonpath(self):
+        import vod_pc
+        with mock.patch.object(vod_pc.Path, "is_dir", return_value=True), \
+             mock.patch.dict(os.environ, {"BOTLIVE_PYENV": "X:/remendo", "PYTHONPATH": ""}, clear=False):
+            self.assertTrue(vod_pc.ambiente_do_filho()["PYTHONPATH"].startswith("X:/remendo"))
+
+    def test_pythonpath_existente_e_preservado(self):
+        import vod_pc
+        with mock.patch.object(vod_pc.Path, "is_dir", return_value=True), \
+             mock.patch.dict(os.environ, {"BOTLIVE_PYENV": "X:/remendo", "PYTHONPATH": "Y:/antes"}, clear=False):
+            caminho = vod_pc.ambiente_do_filho()["PYTHONPATH"]
+        self.assertIn("X:/remendo", caminho)
+        self.assertIn("Y:/antes", caminho)
+
+    def test_ssl_cert_file_e_removido(self):
+        """Apontar para um pacote com a CA do AVG nao resolve - o OpenSSL
+        recusa o formato dela - e ainda atrapalha o truststore."""
+        import vod_pc
+        with mock.patch.dict(os.environ, {"SSL_CERT_FILE": "C:/x.pem"}, clear=False):
+            self.assertNotIn("SSL_CERT_FILE", vod_pc.ambiente_do_filho())

@@ -185,6 +185,29 @@ def ler_config(client) -> VigiaConfig:
     return VigiaConfig.from_row(linha)
 
 
+def ambiente_do_filho() -> dict:
+    """Ambiente do `main.py`, com o remendo de TLS desta maquina.
+
+    O AVG intercepta TLS com uma CA que o OpenSSL do Python 3.14 recusa por
+    formato. Injetar `truststore` no vod_pc.py nao adianta para o main.py, que
+    e outro processo - e sem isso o VOD chegava a escolher os cortes e morria
+    no fim, em CERTIFICATE_VERIFY_FAILED, jogando fora todo o trabalho.
+
+    A pasta com o sitecustomize entra pelo PYTHONPATH so aqui, nos filhos que o
+    BotLive inicia: nao mexe no Python do sistema nem em outros projetos.
+    """
+    ambiente = dict(os.environ)
+    remendo = os.getenv("BOTLIVE_PYENV", "G:/botlive-campanhas/pyenv")
+    if Path(remendo).is_dir():
+        atual = ambiente.get("PYTHONPATH", "")
+        ambiente["PYTHONPATH"] = remendo + (os.pathsep + atual if atual else "")
+    # SSL_CERT_FILE apontando para um pacote com a CA do AVG NAO resolve (o
+    # OpenSSL recusa o formato dela) e ainda atrapalha o truststore.
+    ambiente.pop("SSL_CERT_FILE", None)
+    ambiente.pop("REQUESTS_CA_BUNDLE", None)
+    return ambiente
+
+
 def pode_postar() -> bool:
     """Só passa --post-youtube se o token da conta estiver aqui.
 
@@ -279,7 +302,8 @@ def processar(client, config: VigiaConfig, linha: dict, log) -> bool:
     inicio = time.time()
     with arquivo.open("w", encoding="utf-8", errors="replace") as saida:
         processo = subprocess.run(comando, cwd=str(REPO), stdout=saida,
-                                  stderr=subprocess.STDOUT, text=True)
+                                  stderr=subprocess.STDOUT, text=True,
+                                  env=ambiente_do_filho())
     minutos = (time.time() - inicio) / 60
 
     ok = processo.returncode == 0
