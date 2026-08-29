@@ -8,7 +8,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import { Input } from '../components/ui/Input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/Table';
 
-const PROFILE = 'kwai_cut_futebol';
+const PERFIS = [
+  { id: 'kwai_cut_futebol', nome: 'Futebol', accountKey: 'principal' },
+  { id: 'kwai_cut_emagrecimento', nome: 'Emagrecimento', accountKey: 'emagrecimento' },
+];
 const TABS = ['Visão geral', 'Publicar pelo celular', 'Histórico', 'Fontes', 'Diagnóstico', 'Eventos', 'Vídeos', 'Regras', 'Fila', 'Conta', 'Métricas', 'Erros'] as const;
 type Tab = typeof TABS[number];
 
@@ -66,6 +69,8 @@ const emptyActivity: Activity = { name: '', min_duration_seconds: null, max_dura
 
 export function KwaiCut() {
   const [tab, setTab] = useState<Tab>('Visão geral');
+  const [profileId, setProfileId] = useState(PERFIS[0].id);
+  const accountKey = PERFIS.find((p) => p.id === profileId)?.accountKey ?? 'principal';
   const [metrics, setMetrics] = useState<Metrics>(emptyMetrics);
   const [sources, setSources] = useState<Source[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -86,15 +91,15 @@ export function KwaiCut() {
     setLoading(true); setError(null);
     if (!supabase) { setError('Supabase não configurado. A página não inventa métricas.'); setLoading(false); return; }
     const [metricResult, sourceResult, eventResult, jobResult, activityResult, accountResult, checkResult, discoveredResult, prospectResult] = await Promise.all([
-      supabase.from('kwai_cut_daily_metrics').select('*').eq('profile_id', PROFILE).maybeSingle(),
-      supabase.from('football_sources').select('*').eq('profile_id', PROFILE).order('priority', { ascending: false }),
-      supabase.from('content_events').select('*').eq('profile_id', PROFILE).order('created_at', { ascending: false }).limit(100),
-      supabase.from('publication_jobs').select('job_id,asset_id,status,title,caption,cover_path,external_id,published_at,last_error,created_at,scheduled_at,metadata,media_assets(asset_id,path,duration,width,height,validation_status),content_events(event_type,metadata),editorial_variants(variant_signature,editorial_metadata)').eq('profile_id', PROFILE).order('created_at', { ascending: false }).limit(100),
-      supabase.from('kwai_cut_activities').select('*').eq('profile_id', PROFILE).eq('active', true).maybeSingle(),
-      supabase.from('platform_accounts_safe').select('display_name,public_username,public_profile_url,creator_status,agency,contracted_at,contract_month,confirmed_niche,publication_mode,status').eq('platform', 'kwai').eq('account_key', 'principal').maybeSingle(),
-      supabase.from('football_source_checks').select('*').eq('profile_id', PROFILE).order('checked_at', { ascending: false }).limit(100),
-      supabase.from('football_discovered_videos').select('discovered_id,source_name,source_url,title,duration,source_published_at,status,discard_reason,created_at').eq('profile_id', PROFILE).order('created_at', { ascending: false }).limit(100),
-      supabase.from('football_source_prospects').select('*').eq('profile_id', PROFILE).order('created_at', { ascending: false }).limit(100),
+      supabase.from('kwai_cut_daily_metrics').select('*').eq('profile_id', profileId).maybeSingle(),
+      supabase.from('football_sources').select('*').eq('profile_id', profileId).order('priority', { ascending: false }),
+      supabase.from('content_events').select('*').eq('profile_id', profileId).order('created_at', { ascending: false }).limit(100),
+      supabase.from('publication_jobs').select('job_id,asset_id,status,title,caption,cover_path,external_id,published_at,last_error,created_at,scheduled_at,metadata,media_assets(asset_id,path,duration,width,height,validation_status),content_events(event_type,metadata),editorial_variants(variant_signature,editorial_metadata)').eq('profile_id', profileId).order('created_at', { ascending: false }).limit(100),
+      supabase.from('kwai_cut_activities').select('*').eq('profile_id', profileId).eq('active', true).maybeSingle(),
+      supabase.from('platform_accounts_safe').select('display_name,public_username,public_profile_url,creator_status,agency,contracted_at,contract_month,confirmed_niche,publication_mode,status').eq('platform', 'kwai').eq('account_key', accountKey).maybeSingle(),
+      supabase.from('football_source_checks').select('*').eq('profile_id', profileId).order('checked_at', { ascending: false }).limit(100),
+      supabase.from('football_discovered_videos').select('discovered_id,source_name,source_url,title,duration,source_published_at,status,discard_reason,created_at').eq('profile_id', profileId).order('created_at', { ascending: false }).limit(100),
+      supabase.from('football_source_prospects').select('*').eq('profile_id', profileId).order('created_at', { ascending: false }).limit(100),
     ]);
     // Uma leitura lenta nao pode fazer a pagina inteira dizer que a migration
     // nao foi aplicada. Foi o que aconteceu: football_source_checks passou de
@@ -130,7 +135,7 @@ export function KwaiCut() {
     setDiscovered((discoveredResult.data || []) as Discovered[]);
     setProspects((prospectResult.data || []) as Prospect[]);
     setLoading(false);
-  }, []);
+  }, [profileId, accountKey]);
   useEffect(() => { load(); }, [load]);
 
   const deficit = Math.max(0, metrics.daily_target - metrics.approved);
@@ -146,7 +151,7 @@ export function KwaiCut() {
     event.preventDefault();
     if (!supabase || busy || !sourceForm.name.trim() || !sourceForm.source_ref.trim()) return;
     setBusy(true);
-    const result = await supabase.from('football_sources').insert({ ...sourceForm, profile_id: PROFILE, enabled: true });
+    const result = await supabase.from('football_sources').insert({ ...sourceForm, profile_id: profileId, enabled: true });
     if (result.error) setError('Não foi possível cadastrar a fonte.');
     else { setSourceForm({ ...sourceForm, name: '', source_ref: '' }); await load(); }
     setBusy(false);
@@ -167,7 +172,7 @@ export function KwaiCut() {
     const fresh = parsed.valid.filter((url) => !existing.has(url));
     const duplicate = parsed.valid.length - fresh.length;
     const blocked = parsed.valid.filter((url) => existing.get(url) === 'blocked').length;
-    const rows = fresh.map((source_url: string) => ({ profile_id: PROFILE, prospect_key: source_url, source_url,
+    const rows = fresh.map((source_url: string) => ({ profile_id: profileId, prospect_key: source_url, source_url,
       title: source_url, source_type: inferSourceType(source_url), discovered_by: 'dashboard', review_status: 'review_required' }));
     const result = rows.length ? await supabase.from('football_source_prospects').upsert(rows, { onConflict: 'profile_id,prospect_key' }) : { error: null };
     if (result.error) setError('Não foi possível adicionar os links para revisão.');
@@ -180,7 +185,7 @@ export function KwaiCut() {
   };
   const saveActivity = async (event: FormEvent) => {
     event.preventDefault(); if (!supabase || busy || !activity.name.trim()) return; setBusy(true);
-    const payload = { ...activity, profile_id: PROFILE };
+    const payload = { ...activity, profile_id: profileId };
     const result = activity.activity_id
       ? await supabase.from('kwai_cut_activities').update(payload).eq('activity_id', activity.activity_id)
       : await supabase.from('kwai_cut_activities').insert(payload);
@@ -213,7 +218,18 @@ export function KwaiCut() {
 
   return <div className="space-y-6">
     <div className="flex items-start justify-between gap-4">
-      <div><h2 className="text-2xl font-bold">Kwai CUT</h2><p className="text-zinc-400">Futebol real · prepare_only · nenhuma postagem externa automática</p></div>
+      <div>
+        <h2 className="text-2xl font-bold">Kwai CUT</h2>
+        <p className="text-zinc-400">{PERFIS.find((p) => p.id === profileId)?.nome} · prepare_only · nenhuma postagem externa automática</p>
+        <div className="mt-2 flex gap-2">
+          {PERFIS.map((p) => (
+            <button key={p.id} onClick={() => setProfileId(p.id)}
+              className={`rounded-full px-4 py-1 text-sm font-medium ${profileId === p.id ? 'bg-orange-500 text-white' : 'bg-zinc-800 text-zinc-300'}`}>
+              {p.nome}
+            </button>
+          ))}
+        </div>
+      </div>
       <Button variant="outline" onClick={load} disabled={loading}><RefreshCw className="mr-2 h-4 w-4" />Atualizar</Button>
     </div>
     <CookieYoutube />
